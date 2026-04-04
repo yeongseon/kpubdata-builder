@@ -1,58 +1,119 @@
 # Domain Model — KPubData Builder
 
-## Core Entities
+## Core Entities (핵심 모델 상세)
 
-### BuildSpec
-Declarative configuration for producing an artifact.
+### 1. BuildSpec (빌드 기획서)
+- **무엇인가요?** 어떤 데이터를 가져와서 어떤 형식으로 저장할지 정의한 문서입니다.
+- **비유:** "요리 레시피"
+- **주요 필드:**
+    - `dataset_id`: 데이터셋의 고유한 ID (예: `kma-weather-2025`)
+    - `title`: 데이터셋의 이름 (예: `2025년 기상청 날씨 데이터`)
+    - `description`: 데이터셋에 대한 간단한 설명
+    - `sources`: 데이터를 가져올 원천 정보 목록 (`SourceRef` 들의 리스트)
+    - `exports`: 데이터를 어떤 형식으로 저장할지 정의 (`ExportTarget` 들의 리스트)
+    - `metadata`: 데이터셋 작성자, 라이선스 등 부가 정보
 
-Fields:
-- `dataset_id`
-- `title`
-- `description`
-- `sources`
-- `transforms`
-- `exports`
-- `metadata`
-- `publish`
+### 2. SourceRef (데이터 출처 정보)
+- **무엇인가요?** `kpubdata` 라이브러리를 통해 가져올 구체적인 공공데이터 정보입니다.
+- **비유:** "재료를 어디서 사올지 적어둔 메모"
+- **주요 필드:**
+    - `provider`: 데이터를 제공하는 기관 (예: `datago`)
+    - `dataset`: 기관 내의 특정 데이터셋 ID (예: `village_fcst`)
+    - `params`: 데이터를 조회할 때 필요한 조건 (예: `base_date: "20250401"`)
+    - `alias`: 가져온 데이터를 부를 별명 (예: `weather_info`)
 
-### SourceRef
-Reference to a `kpubdata` dataset query.
+### 3. ArtifactDataset (조립된 데이터셋)
+- **무엇인가요?** 소스에서 가져온 데이터들을 하나로 묶어놓은 메모리상의 데이터 객체입니다.
+- **비유:** "요리하기 직전에 그릇에 담아둔 재료 뭉치"
+- **주요 필드:**
+    - `records`: 실제 데이터 레코드들의 목록 (리스트)
+    - `schema`: 데이터의 각 항목이 무엇인지 정의한 정보
+    - `provenance`: 이 데이터가 어디서(어떤 API에서) 왔는지 추적한 정보
+    - `statistics`: 전체 데이터 건수 등 기초 통계 정보
 
-Fields:
-- `provider`
-- `dataset`
-- `params`
-- `normalization_mode`
-- `alias`
+### 4. ExportTarget (출력 대상)
+- **무엇인가요?** 조립된 데이터를 어떤 형식의 파일로 만들지 정의합니다.
+- **비유:** "완성된 요리를 담을 그릇의 종류 (접시, 냄비, 포장 용기 등)"
+- **주요 필드:**
+    - `kind`: 출력 형식의 종류 (예: `markdown`, `jsonl`)
+    - `output_path`: 파일이 저장될 경로
+    - `options`: 특정 형식에 필요한 추가 설정값
 
-### ArtifactDataset
-The assembled logical dataset before export.
+### 5. BuildManifest (빌드 명세서)
+- **무엇인가요?** 빌드가 끝난 후, 언제 어떤 데이터가 얼마나 생성되었는지 기록한 요약 파일입니다.
+- **비유:** "요리 완성 후 작성하는 조리 일지 또는 영수증"
+- **주요 필드:**
+    - `build_id`: 이번 빌드 실행의 고유 ID
+    - `started_at`/`finished_at`: 빌드가 시작되고 끝난 시각
+    - `outputs`: 실제로 생성된 파일 경로 목록
+    - `row_counts`: 각 데이터 소스별로 가져온 데이터 건수
 
-Fields:
-- `records`
-- `schema`
-- `metadata`
-- `provenance`
-- `statistics`
+## 엔티티 관계도 (Entity Relationship)
 
-### ExportTarget
-A concrete artifact output definition.
+```text
+[BuildSpec] (레시피)
+    |
+    +-- [SourceRef] (1..N) (데이터 출처)
+    |
+    +-- [ExportTarget] (1..N) (출력 형식)
+    |
+    v
+[ArtifactDataset] (조립된 데이터 뭉치)
+    |
+    +-- [BuildManifest] (빌드 결과 기록)
+    |
+    +-- [Physical Files] (실제 파일: .md, .jsonl 등)
+```
 
-Examples:
-- markdown
-- jsonl
-- parquet
-- huggingface_layout
+## 실제 BuildSpec YAML 예시 (Full Example)
 
-### BuildManifest
-Execution summary for auditing and reproducibility.
+```yaml
+# 2025년 기상청 날씨 예보 빌드 기획서
+dataset_id: weather-forecast-2025
+title: "2025년 동네예보 데이터셋"
+description: "기상청 동네예보 서비스에서 수집한 기상 예보 및 실제 관측 데이터"
 
-Fields:
-- `build_id`
-- `started_at`
-- `finished_at`
-- `inputs`
-- `outputs`
-- `warnings`
-- `errors`
-- `row_counts`
+# 어디서 데이터를 가져올까요?
+sources:
+  - provider: datago
+    dataset: village_fcst
+    params:
+      base_date: "20250401"
+      nx: 55
+      ny: 127
+    alias: forecast
+
+# 어떤 형식으로 저장할까요?
+exports:
+  - kind: markdown
+    output_path: "artifacts/weather_report.md"
+  - kind: jsonl
+    output_path: "artifacts/data.jsonl"
+
+# 부가 정보
+metadata:
+  author: "Sisyphus-Junior"
+  license: "CC-BY-4.0"
+  version: "1.0.0"
+```
+
+## Python 코드 사용 예시
+
+```python
+from kpubdata_builder.spec import BuildSpec, SourceRef, ExportTarget
+
+# 기획서 객체 생성
+spec = BuildSpec(
+    dataset_id="test-id",
+    title="테스트 데이터",
+    description="설명",
+    sources=(
+        SourceRef(provider="datago", dataset="test_ds"),
+    ),
+    exports=(
+        ExportTarget(kind="markdown", output_path="out.md"),
+    )
+)
+
+print(f"빌드 준비 중: {spec.title}")
+```
