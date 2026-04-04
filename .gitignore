@@ -35,3 +35,4 @@ Thumbs.db
 # Environment
 .env
 .env.local
+.github/workflows/ci.yml

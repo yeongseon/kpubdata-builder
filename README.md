@@ -1,15 +1,19 @@
-# KPubData Builder
+# KPubData Builder — Korea Public Data Builder
 
-KPubData Builder is the pipeline and artifact-building layer on top of `kpubdata`.
+**KPubData Builder (Korea Public Data Builder)** is the dataset artifact pipeline
+that sits on top of [`kpubdata`](https://github.com/yeongseon/kpubdata).
 
-It turns normalized public data records into publishable artifacts such as:
+It turns normalized Korea public data records into publishable artifacts such as:
+
 - Markdown datasets and reports
 - Hugging Face datasets
 - JSONL / Parquet / CSV exports
-- dataset cards and metadata manifests
+- Dataset cards and metadata manifests
 
 ## Product family
 
-- `kpubdata`: access + parsing + format normalization core
-- `kpubdata-builder`: dataset assembly + export pipeline
-- `kpubdata-studio`: UI for configuring and running builder workflows
+| Package | Role |
+|---|---|
+| [`kpubdata`](https://github.com/yeongseon/kpubdata) | Korea Public Data access + parsing + normalization core |
+| [`kpubdata-builder`](https://github.com/yeongseon/kpubdata-builder) | Dataset assembly + export pipeline |
+| [`kpubdata-studio`](https://github.com/yeongseon/kpubdata-studio) | Visual interface for authoring and running builds |
