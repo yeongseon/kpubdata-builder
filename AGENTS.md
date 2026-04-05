@@ -13,6 +13,13 @@ Implement KPubData Builder as the orchestration and artifact pipeline layer on t
 - Every build must emit a manifest
 - Validation must fail early and clearly
 
+## Language policy
+
+- **Documentation**: Write in Korean by default. English expansion is planned for future releases.
+- **Code**: All code (variable names, function names, comments, docstrings) must be in English.
+- **Commit messages**: Always in English.
+- **Issue / PR titles and descriptions**: Korean is acceptable; English is also fine.
+
 ## Priorities
 
 1. spec models
