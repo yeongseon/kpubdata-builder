@@ -11,54 +11,136 @@ KPubData 패밀리 소개:
 
 이 레포지토리(`kpubdata-builder`)는 데이터를 정제하거나 특정 파일 포맷으로 변환하는 기능을 개발하는 곳입니다.
 
-## 2. 개발 환경 설정 (Python)
+## 2. 개발 환경 설정 (처음부터 끝까지)
 
-### Step 1: Python 설치 (3.10+)
-컴퓨터에 Python이 설치되어 있어야 합니다. [공식 사이트](https://www.python.org/)나 `pyenv`를 사용해 설치해 주세요.
+이 프로젝트는 파이썬(Python) 기반으로 만들어졌습니다. 개발을 시작하기 위해 필요한 도구들을 하나씩 설치해 봅시다.
 
-### Step 2: uv 도구 설치
-`uv`는 프로젝트 관리에 필요한 도구들을 한 번에 관리합니다.
+### Step 1: 필수 도구 설치
+1.  **Git**: 코드의 버전을 관리하는 도구입니다. [공식 사이트](https://git-scm.com)에서 설치하세요. 설치 후 터미널(Terminal)에서 `git --version`을 입력해 버전이 나오는지 확인합니다.
+2.  **Python 3.10+**: 프로젝트의 기반 언어입니다. `python --version`으로 3.10 이상의 버전인지 확인하세요.
+3.  **uv**: 파이썬 패키지와 가상 환경을 아주 빠르게 관리해주는 도구입니다. 아래 명령어로 설치할 수 있습니다.
+    ```bash
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    ```
+    설치 후 `uv --version`이 작동하는지 확인하세요.
+4.  **GitHub 계정 및 SSH 키**: 코드를 올리기 위해 필요합니다. [GitHub SSH 키 설정 가이드](https://docs.github.com/en/authentication/connecting-to-github-with-ssh)를 참고해 설정해 주세요.
 
+### Step 2: Fork & Clone
+프로젝트를 내 컴퓨터로 가져오는 과정입니다.
+1.  GitHub 상단의 **Fork** 버튼을 눌러 본인의 계정으로 저장소를 복사합니다.
+2.  터미널을 열고 아래 명령어를 입력하여 내 컴퓨터에 코드를 다운로드합니다.
+    ```bash
+    # YOUR_USERNAME 부분을 본인의 GitHub 아이디로 바꾸세요.
+    git clone https://github.com/YOUR_USERNAME/kpubdata-builder.git
+    cd kpubdata-builder
+
+    # 원본 저장소(upstream)를 등록하여 나중에 업데이트를 받기 쉽게 합니다.
+    git remote add upstream https://github.com/yeongseon/kpubdata-builder.git
+    ```
+
+### Step 3: 개발 환경 구축
+`uv`를 사용하여 필요한 라이브러리를 설치하고 프로젝트가 잘 작동하는지 확인합니다.
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-### Step 3: 프로젝트 Clone
-GitHub에서 이 레포지토리를 **Fork**한 뒤, 터미널에서 명령어를 입력하세요.
-
-```bash
-git clone https://github.com/YOUR_USERNAME/kpubdata-builder.git
-cd kpubdata-builder
-```
-
-### Step 4: 개발 환경 구축 및 확인
-아래 명령어를 실행해 보세요.
-
-```bash
-# 의존성 설치
+# 필요한 라이브러리 설치 (개발용 도구 포함)
 uv sync --extra dev
 
-# 테스트 실행 (전체 기능 확인)
+# 모든 기능이 잘 작동하는지 테스트 실행
 uv run pytest
 
-# 코드 스타일 검사 (린트)
+# 코드에 문법적 오류나 스타일 문제가 없는지 확인 (Linter)
 uv run ruff check .
 
-# 타입 체크 (타입이 올바른지 검사)
+# 데이터 타입이 올바르게 사용되었는지 확인 (Type Checker)
 uv run mypy src
 ```
 
-## 3. 기여 시작하기 (Git 워크플로)
+## 3. 브랜치 전략과 협업 규칙
 
-1. **이슈 선택**: GitHub Issues에서 `good first issue` 라벨이 붙은 이슈를 골라보세요. "이슈 작업하겠습니다"라고 댓글을 남겨주시면 좋습니다.
-2. **브랜치 만들기**: `feat/issue-번호-간단설명` 형식으로 이름을 정해 보세요.
-   - 예: `feat/issue-15-add-parquet-exporter`
-3. **코드 수정**: 코드를 수정한 뒤 커밋 메시지를 작성합니다.
-   - `feat: Parquet 파일 내보내기 기능 추가`
-   - `fix: CSV 변환 시 한글 깨짐 현상 수정`
-4. **Push**: 내 GitHub 레포지토리에 올립니다.
-   - `git push origin feat/issue-15-add-parquet-exporter`
-5. **PR 보내기**: GitHub 웹사이트에서 "Pull Request"를 생성하세요.
+프로젝트는 여러 사람이 함께 만듭니다. 서로의 코드가 엉키지 않도록 몇 가지 규칙을 정해두었습니다. 규칙은 적지만, **반드시 지켜야 합니다.**
+
+### 3-1. 브랜치란? (비유)
+브랜치(Branch)는 "평행 세계"와 같습니다. 원본 코드(`main`)는 그대로 둔 채, 나만의 평행 세계를 만들어 마음껏 기능을 추가하거나 수정해볼 수 있습니다. 작업이 완벽해지면 나중에 원본 세계에 합칩니다.
+
+### 3-2. 브랜치 전략
+우리는 `main` 브랜치에 직접 코드를 올리지 않습니다. 반드시 새로운 브랜치를 만들어 작업한 뒤 **Pull Request (PR)**를 통해 합칩니다.
+
+```mermaid
+gitgraph
+    commit id: "initial"
+    branch feat/issue-3-csv-exporter
+    checkout feat/issue-3-csv-exporter
+    commit id: "feat: add CSV exporter"
+    commit id: "test: add exporter tests"
+    checkout main
+    merge feat/issue-3-csv-exporter id: "PR #3 merged"
+```
+
+### 3-3. 브랜치 이름 규칙
+어떤 작업을 하는지 한눈에 알 수 있도록 이름을 지어주세요.
+
+| 접두사 | 용도 | 예시 |
+| :--- | :--- | :--- |
+| `feat/` | 새로운 기능 추가 | `feat/issue-3-add-csv-exporter` |
+| `fix/` | 버그 수정 | `fix/issue-7-manifest-encoding` |
+| `docs/` | 문서 수정 | `docs/update-contributing-guide` |
+
+- 이슈 번호가 있다면 이름에 포함해 주세요 (예: `issue-3`).
+
+### 3-4. 전체 작업 흐름
+협업의 표준 순서는 다음과 같습니다.
+
+```mermaid
+flowchart TD
+    Start[이슈 확인 및 선택] --> Branch[새 브랜치 만들기]
+    Branch --> Coding[코드 수정 및 테스트]
+    Coding --> Commit[변경 사항 커밋]
+    Commit --> Push[내 GitHub에 올리기]
+    Push --> PR[Pull Request 생성]
+    PR --> Review[코드 리뷰 및 수정]
+    Review --> Merge[main에 합치기]
+```
+
+1.  **브랜치 생성**: `git checkout -b feat/issue-번호-설명`
+2.  **작업 및 테스트**: 코드를 고치고 `uv run pytest`로 확인합니다.
+3.  **커밋**: `git add .` 후 `git commit -m "feat: 메시지"`
+4.  **Push**: `git push origin feat/issue-번호-설명`
+5.  **PR**: GitHub 웹사이트에서 초록색 "Compare & pull request" 버튼을 누릅니다.
+
+### 3-5. 커밋 메시지 규칙
+영어로 작성하는 것을 원칙으로 하며, 첫 단어(태그)로 성격을 나타냅니다.
+
+| 태그 | 의미 |
+| :--- | :--- |
+| `feat` | 새로운 기능 추가 |
+| `fix` | 버그 수정 |
+| `docs` | 문서 수정 (README 등) |
+| `test` | 테스트 코드 추가/수정 |
+| `refactor` | 코드 구조 개선 (기능 변화 없음) |
+
+- 예: `feat: add support for parquet export`
+
+### 3-6. 절대 금지 사항 (⛔)
+- **main 브랜치에 직접 Push 금지**: 모든 변경은 PR을 거쳐야 합니다.
+- **Force Push 금지**: `git push --force`는 다른 사람의 작업을 지울 수 있어 위험합니다.
+- **타인의 브랜치 관리 금지**: 내가 만들지 않은 브랜치를 지우거나 이름을 바꾸지 마세요.
+- **추측하지 마세요**: 모르는 것이 생기면 이슈나 대화방에서 언제든 물어보세요. 질문은 환영입니다!
+
+### 3-7. PR 올리기 전 최종 체크리스트
+PR을 올리기 전, 터미널에서 아래 4가지를 실행해 보세요. 모두 통과해야 합격입니다!
+
+```bash
+# 1. 코드 스타일 검사 (린트)
+uv run ruff check .
+
+# 2. 코드 포맷 자동 정리 확인
+uv run ruff format --check .
+
+# 3. 타입 검사
+uv run mypy src
+
+# 4. 전체 유닛 테스트 실행
+uv run pytest
+```
 
 ## 4. 코딩 컨벤션
 

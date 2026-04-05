@@ -20,6 +20,15 @@ Implement KPubData Builder as the orchestration and artifact pipeline layer on t
 - **Commit messages**: Always in English.
 - **Issue / PR titles and descriptions**: Korean is acceptable; English is also fine.
 
+## Branch rules
+
+- Default branch is `main`. **Never push directly to `main`.**
+- Always work on a feature branch and open a PR.
+- Branch naming: `feat/issue-<number>-<short-description>`, `fix/issue-<number>-<short-description>`, `docs/<short-description>`
+- Never force-push to `main`. Never delete `main`.
+- Never rename or delete branches you did not create.
+- If unsure about any git operation, **ask first — do not guess.**
+
 ## Priorities
 
 1. spec models
