@@ -49,10 +49,24 @@ KPubData Builder는 `kpubdata` 사서가 가져온 원시 데이터를 사용자
 
 ### 이 프로젝트의 코드가 실행되는 흐름 (Pipeline)
 
+```mermaid
+graph LR
+    BS[BuildSpec] --> V[Validate]
+    V --> E[Execute]
+    E --> EX[Export]
+    EX --> M[Manifest]
+    
+    subgraph "Details"
+        BS -.-> |YAML| BS
+        V -.-> |Check| V
+        E -.-> |kpubdata| E
+        EX -.-> |Formatting| EX
+        M -.-> |Metadata| M
+    end
+```
+
 ```text
 [BuildSpec] -> [Validate] -> [Execute (Fetch Data)] -> [Export (Formatting)] -> [Manifest (Metadata)]
-      |            |                |                     |                     |
-   기획서 확인      검증           데이터 가져오기           포맷 변환               명세서 생성
 ```
 
 ## AI 에이전트 코딩 가이드
@@ -72,6 +86,24 @@ KPubData Builder는 `kpubdata` 사서가 가져온 원시 데이터를 사용자
 - [ ] Golden Test를 통해 출력 결과물이 의도대로 나오는지 확인했는가?
 
 ## 파일 구조 가이드
+
+```mermaid
+graph TD
+    ROOT[src/kpubdata_builder/] --> E[exporters/]
+    ROOT --> P[publishers/]
+    ROOT --> S[spec.py]
+    ROOT --> V[validator.py]
+    ROOT --> EX[executor.py]
+    ROOT --> A[assembler.py]
+    ROOT --> ART[artifact.py]
+    ROOT --> M[manifest.py]
+    
+    E --> ME[markdown.py]
+    E --> JE[jsonl.py]
+    E --> PE[parquet.py]
+    
+    P --> HP[huggingface.py]
+```
 
 ```text
 src/kpubdata_builder/
@@ -93,6 +125,15 @@ src/kpubdata_builder/
 ## Exporter 추가 가이드
 
 ### Exporter 개발 단계
+
+```mermaid
+flowchart TD
+    Step1[1. BaseExporter 상속받기] --> Step2[2. export 메서드 구현]
+    Step2 --> Step3[3. 포맷 이름 정의]
+    Step3 --> Step4[4. 유닛 테스트 추가]
+    Step4 --> Step5[5. Golden Test 확인]
+```
+
 1. `exporters/base.py`의 `BaseExporter` 클래스를 상속받습니다.
 2. `export(self, artifacts: List[Artifact]) -> List[Path]` 메서드를 구현합니다.
 3. 지원하는 포맷 이름을 클래스 변수로 정의합니다.
@@ -100,3 +141,25 @@ src/kpubdata_builder/
 
 ### Golden Test란?
 빌드 결과물이 텍스트(예: Markdown)인 경우, 코드가 바뀌어도 결과물의 형식이 유지되는지 확인하기 위해 미리 저장해둔 '정답 파일'과 현재 결과를 1:1로 비교하는 테스트 방식입니다.
+
+---
+
+## 📚 관련 문서
+
+### 이 저장소 내 문서
+| 문서 | 설명 |
+| :--- | :--- |
+| [CONTRIBUTING.md](./CONTRIBUTING.md) | 프로젝트 기여 가이드 |
+| [ARCHITECTURE.md](./ARCHITECTURE.md) | 시스템 아키텍처 설계 |
+| [DOMAIN_MODEL.md](./DOMAIN_MODEL.md) | 도메인 모델 정의 |
+| [EXPORT_MODEL.md](./EXPORT_MODEL.md) | 데이터 변환 모델 |
+| [API_CONTRACT.md](./API_CONTRACT.md) | API 인터페이스 규약 |
+| [PRD.md](./PRD.md) | 제품 요구사항 정의서 |
+| [ROADMAP.md](./ROADMAP.md) | 프로젝트 로드맵 |
+
+### KPubData Product Family
+| 저장소 | 문서 | 설명 |
+| :--- | :--- | :--- |
+| [kpubdata](https://github.com/yeongseon/kpubdata) | [AGENTS.md](https://github.com/yeongseon/kpubdata/blob/main/AGENTS.md) | Core 에이전트 가이드 |
+| [kpubdata-studio](https://github.com/yeongseon/kpubdata-studio) | [AGENTS.md](https://github.com/yeongseon/kpubdata-studio/blob/main/AGENTS.md) | Studio 에이전트 가이드 |
+

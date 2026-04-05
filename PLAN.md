@@ -23,3 +23,15 @@
 - `uv run mypy src`
 - `uv run pytest`
 - `uv run python -m build`
+
+---
+
+## 📚 관련 문서
+
+### 이 저장소 내 문서
+| 문서 | 설명 |
+| :--- | :--- |
+| [ROADMAP.md](./ROADMAP.md) | 프로젝트 로드맵 |
+| [PRD.md](./PRD.md) | 제품 요구사항 정의서 |
+| [ARCHITECTURE.md](./ARCHITECTURE.md) | 시스템 아키텍처 설계 |
+

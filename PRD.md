@@ -143,3 +143,20 @@ The system must provide a CLI for local and CI use.
 - browser UI
 - remote workflow scheduler
 - automatic schema harmonization across unrelated domains
+
+---
+
+## 📚 관련 문서
+
+### 이 저장소 내 문서
+| 문서 | 설명 |
+| :--- | :--- |
+| [ARCHITECTURE.md](./ARCHITECTURE.md) | 시스템 아키텍처 설계 |
+| [ROADMAP.md](./ROADMAP.md) | 프로젝트 로드맵 |
+
+### KPubData Product Family
+| 저장소 | 문서 | 설명 |
+| :--- | :--- | :--- |
+| [kpubdata](https://github.com/yeongseon/kpubdata) | [PRD.md](https://github.com/yeongseon/kpubdata/blob/main/PRD.md) | Core 제품 요구사항 |
+| [kpubdata-studio](https://github.com/yeongseon/kpubdata-studio) | [PRD.md](https://github.com/yeongseon/kpubdata-studio/blob/main/PRD.md) | Studio 제품 요구사항 |
+

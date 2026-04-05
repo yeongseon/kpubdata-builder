@@ -86,3 +86,21 @@ PR을 작성할 때 제목을 `[#이슈번호] 간단한 설명`으로 작성해
 ## 7. 질문과 도움
 
 작업하다 막히면 주저하지 말고 GitHub Issues에 질문하세요! 모르는 것을 물어보는 것은 기여의 아주 중요한 시작입니다. "어디서부터 시작해야 할까요?", "이 에러는 왜 발생할까요?" 같은 질문 모두 환영합니다.
+
+---
+
+## 📚 관련 문서
+
+### 이 저장소 내 문서
+| 문서 | 설명 |
+| :--- | :--- |
+| [AGENTS.md](./AGENTS.md) | 에이전트 개발 가이드 |
+| [ARCHITECTURE.md](./ARCHITECTURE.md) | 시스템 아키텍처 설계 |
+| [ROADMAP.md](./ROADMAP.md) | 프로젝트 로드맵 |
+
+### KPubData Product Family
+| 저장소 | 문서 | 설명 |
+| :--- | :--- | :--- |
+| [kpubdata](https://github.com/yeongseon/kpubdata) | [CONTRIBUTING.md](https://github.com/yeongseon/kpubdata/blob/main/CONTRIBUTING.md) | Core 기여 가이드 |
+| [kpubdata-studio](https://github.com/yeongseon/kpubdata-studio) | [CONTRIBUTING.md](https://github.com/yeongseon/kpubdata-studio/blob/main/CONTRIBUTING.md) | Studio 기여 가이드 |
+

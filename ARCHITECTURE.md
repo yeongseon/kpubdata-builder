@@ -14,6 +14,15 @@ KPubData Builder는 **"공공데이터 요리 주방"**과 같습니다.
 
 KPubData Builder sits between `kpubdata` and publication targets.
 
+```mermaid
+graph LR
+    subgraph Layers
+        P[Public APIs] --> K[kpubdata<br/>데이터 수집/표준화]
+        K --> B[kpubdata-builder<br/>데이터 조립/출판]
+        B --> F[Markdown / HF / files<br/>최종 결과물]
+    end
+```
+
 ```text
 Public APIs
   -> kpubdata (데이터 수집/표준화)
@@ -24,6 +33,26 @@ Public APIs
 ## 2. Architectural Principle
 
 Builder is an orchestrator.
+
+```mermaid
+graph TD
+    subgraph "Responsibilities"
+        K[kpubdata] -- "Provides Records" --> B[kpubdata-builder]
+        B -- "Provides UI/Orchestration" --> S[kpubdata-studio]
+        
+        style K fill:#f9f,stroke:#333,stroke-width:2px
+        style B fill:#bbf,stroke:#333,stroke-width:4px
+        style S fill:#dfd,stroke:#333,stroke-width:2px
+    end
+    
+    subgraph "kpubdata-builder Internal"
+        B1[SpecLoader] --> B2[Validator]
+        B2 --> B3[Executor]
+        B3 --> B4[Assembler]
+        B4 --> B5[Exporter]
+        B5 --> B6[ManifestWriter]
+    end
+```
 
 It should not:
 - reimplement provider adapters (데이터 기관별 연결 로직은 `kpubdata`의 역할입니다)
@@ -74,6 +103,45 @@ It should:
 
 데이터가 빌드 과정을 거쳐 결과물이 되는 흐름은 다음과 같습니다.
 
+```mermaid
+sequenceDiagram
+    participant User
+    participant SL as SpecLoader
+    participant V as Validator
+    participant E as Executor
+    participant KP as kpubdata
+    participant A as Assembler
+    participant EX as Exporter
+    participant MW as ManifestWriter
+
+    User->>SL: Load YAML BuildSpec
+    SL->>V: Validate Spec Configuration
+    V->>E: Start Execution
+    E->>KP: client.get(source_ref)
+    KP-->>E: Return Standard Records
+    E->>A: Send Raw Records
+    A->>EX: Prepare ArtifactDataset
+    EX->>EX: Convert to Target Format (MD/JSONL)
+    EX->>MW: Provide Build Results
+    MW->>User: Emit manifest.json & Files
+```
+
+```mermaid
+graph LR
+    subgraph "kpubdata_builder"
+        S[spec.py] --> V[validator.py]
+        V --> E[executor.py]
+        E --> A[assembler.py]
+        A --> AR[artifact.py]
+        AR --> EX[exporters/]
+        EX --> M[manifest.py]
+    end
+    
+    E -.-> K[kpubdata-core]
+    EX -.-> FS[Local FileSystem]
+    M -.-> MN[manifest.json]
+```
+
 1.  **BuildSpec YAML:** 사용자가 기획서를 작성합니다.
 2.  **Spec Loader:** `spec.py`의 모델을 사용하여 YAML을 파이썬 객체로 바꿉니다.
 3.  **Validator:** `validator.py`가 기획서의 오류를 찾아냅니다.
@@ -120,3 +188,22 @@ Builder must expose stable machine interfaces that Studio can call:
 - execute build
 - inspect manifest
 - list exporters
+
+---
+
+## 📚 관련 문서
+
+### 이 저장소 내 문서
+| 문서 | 설명 |
+| :--- | :--- |
+| [DOMAIN_MODEL.md](./DOMAIN_MODEL.md) | 도메인 모델 정의 |
+| [EXPORT_MODEL.md](./EXPORT_MODEL.md) | 데이터 변환 모델 |
+| [API_CONTRACT.md](./API_CONTRACT.md) | API 인터페이스 규약 |
+| [PRD.md](./PRD.md) | 제품 요구사항 정의서 |
+
+### KPubData Product Family
+| 저장소 | 문서 | 설명 |
+| :--- | :--- | :--- |
+| [kpubdata](https://github.com/yeongseon/kpubdata) | [ARCHITECTURE.md](https://github.com/yeongseon/kpubdata/blob/main/ARCHITECTURE.md) | Core 아키텍처 |
+| [kpubdata-studio](https://github.com/yeongseon/kpubdata-studio) | [ARCHITECTURE.md](https://github.com/yeongseon/kpubdata-studio/blob/main/ARCHITECTURE.md) | Studio 아키텍처 |
+

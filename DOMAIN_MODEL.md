@@ -2,25 +2,85 @@
 
 ## Core Entities (핵심 모델 상세)
 
+```mermaid
+classDiagram
+    class BuildSpec {
+        +String dataset_id
+        +String title
+        +String description
+        +List~SourceRef~ sources
+        +List~ExportTarget~ exports
+        +Dict metadata
+        +validate() Boolean
+    }
+    class SourceRef {
+        +String provider
+        +String dataset
+        +Dict params
+        +String alias
+    }
+    class ArtifactDataset {
+        +List~Record~ records
+        +Dict schema
+        +Dict provenance
+        +Dict statistics
+        +assemble()
+    }
+    class ExportTarget {
+        +String kind
+        +Path output_path
+        +Dict options
+    }
+    class BuildManifest {
+        +String build_id
+        +DateTime started_at
+        +DateTime finished_at
+        +List~Path~ outputs
+        +Dict row_counts
+    }
+
+    BuildSpec "1" *-- "1..*" SourceRef : defines
+    BuildSpec "1" *-- "1..*" ExportTarget : defines
+    SourceRef ..> ArtifactDataset : populates
+    ArtifactDataset --> ExportTarget : formatted by
+    BuildManifest "1" -- "1" BuildSpec : records result
+```
+
 ### 1. BuildSpec (빌드 기획서)
 - **무엇인가요?** 어떤 데이터를 가져와서 어떤 형식으로 저장할지 정의한 문서입니다.
 - **비유:** "요리 레시피"
-- **주요 필드:**
-    - `dataset_id`: 데이터셋의 고유한 ID (예: `kma-weather-2025`)
-    - `title`: 데이터셋의 이름 (예: `2025년 기상청 날씨 데이터`)
-    - `description`: 데이터셋에 대한 간단한 설명
-    - `sources`: 데이터를 가져올 원천 정보 목록 (`SourceRef` 들의 리스트)
-    - `exports`: 데이터를 어떤 형식으로 저장할지 정의 (`ExportTarget` 들의 리스트)
-    - `metadata`: 데이터셋 작성자, 라이선스 등 부가 정보
+
+```mermaid
+stateDiagram-v2
+    [*] --> Created: YAML Loaded
+    Created --> Validated: Spec Check Passed
+    Validated --> Executing: Fetching via kpubdata
+    Executing --> Assembling: Merging Records
+    Assembling --> Exporting: Writing Files
+    Exporting --> Completed: Manifest Written
+    Completed --> Published: Uploaded to Remote
+    Completed --> [*]
+    
+    Validated --> Failed: Invalid Config
+    Executing --> Failed: Network/API Error
+    Failed --> [*]
+```
 
 ### 2. SourceRef (데이터 출처 정보)
 - **무엇인가요?** `kpubdata` 라이브러리를 통해 가져올 구체적인 공공데이터 정보입니다.
 - **비유:** "재료를 어디서 사올지 적어둔 메모"
-- **주요 필드:**
-    - `provider`: 데이터를 제공하는 기관 (예: `datago`)
-    - `dataset`: 기관 내의 특정 데이터셋 ID (예: `village_fcst`)
-    - `params`: 데이터를 조회할 때 필요한 조건 (예: `base_date: "20250401"`)
-    - `alias`: 가져온 데이터를 부를 별명 (예: `weather_info`)
+
+```mermaid
+flowchart LR
+    Y[YAML BuildSpec] --> S[BuildSpec Object]
+    S --> SR[SourceRef]
+    SR --> K[kpubdata Client]
+    K --> R[Normalized Records]
+    R --> AD[ArtifactDataset]
+    AD --> ET[ExportTarget]
+    ET --> F[(Physical Files)]
+    F --> M[BuildManifest]
+```
 
 ### 3. ArtifactDataset (조립된 데이터셋)
 - **무엇인가요?** 소스에서 가져온 데이터들을 하나로 묶어놓은 메모리상의 데이터 객체입니다.
@@ -116,4 +176,21 @@ spec = BuildSpec(
 )
 
 print(f"빌드 준비 중: {spec.title}")
+
+---
+
+## 📚 관련 문서
+
+### 이 저장소 내 문서
+| 문서 | 설명 |
+| :--- | :--- |
+| [ARCHITECTURE.md](./ARCHITECTURE.md) | 시스템 아키텍처 설계 |
+| [EXPORT_MODEL.md](./EXPORT_MODEL.md) | 데이터 변환 모델 |
+| [API_CONTRACT.md](./API_CONTRACT.md) | API 인터페이스 규약 |
+
+### KPubData Product Family
+| 저장소 | 문서 | 설명 |
+| :--- | :--- | :--- |
+| [kpubdata](https://github.com/yeongseon/kpubdata) | [CANONICAL_MODEL.md](https://github.com/yeongseon/kpubdata/blob/main/CANONICAL_MODEL.md) | 관련 데이터 모델 |
+
 ```
