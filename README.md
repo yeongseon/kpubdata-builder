@@ -186,6 +186,7 @@ src/kpubdata_builder/
 
 ### 자세한 참고
 - [docs/adrs/0001-builder-as-orchestrator.md](./docs/adrs/0001-builder-as-orchestrator.md): 빌더 아키텍처 결정 기록
+- [제품군 전체 아키텍처](https://github.com/yeongseon/kpubdata/blob/main/docs/product-family-architecture.md): **KPubData 3개 저장소의 전체 시스템 아키텍처**
 
 ---
 
