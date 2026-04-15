@@ -189,9 +189,50 @@ Builder must expose stable machine interfaces that Studio can call:
 - inspect manifest
 - list exporters
 
+## 7. Error Handling (에러 처리 아키텍처)
+
+### 7.1 예외 계층
+
+Builder는 자체 예외 계층(`BuildError`)을 가집니다. `kpubdata`의 `PublicDataError`는 Builder 예외의 `__cause__`로 보존되며, 사용자에게 직접 노출되지 않습니다.
+
+```text
+BuildError
+├── SpecLoadError
+├── SpecValidationError
+├── SourceExecutionError
+├── AssemblyError
+├── ExportError
+├── ManifestWriteError
+└── PublishError
+```
+
+### 7.2 에러 전파 흐름
+
+```mermaid
+flowchart TD
+    SL[SpecLoader] -->|SpecLoadError| FAIL[Build Failed]
+    V[Validator] -->|SpecValidationError| FAIL
+    E[Executor] -->|SourceExecutionError| COLLECT[에러 수집]
+    COLLECT -->|errors 비어있음| A[Assembler]
+    COLLECT -->|errors 존재| FAIL
+    A -->|AssemblyError| FAIL
+    EX[Exporter] -->|ExportError| FAIL
+    MW[ManifestWriter] -->|ManifestWriteError| FAIL
+    FAIL --> MF[Manifest 생성 — 실패도 기록]
+```
+
+### 7.3 핵심 원칙
+
+1. **Manifest 생성 시도** — 실패한 빌드도 manifest 생성을 시도하여 감사 추적 가능 (`ManifestWriteError` 시에는 불가)
+2. **source별 에러 수집** — executor가 여러 source를 순회하며 에러를 모아 한 번에 보고
+3. **원인 보존** — `kpubdata` 예외를 `__cause__`로 항상 보존하여 디버깅 지원
+4. **retryable 계승** — `cause.retryable` 값을 그대로 계승, 예외 타입만으로 판단하지 않음
+
+> 자세한 에러 처리 설계는 [docs/ERROR_HANDLING.md](./docs/ERROR_HANDLING.md)를 참조하세요.
+
 ---
 
-## 📚 관련 문서
+## 관련 문서
 
 ### 이 저장소 내 문서
 | 문서 | 설명 |
@@ -200,6 +241,7 @@ Builder must expose stable machine interfaces that Studio can call:
 | [EXPORT_MODEL.md](./EXPORT_MODEL.md) | 데이터 변환 모델 |
 | [API_CONTRACT.md](./API_CONTRACT.md) | API 인터페이스 규약 |
 | [PRD.md](./PRD.md) | 제품 요구사항 정의서 |
+| [docs/ERROR_HANDLING.md](./docs/ERROR_HANDLING.md) | 에러 처리 설계 |
 
 ### KPubData Product Family
 | 저장소 | 문서 | 설명 |
@@ -207,4 +249,3 @@ Builder must expose stable machine interfaces that Studio can call:
 | **전체 제품군** | [product-family-architecture.md](https://github.com/yeongseon/kpubdata/blob/main/docs/product-family-architecture.md) | **3개 저장소 전체 시스템 아키텍처** |
 | [kpubdata](https://github.com/yeongseon/kpubdata) | [ARCHITECTURE.md](https://github.com/yeongseon/kpubdata/blob/main/ARCHITECTURE.md) | Core 아키텍처 |
 | [kpubdata-studio](https://github.com/yeongseon/kpubdata-studio) | [ARCHITECTURE.md](https://github.com/yeongseon/kpubdata-studio/blob/main/ARCHITECTURE.md) | Studio 아키텍처 |
-

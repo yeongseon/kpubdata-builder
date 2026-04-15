@@ -45,10 +45,10 @@ KPubData Builder는 이 모든 과정을 하나의 파이프라인(자동화된 
 
 ```mermaid
 graph LR
-    BS["📋 BuildSpec<br/>(기획서 작성)"] --> V["✅ Validate<br/>(검증)"]
-    V --> E["📥 Execute<br/>(데이터 수집)"]
-    E --> EX["📤 Export<br/>(형식 변환)"]
-    EX --> M["📝 Manifest<br/>(결과 기록)"]
+BS["BuildSpec<br/>(기획서 작성)"] --> V["Validate<br/>(검증)"]
+V --> E["Execute<br/>(데이터 수집)"]
+E --> EX["Export<br/>(형식 변환)"]
+EX --> M["Manifest<br/>(결과 기록)"]
 ```
 
 ```text
@@ -167,7 +167,7 @@ src/kpubdata_builder/
 
 ---
 
-## 📖 문서 가이드 (Document Guide)
+## 문서 가이드 (Document Guide)
 
 ### 핵심 설계
 - [ARCHITECTURE.md](./ARCHITECTURE.md): 시스템 아키텍처 및 레이어 설계
@@ -200,7 +200,7 @@ src/kpubdata_builder/
 
 ---
 
-## 📚 관련 문서
+## 관련 문서
 
 ### 이 저장소 내 문서
 | 문서 | 설명 |
