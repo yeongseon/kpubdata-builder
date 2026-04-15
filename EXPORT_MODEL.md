@@ -157,7 +157,7 @@ graph LR
 
 ---
 
-## 📚 관련 문서
+## 관련 문서
 
 ### 이 저장소 내 문서
 | 문서 | 설명 |
@@ -165,4 +165,3 @@ graph LR
 | [DOMAIN_MODEL.md](./DOMAIN_MODEL.md) | 도메인 모델 정의 |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | 시스템 아키텍처 설계 |
 | [API_CONTRACT.md](./API_CONTRACT.md) | API 인터페이스 규약 |
-

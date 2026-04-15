@@ -119,7 +119,7 @@ flowchart TD
 
 - 예: `feat: add support for parquet export`
 
-### 3-6. 절대 금지 사항 (⛔)
+### 3-6. 절대 금지 사항
 - **main 브랜치에 직접 Push 금지**: 모든 변경은 PR을 거쳐야 합니다.
 - **Force Push 금지**: `git push --force`는 다른 사람의 작업을 지울 수 있어 위험합니다.
 - **타인의 브랜치 관리 금지**: 내가 만들지 않은 브랜치를 지우거나 이름을 바꾸지 마세요.
@@ -171,7 +171,7 @@ PR을 작성할 때 제목을 `[#이슈번호] 간단한 설명`으로 작성해
 
 ---
 
-## 📚 관련 문서
+## 관련 문서
 
 ### 이 저장소 내 문서
 | 문서 | 설명 |
@@ -185,4 +185,3 @@ PR을 작성할 때 제목을 `[#이슈번호] 간단한 설명`으로 작성해
 | :--- | :--- | :--- |
 | [kpubdata](https://github.com/yeongseon/kpubdata) | [CONTRIBUTING.md](https://github.com/yeongseon/kpubdata/blob/main/CONTRIBUTING.md) | Core 기여 가이드 |
 | [kpubdata-studio](https://github.com/yeongseon/kpubdata-studio) | [CONTRIBUTING.md](https://github.com/yeongseon/kpubdata-studio/blob/main/CONTRIBUTING.md) | Studio 기여 가이드 |
-

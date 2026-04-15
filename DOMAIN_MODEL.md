@@ -53,18 +53,28 @@ classDiagram
 ```mermaid
 stateDiagram-v2
     [*] --> Created: YAML Loaded
+    Created --> LoadFailed: SpecLoadError
     Created --> Validated: Spec Check Passed
+    Validated --> ValidationFailed: SpecValidationError
     Validated --> Executing: Fetching via kpubdata
     Executing --> Assembling: Merging Records
+    Executing --> ExecutionFailed: SourceExecutionError
     Assembling --> Exporting: Writing Files
+    Assembling --> AssemblyFailed: AssemblyError
     Exporting --> Completed: Manifest Written
+    Exporting --> ExportFailed: ExportError
     Completed --> Published: Uploaded to Remote
     Completed --> [*]
     
-    Validated --> Failed: Invalid Config
-    Executing --> Failed: Network/API Error
-    Failed --> [*]
+    LoadFailed --> FailedManifest: Manifest 기록
+    ValidationFailed --> FailedManifest: Manifest 기록
+    ExecutionFailed --> FailedManifest: Manifest 기록
+    AssemblyFailed --> FailedManifest: Manifest 기록
+    ExportFailed --> FailedManifest: Manifest 기록
+    FailedManifest --> [*]
 ```
+
+> 모든 실패 상태에서도 Manifest는 생성됩니다. 자세한 에러 계층은 [docs/ERROR_HANDLING.md](./docs/ERROR_HANDLING.md)를 참조하세요.
 
 ### 2. SourceRef (데이터 출처 정보)
 - **무엇인가요?** `kpubdata` 라이브러리를 통해 가져올 구체적인 공공데이터 정보입니다.
@@ -100,13 +110,18 @@ flowchart LR
     - `options`: 특정 형식에 필요한 추가 설정값
 
 ### 5. BuildManifest (빌드 명세서)
-- **무엇인가요?** 빌드가 끝난 후, 언제 어떤 데이터가 얼마나 생성되었는지 기록한 요약 파일입니다.
-- **비유:** "요리 완성 후 작성하는 조리 일지 또는 영수증"
+- **무엇인가요?** 빌드가 끝난 후, 언제 어떤 데이터가 얼마나 생성되었는지 기록한 요약 파일입니다. 실패한 빌드도 manifest를 남겨 감사 추적이 가능합니다.
+- **비유:** "요리 완성 후 작성하는 조리 일지 또는 영수증 (실패한 요리도 기록)"
 - **주요 필드:**
     - `build_id`: 이번 빌드 실행의 고유 ID
+    - `status`: 빌드 결과 (`"succeeded"` | `"failed"` | `"cancelled"`)
+    - `spec_digest`: 어떤 기획서로 빌드했는지 식별하는 지문
     - `started_at`/`finished_at`: 빌드가 시작되고 끝난 시각
+    - `sources`: source별 결과 요약 (provider, dataset, status, records_fetched, error)
     - `outputs`: 실제로 생성된 파일 경로 목록
     - `row_counts`: 각 데이터 소스별로 가져온 데이터 건수
+    - `warnings`: 빌드 중 발생한 사소한 문제들
+    - `errors`: 빌드 실패 시 에러 요약 목록
 
 ## 엔티티 관계도 (Entity Relationship)
 
@@ -179,7 +194,7 @@ print(f"빌드 준비 중: {spec.title}")
 
 ---
 
-## 📚 관련 문서
+## 관련 문서
 
 ### 이 저장소 내 문서
 | 문서 | 설명 |

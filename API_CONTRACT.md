@@ -57,14 +57,17 @@ sequenceDiagram
     participant M as ManifestWriter
 
     C->>B: execute_build(spec_path, output_dir)
-    B->>V: validate_spec(spec_path)
-    V-->>B: ValidationResult (OK)
-    B->>E: run_fetching(spec)
-    E-->>B: ArtifactDataset
-    B->>EX: export_all(dataset, output_dir)
-    EX-->>B: List of file paths
-    B->>M: generate_manifest(spec, results)
+    B->>V: validate_spec(spec)
+    V-->>B: OK or SpecValidationError
+    B->>E: source_executor(spec, client)
+    E-->>B: ExecutionResult (records + errors)
+    alt errors 없음
+        B->>EX: export_all(dataset, output_dir)
+        EX-->>B: List of file paths
+    end
+    B->>M: build_manifest(spec, results)
     M-->>B: BuildManifest object
+    B->>M: manifest_writer(manifest, path)
     B-->>C: Return BuildManifest
 ```
 
@@ -112,10 +115,11 @@ graph TD
     SRC --> RF[records_fetched]
 ```
 
-### 3.1 JSON Output 예시
+### 3.1 JSON Output 예시 (성공)
 ```json
 {
   "build_id": "bld-20250401-abc1234",
+  "status": "succeeded",
   "spec_digest": "sha256:d8e8f8...",
   "started_at": "2025-04-01T10:00:00Z",
   "finished_at": "2025-04-01T10:05:30Z",
@@ -123,6 +127,7 @@ graph TD
     {
       "provider": "datago",
       "dataset": "village_fcst",
+      "status": "succeeded",
       "records_fetched": 1500
     }
   ],
@@ -142,9 +147,120 @@ graph TD
 - `record_count`: 최종적으로 수집된 데이터의 총 개수
 - `warnings`: 빌드 중에 발생한 사소한 문제들 (데이터 항목 누락 등)
 
+### 3.3 빌드 실패 시 Manifest
+
+빌드가 실패하더라도 `manifest.json`은 항상 생성됩니다. 실패 manifest는 감사 추적과 디버깅에 사용됩니다.
+
+```json
+{
+  "build_id": "bld-20250401-abc1234",
+  "status": "failed",
+  "spec_digest": "sha256:d8e8f8...",
+  "started_at": "2025-04-01T10:00:00Z",
+  "finished_at": "2025-04-01T10:00:12Z",
+  "sources": [
+    {
+      "provider": "datago",
+      "dataset": "village_fcst",
+      "status": "failed",
+      "error": "TransportTimeoutError: Request timed out after 3 attempts"
+    }
+  ],
+  "artifact_paths": [],
+  "record_count": 0,
+  "warnings": [],
+  "errors": [
+    "Source 'datago.village_fcst' fetch failed: Request timed out after 3 attempts"
+  ]
+}
+```
+
+### 3.4 부분 실패(Partial Failure) 시 Manifest
+
+`sources`에 여러 provider를 넣었을 때, 일부 source만 실패하는 경우:
+
+```json
+{
+  "build_id": "bld-20250401-def5678",
+  "status": "failed",
+  "spec_digest": "sha256:a1b2c3...",
+  "started_at": "2025-04-01T10:00:00Z",
+  "finished_at": "2025-04-01T10:01:30Z",
+  "sources": [
+    {
+      "provider": "datago",
+      "dataset": "village_fcst",
+      "status": "succeeded",
+      "records_fetched": 1500
+    },
+    {
+      "provider": "datago",
+      "dataset": "air_quality",
+      "status": "failed",
+      "error": "AuthError: Invalid API key"
+    }
+  ],
+  "artifact_paths": [],
+  "record_count": 0,
+  "warnings": [],
+  "errors": [
+    "Source 'datago.air_quality' fetch failed: Invalid API key"
+  ]
+}
+```
+
+> **기본 정책**: source 하나라도 실패하면 build 전체가 실패합니다. 부분 성공 artifact는 생성하지 않습니다.
+
 ---
 
-## 📚 관련 문서
+## 4. Error Contract (에러 응답 규약)
+
+### 4.1 예외 계층
+
+Builder의 모든 런타임 에러는 `BuildError` 하위 클래스로 표현됩니다.
+
+```text
+BuildError (base)
+├── SpecLoadError          — YAML 파일 I/O 또는 파싱 실패
+├── SpecValidationError    — 스펙 검증 실패 (여러 이슈 집계 가능)
+├── SourceExecutionError   — source 데이터 fetch 실패
+├── AssemblyError          — 데이터 조립 실패
+├── ExportError            — 파일 생성/쓰기 실패
+├── ManifestWriteError     — manifest 쓰기 실패
+└── PublishError           — 외부 저장소 배포 실패
+```
+
+### 4.2 에러 발생 시나리오
+
+| 단계 | 에러 타입 | 발생 원인 |
+|:---|:---|:---|
+| Spec 로딩 | `SpecLoadError` | YAML 파일 없음, 읽기 권한 없음, YAML 문법 오류 |
+| Spec 검증 | `SpecValidationError` | dataset_id 비어 있음, sources 없음, alias 중복 등 |
+| Source 실행 | `SourceExecutionError` | API 무응답, 인증 실패, 응답 파싱 실패 등 |
+| 데이터 조립 | `AssemblyError` | source key 누락 |
+| 내보내기 | `ExportError` | 디스크 공간 부족, 파일 쓰기 권한 없음 |
+| Manifest 쓰기 | `ManifestWriteError` | 디스크 I/O 실패 |
+| 배포 | `PublishError` | 네트워크/인증 실패, 원격 저장소 오류 |
+
+### 4.3 validate_spec 에러 응답
+
+검증 실패 시 첫 번째 오류에서 즉시 중단하지 않고, 모든 이슈를 모아 한 번에 보고합니다.
+
+```python
+try:
+    validate_spec(spec)
+except SpecValidationError as e:
+    print(e.issues)
+    # ("dataset_id must be a non-empty string",
+    #  "source alias 'forecast' is duplicated",
+    #  "export output_path is empty")
+```
+
+> 자세한 에러 처리 설계는 [docs/ERROR_HANDLING.md](./docs/ERROR_HANDLING.md)를 참조하세요.
+
+---
+
+## 관련 문서
 
 ### 이 저장소 내 문서
 | 문서 | 설명 |
@@ -152,10 +268,10 @@ graph TD
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | 시스템 아키텍처 설계 |
 | [DOMAIN_MODEL.md](./DOMAIN_MODEL.md) | 도메인 모델 정의 |
 | [EXPORT_MODEL.md](./EXPORT_MODEL.md) | 데이터 변환 모델 |
+| [docs/ERROR_HANDLING.md](./docs/ERROR_HANDLING.md) | 에러 처리 설계 |
 
 ### KPubData Product Family
 | 저장소 | 문서 | 설명 |
 | :--- | :--- | :--- |
 | [kpubdata](https://github.com/yeongseon/kpubdata) | [API_SPEC.md](https://github.com/yeongseon/kpubdata/blob/main/API_SPEC.md) | Core API 명세 |
 | [kpubdata-studio](https://github.com/yeongseon/kpubdata-studio) | [API_CONTRACT.md](https://github.com/yeongseon/kpubdata-studio/blob/main/API_CONTRACT.md) | Studio 인터페이스 규약 |
-

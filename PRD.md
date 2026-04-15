@@ -146,7 +146,7 @@ The system must provide a CLI for local and CI use.
 
 ---
 
-## 📚 관련 문서
+## 관련 문서
 
 ### 이 저장소 내 문서
 | 문서 | 설명 |
@@ -159,4 +159,3 @@ The system must provide a CLI for local and CI use.
 | :--- | :--- | :--- |
 | [kpubdata](https://github.com/yeongseon/kpubdata) | [PRD.md](https://github.com/yeongseon/kpubdata/blob/main/PRD.md) | Core 제품 요구사항 |
 | [kpubdata-studio](https://github.com/yeongseon/kpubdata-studio) | [PRD.md](https://github.com/yeongseon/kpubdata-studio/blob/main/PRD.md) | Studio 제품 요구사항 |
-
