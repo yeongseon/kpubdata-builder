@@ -2,13 +2,39 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from .artifact import ArtifactDataset
+from .errors import ExecutionError, ValidationError
 from .spec import BuildSpec
 from .validator import validate_spec
 
 
-def source_executor(spec: BuildSpec) -> ArtifactDataset:
+@dataclass(frozen=True)
+class ExecutionResult:
+    artifact: ArtifactDataset
+    warnings: tuple[str, ...] = ()
+    errors: tuple[str, ...] = ()
+
+
+def source_executor(spec: BuildSpec) -> ExecutionResult:
     """Execute declared sources and return a minimal assembled artifact stub."""
-    validate_spec(spec)
-    provenance = tuple(f"{source.provider}.{source.dataset}" for source in spec.sources)
-    return ArtifactDataset(metadata=dict(spec.metadata), provenance=provenance)
+    try:
+        validate_spec(spec)
+    except ValidationError:
+        raise
+    except ValueError as exc:
+        raise ValidationError([str(exc)]) from exc
+
+    try:
+        provenance = tuple(f"{source.provider}.{source.dataset}" for source in spec.sources)
+        artifact = ArtifactDataset(metadata=dict(spec.metadata), provenance=provenance)
+    except Exception as exc:
+        raise ExecutionError(
+            f"Failed to execute sources for dataset {spec.dataset_id}: {exc}"
+        ) from exc
+
+    return ExecutionResult(artifact=artifact)
+
+
+__all__ = ["ExecutionResult", "source_executor"]
