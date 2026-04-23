@@ -3,19 +3,19 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-**KPubData Builder**는 재현 가능한 공공데이터 데이터셋 조립을 위한 **execution engine**입니다. `kpubdata`가 정규화한 레코드를 받아, BuildSpec에 따라 검증하고, 조립하고, 내보내고, Manifest로 기록합니다.
+**KPubData Builder**는 원시 공공데이터를 정제된, 검증된, 배포 가능한 데이터셋으로 변환하는 **dataset build engine**입니다. `kpubdata`가 정규화한 레코드를 받아, BuildSpec에 따라 검증하고, 조립하고, 내보내고, Manifest로 기록합니다.
 
 ---
 
 ## 소개
 
-`kpubdata-builder`는 **재현 가능한 공공데이터 데이터셋 조립을 위한 실행 엔진**입니다.
+`kpubdata-builder`는 **원시 공공데이터를 정제된, 검증된, 배포 가능한 데이터셋으로 변환하는 빌드 엔진**입니다.
 
 쉽게 말해:
 
 - `kpubdata`는 데이터를 **가져오고 정규화하는 코어**입니다.
-- `kpubdata-builder`는 그 데이터를 **BuildSpec에 따라 실행 가능한 산출물로 조립하는 엔진**입니다.
-- `kpubdata-studio`는 builder 위에 올라가는 **시각적 제어면(control surface)**입니다.
+- `kpubdata-builder`는 그 데이터를 **BuildSpec에 따라 정제 → 메타데이터 생성 → 분할 → 검증 → 배포하는 엔진**입니다.
+- `kpubdata-studio`는 builder 위에 올라가는 **데이터셋 워크벤치 UI**입니다.
 
 즉, Builder는 문서·데이터셋·배포 패키지 같은 결과물을 일관되게 만들어내는 파이프라인의 중심이며, **별도의 UI 제품이 아니라 실행 계층**입니다.
 
@@ -131,6 +131,6 @@ BuildSpec 계약은 [BUILD_SPEC.md](./BUILD_SPEC.md)를 참고하세요.
 
 | 패키지 | 역할 |
 | :--- | :--- |
-| [kpubdata](https://github.com/yeongseon/kpubdata) | 공공데이터 접근·정규화 코어 |
-| [kpubdata-builder](https://github.com/yeongseon/kpubdata-builder) | 재현 가능한 데이터셋 조립 실행 엔진 |
-| [kpubdata-studio](https://github.com/yeongseon/kpubdata-studio) | builder 위에서 동작하는 시각적 제어면 |
+| [kpubdata](https://github.com/yeongseon/kpubdata) | 공공데이터 접근·정규화 코어 + curated dataset collection 브랜드 |
+| [kpubdata-builder](https://github.com/yeongseon/kpubdata-builder) | 원시 데이터 → 정제·검증·배포 가능한 데이터셋 빌드 엔진 |
+| [kpubdata-studio](https://github.com/yeongseon/kpubdata-studio) | 데이터셋 워크벤치 UI (inspect, transform, preview, export) |

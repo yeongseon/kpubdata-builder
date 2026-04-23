@@ -1,26 +1,98 @@
 # Roadmap — kpubdata-builder
 
+> kpubdata-builder는 **원시 공공데이터를 정제된, 검증된, 배포 가능한 데이터셋으로 변환하는 빌드 엔진**입니다.
+> raw public data → cleaned dataset → metadata → split → validation → publish
+
+## 개발 축
+
+| 축 | 설명 |
+| :--- | :--- |
+| **Build Pipeline** | spec 파싱 → 검증 → 실행 → export → manifest 핵심 흐름 |
+| **Export & Publish** | 출력 형식(Markdown, JSONL, Parquet, HF layout) + 배포 대상(HF Hub, Kaggle, 로컬) |
+| **Dataset Identity** | dataset card, schema summary, split, provenance, version history |
+
+---
+
 ## v0.1
 
-- BuildSpec 계약 안정화
-- BuildSpec 검증 흐름 안정화
+BuildSpec 계약과 핵심 파이프라인 안정화.
+
+- BuildSpec 계약 안정화 (YAML 파싱, 검증)
 - preview 계약 안정화
 - manifest 스키마 안정화
 - CLI 기반 build 실행 흐름 정리
+- BuildError 에러 계층 정리
+- spec loader, executor, assembler 에러 처리 강화
 
 ## v0.2
 
-- exporter 확장
-- publisher 확장
-- 추가 output 레이아웃 지원
-- 원격 게시 대상 다양화
+Export 확장과 Dataset Identity 도입.
+
+### Export & Publish
+- Markdown exporter (#5)
+- JSONL exporter (#6)
+- Parquet exporter (#8)
+- Hugging Face layout exporter (#9)
+- Publish command — 로컬 → 원격 배포 (#10)
+
+### Dataset Identity
+- Manifest를 **dataset release record**로 승격 — build manifest writer (#7)
+- Schema summary in manifest (#11)
+- Richer provenance tracking (#12)
+- **Dataset card 생성**: README / schema summary / sample preview / source attribution / license / version history
+
+### Build Pipeline
+- Build command and source execution (#4)
+- Validate command (#2)
+- Preview command (#3)
+- Build spec parsing (YAML) (#1)
 
 ## v0.3
 
-- service mode 도입
-- plugin model 확장
-- build diff/history 기능 도입
-- 장기 실행 상태 조회 개선
+Plugin 생태계와 고급 빌드 기능.
+
+- Plugin exporter API (#13)
+- Reusable build templates (#14)
+- Snapshot-aware builds (#15)
+- Build diff/compare tools (#16)
+- Exporter / Publisher 경계 분리 (#28)
+- **Split 지원**: train/validation/test, by year/region/category, distribution-aware segmentation
+- **Kaggle dataset export** 지원
+- **Data catalog page** 생성 — 브랜드 배포용 정적 페이지
+
+## v1.0 criteria
+
+- BuildSpec 계약 안정, 하위 호환성 보장
+- 3개 이상 exporter 안정 (Markdown, JSONL, Parquet)
+- 2개 이상 publish 대상 안정 (Hugging Face, Kaggle)
+- Dataset card + manifest가 모든 빌드에 자동 생성
+- Plugin exporter API로 외부 확장 가능
+- kpubdata-studio에서 전체 워크플로우 제어 가능
+
+---
+
+## 출력 타깃 (Output Targets)
+
+| 타깃 | 설명 | 버전 |
+| :--- | :--- | :--- |
+| Hugging Face datasets | ML/AI 친화적 데이터셋 배포 | v0.2 |
+| Kaggle datasets | 데이터 분석/경진대회 배포 | v0.3 |
+| CSV / Parquet package | 범용 데이터 패키지 | v0.2 |
+| Data catalog page | 브랜드 배포용 정적 카탈로그 페이지 | v0.3 |
+
+## Dataset Identity 개념
+
+Builder가 생성하는 모든 데이터셋에는 다음 정보가 포함됩니다:
+
+| 항목 | 설명 |
+| :--- | :--- |
+| source | 원본 데이터 출처 (provider, dataset, params) |
+| build date | 빌드 실행 일시 |
+| schema | 필드 정의 및 타입 |
+| split info | 데이터 분할 정보 |
+| validation result | 검증 결과 |
+| export targets | 출력 형식 및 대상 |
+| version | 데이터셋 버전 |
 
 ---
 
