@@ -1,13 +1,14 @@
 # Roadmap — kpubdata-builder
 
 > kpubdata-builder는 **원시 공공데이터를 정제된, 검증된, 배포 가능한 데이터셋으로 변환하는 빌드 엔진**입니다.
-> raw public data → cleaned dataset → metadata → split → validation → publish
+> raw public data → Bronze → Silver → Gold → export → manifest → publish
 
 ## 개발 축
 
 | 축 | 설명 |
 | :--- | :--- |
-| **Build Pipeline** | spec 파싱 → 검증 → 실행 → export → manifest 핵심 흐름 |
+| **Build Pipeline** | spec 파싱 → orchestrator → export → manifest 핵심 흐름 |
+| **Medallion Pipeline** | Bronze/Silver/Gold stage 책임, 승격 규칙, run workspace 구조 |
 | **Export & Publish** | 출력 형식(Markdown, JSONL, Parquet, HF layout) + 배포 대상(HF Hub, Kaggle, 로컬) |
 | **Dataset Identity** | dataset card, schema summary, split, provenance, version history |
 
@@ -15,9 +16,14 @@
 
 ## v0.1
 
-BuildSpec 계약과 핵심 파이프라인 안정화.
+Medallion 파이프라인 기반 구축.
 
 - BuildSpec 계약 안정화 (YAML 파싱, 검증)
+- Medallion 디렉터리 재구성 (`stages/bronze`, `stages/silver`, `stages/gold`)
+- Bronze/Silver/Gold stage 구현
+- Polars 기반 tabular engine
+- Pipeline orchestrator
+- 서울 아파트 실거래가(`datago.apt_trade`) end-to-end 예제
 - preview 계약 안정화
 - manifest 스키마 안정화
 - CLI 기반 build 실행 흐름 정리
@@ -26,13 +32,14 @@ BuildSpec 계약과 핵심 파이프라인 안정화.
 
 ## v0.2
 
-Export 확장과 Dataset Identity 도입.
+Export 확장, stage-aware exporter, Dataset Identity 도입.
 
 ### Export & Publish
 - Markdown exporter (#5)
 - JSONL exporter (#6)
 - Parquet exporter (#8)
 - Hugging Face layout exporter (#9)
+- stage-aware exporters (Gold package 기반 출력 최적화)
 - Publish command — 로컬 → 원격 배포 (#10)
 
 ### Dataset Identity

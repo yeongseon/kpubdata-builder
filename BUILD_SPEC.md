@@ -4,6 +4,8 @@
 
 BuildSpec은 Builder가 실행하는 모든 빌드의 **단일 입력 계약**입니다. Builder는 BuildSpec을 기준으로 source 실행, export, output 디렉터리 결정, publish 요청, manifest 기록을 수행합니다.
 
+> 참고: Bronze/Silver/Gold는 Builder 내부의 Medallion pipeline stage이며 orchestrator가 관리합니다. 현재 BuildSpec에는 이를 직접 제어하는 사용자 노출 필드(예: `pipeline.stages`)를 추가하지 않습니다.
+
 ## 2. 최소 필수 구조
 
 다음 구조가 최소 요구사항입니다.

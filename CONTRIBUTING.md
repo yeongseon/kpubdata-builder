@@ -7,9 +7,9 @@ KPubData-Builder 프로젝트에 기여하고 싶으신가요? 환영합니다! 
 KPubData 패밀리 소개:
 - **kpubdata**: 핵심 라이브러리 (데이터 수집)
 - **kpubdata-builder**: 데이터를 내보내고 가공하는 엔진
-- **kpubdata-studio**: 시각화 웹 대시보드
+- **kpubdata-studio**: dataset workbench UI
 
-이 레포지토리(`kpubdata-builder`)는 데이터를 정제하거나 특정 파일 포맷으로 변환하는 기능을 개발하는 곳입니다.
+이 레포지토리(`kpubdata-builder`)는 Medallion Architecture 기반으로 데이터를 Bronze/Silver/Gold 단계에서 정제하고 특정 파일 포맷으로 변환하는 기능을 개발하는 곳입니다.
 
 ## 2. 개발 환경 설정 (처음부터 끝까지)
 
@@ -148,7 +148,22 @@ uv run pytest
 - **포맷팅**: `uv run ruff format .`으로 코드 스타일을 자동으로 정리하세요.
 - **가독성**: 변수 이름은 누구나 알 수 있도록 명확하게 지어주세요.
 
-## 5. 첫 번째 내보내기 도구(Exporter) 추가하기
+## 5. Medallion 작업 규칙
+
+- `stages/`를 수정하는 기여자는 **Bronze → Silver → Gold** 책임 경계를 먼저 확인해야 합니다.
+- Bronze는 raw fetch/snapshot/provenance에 집중하고, Silver는 **Polars 기반 tabularize·validation·statistics·preview**에 집중하며, Gold는 split-ready/export-ready package 조립에 집중해야 합니다.
+- stage 간 승격 규칙은 Builder가 소유하므로, Studio나 exporter 관점에서 임의 의미를 다시 정의하면 안 됩니다.
+- run workspace는 `build/{run_id}/bronze/`, `silver/`, `gold/` 규칙을 기준으로 생각해야 합니다.
+
+## 6. 테스트 가이드
+
+- stage 관련 변경은 가능하면 **stage-aware 테스트**와 함께 제출하세요.
+- Bronze 변경은 fixture 기반 source snapshot/provenance 검증을 우선합니다.
+- Silver 변경은 Polars schema validation, statistics, preview slice 검증을 우선합니다.
+- Gold 변경은 package layout, split readiness, exporter 입력 계약을 검증해야 합니다.
+- exporter 변경은 기존 golden test와 함께 Gold package 입력이 깨지지 않는지도 확인하세요.
+
+## 7. 첫 번째 내보내기 도구(Exporter) 추가하기
 
 KPubData-Builder에 새로운 파일 형식을 추가해 봅시다.
 
@@ -157,15 +172,16 @@ KPubData-Builder에 새로운 파일 형식을 추가해 봅시다.
 3. 데이터를 파일로 저장하는 로직을 구현합니다.
 4. `tests/` 폴더에 테스트 파일을 작성해 기능이 잘 작동하는지 확인합니다.
 
-## 6. PR 체크리스트
+## 8. PR 체크리스트
 
 PR을 작성할 때 제목을 `[#이슈번호] 간단한 설명`으로 작성해 주세요.
 
 - [ ] 로컬 테스트(`uv run pytest`)가 모두 성공했나요?
 - [ ] 린트(`uv run ruff check .`)에서 오류가 없나요?
 - [ ] 변경 사항을 잘 설명하는 테스트 코드가 포함되었나요?
+- [ ] `stages/`를 건드렸다면 Medallion 책임 경계와 stage-aware 테스트를 확인했나요?
 
-## 7. 질문과 도움
+## 9. 질문과 도움
 
 작업하다 막히면 주저하지 말고 GitHub Issues에 질문하세요! 모르는 것을 물어보는 것은 기여의 아주 중요한 시작입니다. "어디서부터 시작해야 할까요?", "이 에러는 왜 발생할까요?" 같은 질문 모두 환영합니다.
 

@@ -32,16 +32,18 @@ Implement KPubData Builder as the orchestration and artifact pipeline layer on t
 ## Priorities
 
 1. spec models
-2. validation flow
+2. Medallion pipeline orchestration
 3. source execution using `kpubdata`
-4. artifact model
-5. markdown exporter
-6. huggingface layout exporter
-7. publish hooks
+4. Polars tabular engine and Silver validation
+5. artifact model and Gold packaging
+6. markdown exporter
+7. huggingface layout exporter
+8. stage-aware publish hooks
 
 ## Testing Expectations
 
 - unit tests for spec validation
+- stage-aware tests for Bronze/Silver/Gold promotion
 - golden tests for Markdown output
 - manifest contract tests
 - fixture-based source execution tests
@@ -57,8 +59,12 @@ KPubData Builder는 `kpubdata` 사서가 가져온 원시 데이터를 사용자
 | 용어 | 설명 |
 | :--- | :--- |
 | **BuildSpec** | 어떤 데이터를 어떻게 수집해서 어디로 보낼지 적힌 기획서 |
+| **Bronze** | 원시 fetch 결과와 source snapshot을 보관하는 첫 단계 |
+| **Silver** | Polars로 tabularize·검증·통계·preview를 만드는 중간 단계 |
+| **Gold** | split-ready/export-ready 패키지를 조립하는 최종 내부 단계 |
 | **Artifact** | 빌드 과정을 통해 만들어진 최종 결과물 (파일 등) |
 | **Manifest** | 빌드 결과물에 대한 상세 명세서 (버전, 생성일 등) |
+| **Polars** | Silver 단계의 표 처리와 검증에 사용하는 단일 tabular engine |
 | **Exporter** | 데이터를 특정 형식(Markdown, JSON, HuggingFace 등)으로 변환하는 도구 |
 | **Publisher** | 완성된 결과물을 특정 장소(GitHub, HF Hub 등)에 올리는 도구 |
 | **Golden Test** | 이전의 '완벽한 결과물'과 현재 결과물을 비교하여 변경 사항을 확인하는 테스트 |
@@ -67,22 +73,24 @@ KPubData Builder는 `kpubdata` 사서가 가져온 원시 데이터를 사용자
 
 ```mermaid
 graph LR
-    BS[BuildSpec] --> V[Validate]
-    V --> E[Execute]
-    E --> EX[Export]
+    BS[BuildSpec] --> B[Bronze]
+    B --> S[Silver\nPolars]
+    S --> G[Gold]
+    G --> EX[Export]
     EX --> M[Manifest]
     
     subgraph "Details"
         BS -.-> |YAML| BS
-        V -.-> |Check| V
-        E -.-> |kpubdata| E
+        B -.-> |kpubdata/raw snapshot| B
+        S -.-> |tabularize/validate| S
+        G -.-> |package| G
         EX -.-> |Formatting| EX
         M -.-> |Metadata| M
     end
 ```
 
 ```text
-[BuildSpec] -> [Validate] -> [Execute (Fetch Data)] -> [Export (Formatting)] -> [Manifest (Metadata)]
+[BuildSpec] -> [Bronze (raw fetch)] -> [Silver (Polars tabularize/validate)] -> [Gold (package)] -> [Export (Formatting)] -> [Manifest (Metadata)]
 ```
 
 ## AI 에이전트 코딩 가이드
@@ -98,22 +106,28 @@ graph LR
 
 ### 에이전트 결과물 검증 체크리스트
 - [ ] `uv run ruff check .`를 통과했는가?
+- [ ] Bronze/Silver/Gold stage 책임을 문서/구현에서 혼동하지 않았는가?
 - [ ] 새로운 Exporter에 대한 유닛 테스트를 작성했는가?
+- [ ] stage-aware 테스트 또는 fixture가 필요한 변경이면 함께 추가했는가?
 - [ ] Golden Test를 통해 출력 결과물이 의도대로 나오는지 확인했는가?
 
 ## 파일 구조 가이드
 
 ```mermaid
 graph TD
-    ROOT[src/kpubdata_builder/] --> E[exporters/]
+    ROOT[src/kpubdata_builder/] --> PL[pipeline/]
+    ROOT --> ST[stages/]
+    ROOT --> TB[tabular/]
+    ROOT --> E[exporters/]
     ROOT --> P[publishers/]
     ROOT --> S[spec.py]
-    ROOT --> V[validator.py]
-    ROOT --> EX[executor.py]
-    ROOT --> A[assembler.py]
-    ROOT --> ART[artifact.py]
     ROOT --> M[manifest.py]
     
+    PL --> ORCH[orchestrator.py]
+    ST --> BR[bronze/]
+    ST --> SI[silver/]
+    ST --> GO[gold/]
+    TB --> PO[polars_*]
     E --> ME[markdown.py]
     E --> JE[jsonl.py]
     E --> PE[parquet.py]
@@ -123,20 +137,19 @@ graph TD
 
 ```text
 src/kpubdata_builder/
+├── pipeline/        # Medallion stage 흐름 제어
+├── stages/          # bronze/silver/gold 구현
+├── tabular/         # Polars 기반 표 처리
 ├── exporters/       # 데이터 형식 변환 (Markdown, JSONL 등)
 ├── publishers/      # 결과물 업로드 (HF, GitHub 등)
 ├── spec.py          # 빌드 기획서(BuildSpec) 정의
-├── validator.py     # 기획서 및 데이터 검증 로직
-├── executor.py      # kpubdata를 사용하여 실제 데이터 수집
-├── assembler.py     # 전체 빌드 과정을 오케스트레이션
-├── artifact.py      # 생성된 결과물 모델
 └── manifest.py      # 빌드 명세서 생성 로직
 ```
 
 ### 이 파일을 수정해야 할 때
 - **데이터를 새로운 파일 형식으로 저장하고 싶을 때**: `exporters/`에 새 파일을 만듭니다.
 - **결과물을 다른 곳에 자동으로 올리고 싶을 때**: `publishers/`에 새 로직을 추가합니다.
-- **빌드 과정에 새로운 단계(Step)를 추가하고 싶을 때**: `assembler.py`를 수정합니다.
+- **빌드 과정의 stage 승격 규칙을 바꾸고 싶을 때**: `pipeline/`와 `stages/`를 함께 검토합니다.
 
 ## Exporter 추가 가이드
 
