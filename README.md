@@ -3,7 +3,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-**KPubData Builder**는 원시 공공데이터를 정제된, 검증된, 배포 가능한 데이터셋으로 변환하는 **dataset build engine**입니다. `kpubdata`가 정규화한 레코드를 받아, BuildSpec에 따라 검증하고, 조립하고, 내보내고, Manifest로 기록합니다.
+**KPubData Builder**는 원시 공공데이터를 Medallion Architecture 기반으로 정제·검증·패키징하여 배포 가능한 데이터셋으로 만드는 **dataset build engine**입니다. `kpubdata`가 정규화한 레코드를 받아 Bronze/Silver/Gold 단계를 거쳐 결과물을 만들고, Manifest로 기록합니다.
 
 ---
 
@@ -14,7 +14,7 @@
 쉽게 말해:
 
 - `kpubdata`는 데이터를 **가져오고 정규화하는 코어**입니다.
-- `kpubdata-builder`는 그 데이터를 **BuildSpec에 따라 정제 → 메타데이터 생성 → 분할 → 검증 → 배포하는 엔진**입니다.
+- `kpubdata-builder`는 그 데이터를 **BuildSpec에 따라 Bronze → Silver → Gold로 승격시키고 export/publish까지 연결하는 엔진**입니다.
 - `kpubdata-studio`는 builder 위에 올라가는 **데이터셋 워크벤치 UI**입니다.
 
 즉, Builder는 문서·데이터셋·배포 패키지 같은 결과물을 일관되게 만들어내는 파이프라인의 중심이며, **별도의 UI 제품이 아니라 실행 계층**입니다.
@@ -33,7 +33,8 @@
 | 개념 | 역할 | 입력 | 출력 | 소유 주체 |
 | :--- | :--- | :--- | :--- | :--- |
 | **BuildSpec** | 빌드 실행의 단일 계약(source of truth) | YAML/구조화된 spec | 검증된 실행 계획 | Builder |
-| **Artifact** | 빌드가 만든 실제 파일/디렉터리 | 실행 결과 + export 설정 | `.md`, `.jsonl`, `.parquet`, 레이아웃 디렉터리 | Builder |
+| **Artifact** | 빌드가 만든 실제 파일/디렉터리 | Bronze/Silver/Gold 실행 결과 + export 설정 | `.md`, `.jsonl`, `.parquet`, 레이아웃 디렉터리 | Builder |
+| **Polars** | Silver 단계의 단일 tabular engine | Bronze snapshot/정규화 레코드 | 검증 가능한 표 형태 데이터 | Builder 내부 엔진 |
 | **Manifest** | 빌드 결과의 감사 기록 | spec digest, 상태, artifact 메타데이터 | `manifest.json` | Builder |
 | **Exporter** | 레코드를 구체적 파일 형식으로 변환 | 레코드/메타데이터 | Artifact 집합 | Builder 플러그인 |
 | **Publisher** | 생성된 artifact를 외부 대상으로 전송 | Artifact + publish 설정 | 게시 결과/원격 참조 | Builder 플러그인 |
@@ -42,16 +43,36 @@
 
 ```mermaid
 flowchart LR
-    BS[BuildSpec] --> V[Validate]
-    V --> X[Execute via kpubdata]
-    X --> E[Export]
+    BS[BuildSpec] --> B[Bronze: raw fetch]
+    B --> S[Silver: tabularize/validate\n(Polars)]
+    S --> G[Gold: package]
+    G --> E[Export]
     E --> M[Manifest]
-    M --> P[Publish optional]
+    M --> P[Publish]
 ```
 
 ```text
-[BuildSpec] -> [Validate] -> [Execute] -> [Export] -> [Manifest] -> [Publish(optional)]
+[BuildSpec] -> [Bronze: raw fetch] -> [Silver: tabularize/validate (Polars)] -> [Gold: package] -> [Export] -> [Manifest] -> [Publish]
 ```
+
+## Medallion Architecture
+
+Builder의 내부 파이프라인은 선형 ETL이 아니라 **Medallion Architecture**를 따릅니다.
+
+- **Bronze**: `kpubdata`를 통해 원시 데이터를 가져오고 source snapshot과 provenance를 남깁니다.
+- **Silver**: Bronze 산출물을 **Polars 단일 엔진**으로 tabularize하고, schema validation·통계 계산·preview 생성을 수행합니다.
+- **Gold**: Silver 결과를 split-ready/export-ready 패키지로 조립해 exporter와 publisher가 소비할 수 있는 형태로 만듭니다.
+
+실행 중간 산출물은 run workspace에 단계별로 분리됩니다.
+
+```text
+build/{run_id}/
+├── bronze/
+├── silver/
+└── gold/
+```
+
+즉, Builder는 단순히 파일만 뽑는 도구가 아니라, Bronze/Silver/Gold 승격 규칙과 실행 기록을 일관되게 관리하는 오케스트레이터입니다.
 
 ## Builder와 Studio의 관계
 
@@ -114,13 +135,13 @@ output:
   dir: ./dist/weather
 ```
 
-BuildSpec 계약은 [BUILD_SPEC.md](./BUILD_SPEC.md)를 참고하세요.
+BuildSpec 계약은 [BUILD_SPEC.md](./BUILD_SPEC.md)를 참고하세요. Bronze/Silver/Gold stage는 현재 사용자 입력 필드가 아니라 Builder orchestrator가 내부적으로 관리하는 실행 단계입니다.
 
 ## 주요 문서
 
 | 문서 | 설명 |
 | :--- | :--- |
-| [ARCHITECTURE.md](./ARCHITECTURE.md) | BuildSpec 중심 설계와 레이어 분리 |
+| [ARCHITECTURE.md](./ARCHITECTURE.md) | Medallion stage 설계와 레이어 분리 |
 | [BUILD_SPEC.md](./BUILD_SPEC.md) | BuildSpec 계약과 검증 규칙 |
 | [API_CONTRACT.md](./API_CONTRACT.md) | Builder 중심 API/Service 계약 |
 | [BUILD_STATE.md](./BUILD_STATE.md) | 빌드 실행 상태 머신 |
