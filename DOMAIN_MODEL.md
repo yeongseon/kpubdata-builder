@@ -74,7 +74,7 @@ stateDiagram-v2
     FailedManifest --> [*]
 ```
 
-> 모든 실패 상태에서도 Manifest는 생성됩니다. 자세한 에러 계층은 [docs/ERROR_HANDLING.md](./docs/ERROR_HANDLING.md)를 참조하세요.
+> 모든 실패 상태에서도 Manifest는 생성됩니다. 상태 전이와 실패 처리 기준은 [BUILD_STATE.md](./BUILD_STATE.md)를 참조하세요.
 
 ### 2. SourceRef (데이터 출처 정보)
 - **무엇인가요?** `kpubdata` 라이브러리를 통해 가져올 구체적인 공공데이터 정보입니다.
