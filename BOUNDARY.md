@@ -11,14 +11,15 @@
 3. **Manifest schema는 Builder가 소유합니다.**
 4. **Publish workflow는 Builder가 실행하고 Studio는 요청합니다.**
 5. **Studio는 BuildSpec 계약이나 파이프라인 로직을 재정의할 수 없습니다.**
+6. **Builder는 Medallion stage(Bronze/Silver/Gold), staging layout, stage promotion rules, canonical transform engine(Polars)을 소유합니다. Studio는 stage-specific preview 요청과 stage artifact 표시를 할 수 있지만, stage transform을 구현하거나 promotion rule을 재정의해서는 안 됩니다.**
 
 ## 3. 책임 분리표
 
 | 영역 | Builder 책임 | Studio 책임 |
 | :--- | :--- | :--- |
 | BuildSpec | 계약 정의, 버전 관리, 검증 | 작성 UI, 폼 입력, 저장/불러오기 보조 |
-| Preview | source 샘플 실행, schema 계산, export preview 생성 | preview 결과 렌더링 |
-| Build execution | 상태 전이, artifact 생성, manifest 기록 | 실행 요청, 상태 표시 |
+| Preview | source 샘플 실행, schema 계산, stage-aware export preview 생성 | preview 결과 렌더링 |
+| Build execution | 상태 전이, Bronze/Silver/Gold 승격, artifact 생성, manifest 기록 | 실행 요청, 상태 표시 |
 | Manifest | 스키마 정의, 직렬화, 보관 정책 | manifest 표시, 링크 제공 |
 | Publish | 원격 게시 수행, 성공/실패 기록 | publish 요청, 결과 표시 |
 
@@ -31,6 +32,9 @@ Studio는 다음을 구현하거나 소유하면 안 됩니다.
 - 독자적인 preview 계산 엔진
 - manifest 스키마의 임의 확장/변형
 - exporter/publisher 파이프라인 로직 재구현
+- Bronze/Silver/Gold stage transform 구현
+- stage promotion rule 재정의
+- Polars 외 별도 canonical transform engine 도입
 
 ## 5. 허용되는 Studio 역할
 
@@ -39,7 +43,7 @@ Studio는 다음 역할을 수행할 수 있습니다.
 - BuildSpec 편집기 제공
 - Builder API 호출 래퍼 제공
 - 실행 상태 시각화
-- artifact/manifest 브라우징
+- stage artifact/manifest 브라우징
 - publish 요청 UX 제공
 
 단, 계산 결과의 기준은 항상 Builder 응답이어야 합니다.
