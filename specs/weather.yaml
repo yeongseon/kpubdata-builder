@@ -1,0 +1,15 @@
+dataset_id: weather-village-forecast
+title: Weather Village Forecast
+description: Village forecast dataset from the public data portal.
+
+sources:
+  - provider: datago
+    dataset: village_fcst
+    params:
+      base_date: "20250401"
+      nx: 55
+      ny: 127
+
+exports:
+  - kind: markdown
+    output_path: README.md
