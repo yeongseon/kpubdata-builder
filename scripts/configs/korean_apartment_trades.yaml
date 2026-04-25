@@ -1,0 +1,130 @@
+# Korean Apartment Trades — HuggingFace Dataset Publishing Config
+# Dataset: kpubdata/korean-apartment-trades
+# Source: data.go.kr MOLIT apartment trade real transaction data
+
+source:
+  provider: datago
+  dataset: apt_trade
+  # Each entry in fetch_params triggers a separate API call.
+  # Results are concatenated into a single dataset.
+  # Use list_all: true to auto-paginate each parameter set.
+  list_all: true
+  fetch_params:
+    - LAWD_CD: "11680"    # 강남구
+      DEAL_YMD: "202401"
+    - LAWD_CD: "11680"
+      DEAL_YMD: "202402"
+    - LAWD_CD: "11680"
+      DEAL_YMD: "202403"
+    - LAWD_CD: "11680"
+      DEAL_YMD: "202404"
+    - LAWD_CD: "11680"
+      DEAL_YMD: "202405"
+    - LAWD_CD: "11680"
+      DEAL_YMD: "202406"
+    - LAWD_CD: "11650"    # 서초구
+      DEAL_YMD: "202401"
+    - LAWD_CD: "11650"
+      DEAL_YMD: "202402"
+    - LAWD_CD: "11650"
+      DEAL_YMD: "202403"
+    - LAWD_CD: "11650"
+      DEAL_YMD: "202404"
+    - LAWD_CD: "11650"
+      DEAL_YMD: "202405"
+    - LAWD_CD: "11650"
+      DEAL_YMD: "202406"
+
+transform:
+  # Map raw API field names to clean English column names.
+  # Only mapped columns are kept in the final output.
+  column_mapping:
+    sggCd: district_code
+    umdNm: neighborhood
+    aptNm: apartment_name
+    excluUseAr: exclusive_area_m2
+    floor: floor
+    buildYear: build_year
+    dealYear: deal_year
+    dealMonth: deal_month
+    dealDay: deal_day
+    dealAmount: deal_amount_10k_krw
+    jibun: lot_number
+
+  # Type casting applied after column mapping.
+  # Supported types: int, float, str
+  # Special: "int_comma" strips commas before converting (e.g. "82,500" -> 82500)
+  dtypes:
+    district_code: str
+    neighborhood: str
+    apartment_name: str
+    exclusive_area_m2: float
+    floor: int
+    build_year: int
+    deal_year: int
+    deal_month: int
+    deal_day: int
+    deal_amount_10k_krw: int_comma
+    lot_number: str
+
+  # Optional derived columns computed after type casting.
+  derived:
+    - name: deal_date
+      expr: "concat_date(deal_year, deal_month, deal_day)"
+      dtype: str
+
+  # Optional row filter expressions (Polars filter syntax).
+  # Rows not matching ALL filters are dropped.
+  filters:
+    - "deal_amount_10k_krw > 0"
+
+output:
+  hf_repo: "kpubdata/korean-apartment-trades"
+  parquet_filename: "data/train.parquet"
+  # Local staging directory (relative to script working dir)
+  staging_dir: "./staging/korean-apartment-trades"
+
+card:
+  title: "Korean Apartment Trades (아파트매매 실거래가)"
+  description: |
+    Real transaction prices for apartment sales in South Korea,
+    sourced from the Ministry of Land, Infrastructure and Transport (MOLIT)
+    via data.go.kr public API.
+
+    This dataset is the Korean equivalent of the California Housing dataset —
+    a tabular regression benchmark where the target variable is the transaction
+    price (`deal_amount_10k_krw`, unit: 10,000 KRW).
+  license: "CC-BY-4.0"
+  language:
+    - ko
+  tags:
+    - real-estate
+    - housing-prices
+    - korea
+    - tabular
+    - regression
+  features:
+    - name: district_code
+      description: "시군구 코드 (5-digit administrative district code)"
+    - name: neighborhood
+      description: "읍면동 이름 (e.g. 개포동, 역삼동)"
+    - name: apartment_name
+      description: "아파트 단지명"
+    - name: exclusive_area_m2
+      description: "전용면적 (m², exclusive use area)"
+    - name: floor
+      description: "거래 층수"
+    - name: build_year
+      description: "건축년도"
+    - name: deal_year
+      description: "거래년도"
+    - name: deal_month
+      description: "거래월"
+    - name: deal_day
+      description: "거래일"
+    - name: deal_amount_10k_krw
+      description: "거래금액 (만원 단위, target variable for regression)"
+    - name: lot_number
+      description: "지번"
+    - name: deal_date
+      description: "거래일자 (YYYY-MM-DD, derived)"
