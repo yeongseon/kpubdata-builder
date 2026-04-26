@@ -58,10 +58,13 @@ def transform_records(records: list[dict[str, Any]], config: dict[str, Any]) -> 
     for record in records:
         row: dict[str, Any] = {}
         for raw_key, clean_key in column_mapping.items():
-            row[clean_key] = record.get(raw_key)
+            val = record.get(raw_key)
+            row[clean_key] = str(val) if val is not None else None
         mapped.append(row)
 
-    df = pl.DataFrame(mapped)
+    # Force all columns to Utf8 to avoid mixed-type inference errors
+    schema = {clean: pl.Utf8 for clean in column_mapping.values()}
+    df = pl.DataFrame(mapped, schema=schema)
     logger.info("Raw DataFrame: %d rows x %d cols", df.height, df.width)
 
     for col, dtype_str in dtypes.items():
