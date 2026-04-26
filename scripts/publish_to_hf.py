@@ -200,18 +200,23 @@ def generate_dataset_card(df: pl.DataFrame, config: dict[str, Any], output_path:
 
     tags_yaml = "\n".join(f"- {t}" for t in card.get("tags", []))
     languages_yaml = "\n".join(f"- {lang}" for lang in card.get("language", ["ko"]))
+    task_categories = card.get("task_categories", [])
+    task_categories_yaml = "\n".join(f"- {t}" for t in task_categories)
+    task_categories_block = f"task_categories:\n{task_categories_yaml}\n" if task_categories else ""
     hf_repo = output_cfg["hf_repo"]
     source_url = config["source"].get("source_url", "https://www.data.go.kr")
+    attribution = card.get("attribution", "")
+    attribution_block = f"\n{attribution}\n" if attribution else ""
 
     content = f"""---
-license: {card.get("license", "CC-BY-4.0")}
+license: {card.get("license", "cc-by-4.0")}
 language:
 {languages_yaml}
 tags:
 {tags_yaml}
 size_categories:
 - {_size_category(df.height)}
----
+{task_categories_block}---
 
 # {card["title"]}
 
@@ -248,7 +253,7 @@ print(df.head())
 
 This dataset was generated using [kpubdata](https://github.com/yeongseon/kpubdata)
 from public data APIs on data.go.kr.
-"""
+{attribution_block}"""
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(content, encoding="utf-8")

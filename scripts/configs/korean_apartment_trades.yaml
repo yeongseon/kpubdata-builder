@@ -94,7 +94,7 @@ card:
     This dataset is the Korean equivalent of the California Housing dataset —
     a tabular regression benchmark where the target variable is the transaction
     price (`deal_amount_10k_krw`, unit: 10,000 KRW).
-  license: "CC-BY-4.0"
+  license: "cc-by-4.0"
   language:
     - ko
   tags:

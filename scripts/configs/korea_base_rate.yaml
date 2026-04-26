@@ -40,7 +40,7 @@ card:
 
     Monthly time series suitable for economic analysis and
     forecasting tasks.
-  license: "CC-BY-4.0"
+  license: "cc-by-4.0"
   language:
     - ko
   tags:
