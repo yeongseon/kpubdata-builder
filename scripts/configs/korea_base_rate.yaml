@@ -1,0 +1,59 @@
+# BOK Base Rate — HuggingFace Dataset Publishing Config
+# Dataset: kpubdata/korea-base-rate
+# Source: Bank of Korea ECOS base interest rate
+
+source:
+  provider: bok
+  dataset: base_rate
+  list_all: false
+  fetch_params:
+    - start_date: "200101"
+      end_date: "202412"
+
+transform:
+  column_mapping:
+    TIME: year_month
+    DATA_VALUE: base_rate_pct
+    STAT_NAME: stat_name
+    UNIT_NAME: unit
+
+  dtypes:
+    year_month: str
+    base_rate_pct: float
+    stat_name: str
+    unit: str
+
+  derived: []
+  filters: []
+
+output:
+  hf_repo: "kpubdata/korea-base-rate"
+  parquet_filename: "data/train.parquet"
+  staging_dir: "./staging/korea-base-rate"
+
+card:
+  title: "Korea Base Interest Rate (한국은행 기준금리)"
+  description: |
+    Historical base interest rate of the Bank of Korea (BOK),
+    sourced from the Economic Statistics System (ECOS) via
+    kpubdata.
+
+    Monthly time series suitable for economic analysis and
+    forecasting tasks.
+  license: "CC-BY-4.0"
+  language:
+    - ko
+  tags:
+    - economics
+    - interest-rate
+    - korea
+    - time-series
+  features:
+    - name: year_month
+      description: "YYYYMM format period identifier"
+    - name: base_rate_pct
+      description: "Base rate in annual percent (연%)"
+    - name: stat_name
+      description: "Statistic name from BOK"
+    - name: unit
+      description: "Unit description"
