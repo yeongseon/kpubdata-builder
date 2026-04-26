@@ -210,7 +210,7 @@ card:
   title: "Korean Apartment Trades (아파트매매 실거래가)"
   description: |
     Real transaction prices for apartment sales...
-  license: "CC-BY-4.0"
+  license: "cc-by-4.0"
   language:
     - ko
   tags:
@@ -225,7 +225,7 @@ card:
 | :--- | :--- | :--- | :--- |
 | `title` | str | ✅ | 데이터셋 제목 |
 | `description` | str | ✅ | 데이터셋 설명 |
-| `license` | str | | 라이선스 (기본값: `CC-BY-4.0`) |
+| `license` | str | | 라이선스 (기본값: `cc-by-4.0`) |
 | `language` | list[str] | | 언어 코드 (기본값: `["ko"]`) |
 | `tags` | list[str] | | HuggingFace 태그 |
 | `features` | list[dict] | | 피처별 이름과 설명. Dataset Card의 Features 테이블에 렌더링됨 |
@@ -268,14 +268,16 @@ main()                        → CLI               argparse 기반 진입점
 
 ## 제공되는 Config 파일
 
-### `korean_apartment_trades.yaml`
+### `seoul_apartment_trades.yaml`
 
-국토교통부 아파트매매 실거래가 데이터. "한국판 California Housing" — 거래가격(`deal_amount_10k_krw`)을 타겟 변수로 하는 tabular regression 벤치마크.
+국토교통부 아파트매매 실거래가 데이터. 서울 25개구 전체, 2020-01~2024-12 (60개월). 거래가격(`deal_amount_10k_krw`)을 타겟 변수로 하는 tabular regression / time-series 벤치마크.
 
 - **소스**: data.go.kr MOLIT 아파트 실거래가 API
-- **지역**: 강남구(11680), 서초구(11650)
-- **기간**: 2024년 1~6월
-- **HF 레포**: `kpubdata/korean-apartment-trades`
+- **지역**: 서울 25개구 전체
+- **기간**: 2020년 1월 ~ 2024년 12월 (60개월)
+- **API 호출**: 1,500회 (25개구 × 60개월)
+- **예상 레코드**: ~250,000건
+- **HF 레포**: `kpubdata/seoul-apartment-trades`
 
 ### `korea_base_rate.yaml`
 
