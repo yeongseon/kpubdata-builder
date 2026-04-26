@@ -1,6 +1,6 @@
-# HuggingFace 데이터셋 퍼블리싱 표준 규칙
+# 데이터셋 퍼블리싱 표준 규칙
 
-이 문서는 kpubdata-builder를 통해 한국 공공데이터를 HuggingFace Hub에 반복적으로 퍼블리싱할 때 따라야 할 **표준 규칙**을 정의한다.
+이 문서는 kpubdata-builder를 통해 한국 공공데이터를 HuggingFace Hub 및 Kaggle에 반복적으로 퍼블리싱할 때 따라야 할 **표준 규칙**을 정의한다.
 
 스크립트 사용법과 Config YAML 스키마는 [publishing.md](./publishing.md)를 참고한다.
 
@@ -368,3 +368,95 @@ Dataset Card에 다음을 반드시 명시한다:
 | [공공누리 이용허락 안내](https://www.kogl.or.kr/info/license.do) | 공공누리 유형별 이용 조건 |
 | [공공데이터법](https://www.law.go.kr/법령/공공데이터의제공및이용활성화에관한법률) | 법률 원문 |
 | [HuggingFace Dataset Card Guide](https://huggingface.co/docs/hub/datasets-cards) | HF 공식 Dataset Card 작성 가이드 |
+
+---
+
+## 10. Kaggle 퍼블리싱
+
+### 개요
+
+`publish_to_hf.py`는 `--target kaggle` 또는 `--target all` 옵션으로 Kaggle에도 동시 퍼블리싱을 지원한다. HuggingFace와 동일한 parquet 데이터를 재사용하며, 메타데이터 형식만 `dataset-metadata.json`으로 변환한다.
+
+### Kaggle Slug 네이밍
+
+```
+{kaggle-username}/{dataset-slug}
+```
+
+| 요소 | 설명 | 예시 |
+| :--- | :--- | :--- |
+| `kaggle-username` | Kaggle 계정 사용자명 | `yschoe` |
+| `dataset-slug` | HF repo의 dataset name과 동일하게 유지 | `seoul-apartment-trades` |
+
+> Kaggle은 organization 계정이 없으므로 개인 계정 소속이 된다. 브랜드 통일이 필요하면 전용 Kaggle 계정을 생성한다.
+
+### Config YAML 설정
+
+```yaml
+output:
+  hf_repo: "kpubdata/seoul-apartment-trades"
+  kaggle_slug: "yschoe/seoul-apartment-trades"
+  parquet_filename: "data/train.parquet"
+  staging_dir: "./staging/seoul-apartment-trades"
+```
+
+`kaggle_slug`이 없으면 Kaggle 업로드를 건너뛴다.
+
+### HuggingFace → Kaggle 라이선스 매핑
+
+| HuggingFace (소문자) | Kaggle |
+| :--- | :--- |
+| `cc-by-4.0` | `CC-BY-4.0` |
+| `cc0-1.0` | `CC0-1.0` |
+| `cc-by-sa-4.0` | `CC-BY-SA-4.0` |
+| `cc-by-nc-4.0` | `CC-BY-NC-4.0` |
+| `cc-by-nc-sa-4.0` | `CC-BY-NC-SA-4.0` |
+
+> HuggingFace는 소문자 강제, Kaggle은 대문자 허용. 스크립트가 자동 변환한다.
+
+### dataset-metadata.json 필수 필드
+
+| 필드 | 필수 | 설명 |
+| :--- | :--- | :--- |
+| `title` | ✅ | 6~50자, Config의 `card.title` 사용 |
+| `id` | ✅ | `{username}/{slug}` 형식 |
+| `licenses` | ✅ | 정확히 1개, `[{"name": "CC-BY-4.0"}]` |
+| `subtitle` | 권장 | 20~80자. 미지정 시 description 첫 줄에서 자동 생성 |
+| `description` | 권장 | Config의 `card.description` + `card.attribution` 결합 |
+| `keywords` | 권장 | Config의 `card.tags` 재사용 |
+
+### CLI 사용법
+
+```bash
+# HuggingFace + Kaggle 동시 퍼블리싱
+uv run python scripts/publish_to_hf.py scripts/configs/seoul_apartment_trades.yaml --target all
+
+# Kaggle만
+uv run python scripts/publish_to_hf.py scripts/configs/seoul_apartment_trades.yaml --target kaggle
+
+# HuggingFace만 (기존 동작)
+uv run python scripts/publish_to_hf.py scripts/configs/seoul_apartment_trades.yaml --target hf
+```
+
+### Kaggle 인증
+
+두 가지 방식 중 하나를 사용한다:
+
+1. **환경변수**: `KAGGLE_USERNAME` + `KAGGLE_KEY`
+2. **파일**: `~/.kaggle/kaggle.json` (`{"username":"...","key":"..."}`)
+
+### Kaggle 업데이트 동작
+
+- 데이터셋이 이미 존재하면 **새 버전**(`dataset_create_version`)으로 업데이트한다.
+- 존재하지 않으면 **신규 생성**(`dataset_create_new`)한다.
+- 스크립트가 자동으로 존재 여부를 판별한다.
+
+### HuggingFace와 Kaggle 차이점 요약
+
+| 항목 | HuggingFace | Kaggle |
+| :--- | :--- | :--- |
+| 메타데이터 형식 | `README.md` (YAML front matter) | `dataset-metadata.json` |
+| 라이선스 표기 | 소문자 (`cc-by-4.0`) | 대문자 허용 (`CC-BY-4.0`) |
+| Organization | 지원 (`kpubdata/...`) | 미지원 (개인 계정만) |
+| 버전 관리 | Git 기반 (commit history) | 명시적 버전 번호 |
+| Dataset Card | README.md 내장 | 별도 description 필드 |

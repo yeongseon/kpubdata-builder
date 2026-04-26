@@ -1,6 +1,6 @@
-# HuggingFace 데이터셋 퍼블리싱 가이드
+# 데이터셋 퍼블리싱 가이드
 
-이 문서는 `scripts/publish_to_hf.py` 스크립트를 사용하여 공공데이터를 HuggingFace Hub에 퍼블리싱하는 전체 과정을 설명합니다.
+이 문서는 `scripts/publish_to_hf.py` 스크립트를 사용하여 공공데이터를 HuggingFace Hub 및 Kaggle에 퍼블리싱하는 전체 과정을 설명합니다.
 
 ---
 
@@ -11,9 +11,9 @@
 이 스크립트는 향후 Builder의 Medallion Architecture(Bronze/Silver/Gold/Exporter/Publisher) 모듈로 분해될 레퍼런스 구현입니다.
 
 ```text
-[YAML Config] → fetch → transform → write_parquet → generate_card → upload_to_hf
+[YAML Config] → fetch → transform → write_parquet → generate_card → upload_to_hf / upload_to_kaggle
                   │          │            │                │              │
-               Bronze     Silver        Gold           Export         Publish
+               Bronze     Silver        Gold           Export         Publish (HF + Kaggle)
 ```
 
 ---
@@ -30,6 +30,10 @@ export KPUBDATA_DATAGO_API_KEY="your-api-key"
 
 # HuggingFace API 토큰 (https://huggingface.co/settings/tokens 에서 발급)
 export HF_TOKEN="hf_..."
+
+# Kaggle API 인증 (https://www.kaggle.com/settings → API → Create New Token)
+export KAGGLE_USERNAME="your-username"
+export KAGGLE_KEY="your-api-key"
 ```
 
 설정 후 반영:
@@ -37,6 +41,8 @@ export HF_TOKEN="hf_..."
 ```bash
 source ~/.zshrc
 ```
+
+> **Kaggle 대체 인증 방법**: `~/.kaggle/kaggle.json` 파일에 `{"username": "...", "key": "..."}` 형태로 저장해도 됩니다. 환경변수가 우선합니다.
 
 ### 2. HuggingFace 토큰 발급
 
@@ -57,41 +63,62 @@ org 단위로 데이터셋을 관리하려면:
 1. https://huggingface.co/organizations/new 에서 org 생성
 2. 토큰 발급 시 해당 org에 대한 write 권한 부여
 
-### 4. 의존성 설치
+### 4. Kaggle API 토큰 발급
+
+1. https://www.kaggle.com/settings 접속
+2. **API** 섹션에서 **Create New Token** 클릭
+3. 다운로드된 `kaggle.json`에서 `username`과 `key`를 환경변수에 설정
+4. 주의: 새 토큰을 발급하면 이전 토큰은 **즉시 폐기**됨
+
+> Kaggle은 organization을 지원하지 않습니다. 모든 데이터셋은 **개인 계정** 소속입니다.
+
+### 5. 의존성 설치
 
 ```bash
 cd kpubdata-builder
 uv sync --extra publish
 ```
 
-`publish` extra에는 `polars`와 `huggingface-hub`가 포함됩니다.
+`publish` extra에는 `polars`, `huggingface-hub`, `kaggle`이 포함됩니다.
 
 ---
 
 ## 사용법
 
-### 기본 실행 (fetch + transform + upload)
+### 기본 실행 (HuggingFace + Kaggle 모두 업로드)
 
 ```bash
-uv run python scripts/publish_to_hf.py scripts/configs/korean_apartment_trades.yaml
+uv run python scripts/publish_to_hf.py scripts/configs/seoul_apartment_trades.yaml
+```
+
+### HuggingFace만 업로드
+
+```bash
+uv run python scripts/publish_to_hf.py scripts/configs/seoul_apartment_trades.yaml --target hf
+```
+
+### Kaggle만 업로드
+
+```bash
+uv run python scripts/publish_to_hf.py scripts/configs/seoul_apartment_trades.yaml --target kaggle
 ```
 
 ### 로컬에서만 파일 생성 (업로드 안 함)
 
 ```bash
-uv run python scripts/publish_to_hf.py scripts/configs/korean_apartment_trades.yaml --local-only
+uv run python scripts/publish_to_hf.py scripts/configs/seoul_apartment_trades.yaml --local-only
 ```
 
 ### 드라이런 (업로드 시뮬레이션)
 
 ```bash
-uv run python scripts/publish_to_hf.py scripts/configs/korean_apartment_trades.yaml --dry-run
+uv run python scripts/publish_to_hf.py scripts/configs/seoul_apartment_trades.yaml --dry-run
 ```
 
 ### 디버그 로깅
 
 ```bash
-uv run python scripts/publish_to_hf.py scripts/configs/korean_apartment_trades.yaml -v
+uv run python scripts/publish_to_hf.py scripts/configs/seoul_apartment_trades.yaml -v
 ```
 
 ### CLI 옵션 요약
@@ -99,7 +126,8 @@ uv run python scripts/publish_to_hf.py scripts/configs/korean_apartment_trades.y
 | 옵션 | 설명 |
 | :--- | :--- |
 | `config` (필수) | YAML config 파일 경로 |
-| `--dry-run` | HF 업로드를 건너뛰고 로컬 파일만 생성 (업로드 시뮬레이션 로그 출력) |
+| `--target` | 업로드 대상: `hf` (HuggingFace), `kaggle`, `all` (기본값: `all`) |
+| `--dry-run` | 업로드를 건너뛰고 로컬 파일만 생성 (업로드 시뮬레이션 로그 출력) |
 | `--local-only` | 로컬 파일 생성까지만 실행 (업로드 로직 자체를 건너뜀) |
 | `--verbose`, `-v` | DEBUG 레벨 로깅 활성화 |
 
@@ -192,14 +220,16 @@ filters:
 
 ```yaml
 output:
-  hf_repo: "kpubdata/korean-apartment-trades"
+  hf_repo: "kpubdata/seoul-apartment-trades"
+  kaggle_slug: "yschoe/seoul-apartment-trades"
   parquet_filename: "data/train.parquet"
-  staging_dir: "./staging/korean-apartment-trades"
+  staging_dir: "./staging/seoul-apartment-trades"
 ```
 
 | 필드 | 타입 | 필수 | 설명 |
 | :--- | :--- | :--- | :--- |
 | `hf_repo` | str | ✅ | HuggingFace 레포 ID (`org/dataset-name`) |
+| `kaggle_slug` | str | | Kaggle 데이터셋 슬러그 (`username/dataset-name`). 없으면 Kaggle 업로드 건너뜀 |
 | `parquet_filename` | str | ✅ | staging 내 parquet 파일 경로 |
 | `staging_dir` | str | ✅ | 로컬 staging 디렉토리 (스크립트 실행 위치 기준 상대경로) |
 
@@ -252,7 +282,9 @@ generate_dataset_card()       → Export            HF Dataset Card (README.md) 
   ├── _build_sample_table()                       샘플 데이터 테이블
   └── _build_stats_section()                      수치 컬럼 통계
 upload_to_hf()                → Publish           whitelist 기반 HF Hub 업로드
-main()                        → CLI               argparse 기반 진입점
+upload_to_kaggle()            → Publish           dataset-metadata.json 생성 + Kaggle API 업로드
+  └── _map_kaggle_license()                       HF→Kaggle 라이선스 매핑
+main()                        → CLI               argparse 기반 진입점 (--target hf|kaggle|all)
 ```
 
 ### 업로드 보안
@@ -336,6 +368,23 @@ uv sync --extra publish
 - 원본 데이터에 빈 문자열, `"-"`, `"N/A"` 등이 포함되어 있을 수 있습니다 → `int`/`float` 타입은 자동으로 null-safe 처리됩니다
 - 콤마가 포함된 숫자 필드는 `int_comma` 타입을 사용하세요
 
+### Kaggle 업로드 401 에러
+
+- `KAGGLE_USERNAME`과 `KAGGLE_KEY` 환경변수 확인
+- 또는 `~/.kaggle/kaggle.json` 파일 존재 여부 확인
+- Kaggle 토큰을 재발급하면 **이전 토큰이 즉시 폐기**됨. 새 토큰으로 환경변수/파일 모두 갱신 필요
+
+### Kaggle `dataset_view` AttributeError
+
+- kaggle SDK 1.6+ 에서 `dataset_view()` 메서드가 제거됨
+- 스크립트는 `dataset_list(mine=True, search=slug)` 방식으로 데이터셋 존재 여부를 판별
+
+### Kaggle organization 미지원
+
+- Kaggle은 HuggingFace와 달리 organization 계정을 지원하지 않음
+- 모든 데이터셋은 개인 계정 소속 (`username/dataset-name`)
+- `kaggle_slug`은 `hf_repo`와 다른 namespace를 가질 수 있음
+
 ---
 
 ## Builder 모듈 분해 가이드
@@ -349,6 +398,7 @@ uv sync --extra publish
 | `write_parquet()` | Gold stage | `src/kpubdata_builder/stages/gold/` |
 | `generate_dataset_card()` | HF Layout Exporter | `src/kpubdata_builder/exporters/` |
 | `upload_to_hf()` | HF Publisher | `src/kpubdata_builder/publishers/` |
+| `upload_to_kaggle()` | Kaggle Publisher | `src/kpubdata_builder/publishers/` |
 | Config YAML | BuildSpec model | `src/kpubdata_builder/spec.py` |
 
 참고 이슈: #50, #8, #9, #10, #28, #37, #40

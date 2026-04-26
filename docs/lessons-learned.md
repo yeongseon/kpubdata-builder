@@ -1,6 +1,6 @@
-# HuggingFace 퍼블리싱 시행착오 기록
+# 데이터셋 퍼블리싱 시행착오 기록
 
-이 문서는 `publish_to_hf.py` 스크립트로 HuggingFace 데이터셋을 퍼블리싱하면서 발견한 시행착오를 기록한다. Builder의 Bronze/Silver/Gold/Publish 모듈 구현 시 동일한 실수를 방지하기 위한 참고 자료다.
+이 문서는 `publish_to_hf.py` 스크립트로 HuggingFace 및 Kaggle에 데이터셋을 퍼블리싱하면서 발견한 시행착오를 기록한다. Builder의 Bronze/Silver/Gold/Publish 모듈 구현 시 동일한 실수를 방지하기 위한 참고 자료다.
 
 ---
 
@@ -145,6 +145,81 @@ df = pl.DataFrame(mapped, schema=schema)
 - **Export 단계**: Dataset Card 템플릿을 영어로 기본 생성
 - **BuildSpec**: `features` 설명에 `{영어} ({한국어})` 패턴 강제
 - 상세 언어 규칙: `hf-publishing-standards.md` §4 참조
+
+---
+
+## 7. Kaggle SDK `dataset_view` API 없음
+
+### 증상
+
+```
+AttributeError: 'KaggleApi' object has no attribute 'dataset_view'
+```
+
+### 원인
+
+kaggle SDK 1.6+ 에서 `dataset_view()` 메서드가 제거됨. 공식 문서나 예제에는 여전히 언급되는 경우가 있어 혼동 유발.
+
+### 해결
+
+`dataset_list(mine=True, search=slug_name)` 으로 대체하여 존재 여부를 판별한다.
+
+```python
+results = api.dataset_list(mine=True, search=kaggle_slug.split("/")[-1])
+dataset_exists = any(str(d) == kaggle_slug for d in results)
+```
+
+### Builder 적용 포인트
+
+- **Publisher 모듈**: Kaggle API 호출 시 SDK 버전별 API 가용성을 방어적으로 처리
+- `dataset_view`는 사용하지 말 것. `dataset_list` + 필터링 패턴 사용
+
+---
+
+## 8. Kaggle API 401 인증 에러
+
+### 증상
+
+```
+ApiException: (401) Reason: Unauthorized
+```
+
+### 원인
+
+Kaggle에서 새 API 토큰을 발급하면 **이전 토큰이 즉시 폐기**됨. 환경변수(`KAGGLE_KEY`)와 `~/.kaggle/kaggle.json`에 저장된 값이 서로 다르거나, 둘 다 구 토큰인 경우 발생.
+
+### 해결
+
+1. https://www.kaggle.com/settings → API → **Create New Token** 으로 새 토큰 발급
+2. 환경변수(`KAGGLE_USERNAME`, `KAGGLE_KEY`)와 `~/.kaggle/kaggle.json` **모두** 갱신
+3. `source ~/.zshrc` 로 반영 확인
+
+### Builder 적용 포인트
+
+- **인증 검증**: Publish 시작 전 `api.authenticate()` 후 간단한 API 호출(`dataset_list(mine=True)`)로 토큰 유효성을 사전 검증
+- **에러 메시지**: 401 에러 발생 시 "토큰 재발급 필요" 안내 메시지 출력
+
+---
+
+## 9. Kaggle은 Organization 미지원
+
+### 증상
+
+HuggingFace에서 `kpubdata/seoul-apartment-trades` (org 네임스페이스)로 업로드한 것과 동일한 브랜딩을 Kaggle에서 사용 불가.
+
+### 원인
+
+Kaggle은 organization 계정을 지원하지 않음. 모든 데이터셋은 개인 계정 소속 (`username/dataset-name`).
+
+### 해결
+
+- Kaggle slug를 별도로 관리: `kaggle_slug: "yschoe/seoul-apartment-trades"`
+- HF slug과 Kaggle slug을 config에서 분리하여 관리
+
+### Builder 적용 포인트
+
+- **BuildSpec**: `hf_repo`와 `kaggle_slug`을 별도 필드로 유지 (네임스페이스가 다를 수 있음)
+- **문서화**: Dataset Card에 양쪽 플랫폼 URL을 모두 기재하여 cross-reference 제공
 
 ---
 

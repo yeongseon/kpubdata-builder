@@ -3064,6 +3064,7 @@ transform:
 
 output:
   hf_repo: "kpubdata/seoul-apartment-trades"
+  kaggle_slug: "yschoe/seoul-apartment-trades"
   parquet_filename: "data/train.parquet"
   # Local staging directory (relative to script working dir)
   staging_dir: "./staging/seoul-apartment-trades"
