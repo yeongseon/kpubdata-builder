@@ -3062,10 +3062,35 @@ transform:
   filters:
     - "deal_amount_10k_krw > 0"
 
+# Dataset variants for multi-language HuggingFace configs.
+# Each variant produces a separate parquet under data/<variant>/train.parquet.
+variants:
+  en:
+    # English variant: romanize Korean text columns using kr-building-name-normalizer
+    romanize_columns:
+      - apartment_name
+      - neighborhood
+  ko:
+    # Korean variant: rename English column names to Korean
+    column_rename:
+      district_code: 구코드
+      neighborhood: 동
+      apartment_name: 아파트명
+      exclusive_area_m2: 전용면적_m2
+      floor: 층
+      build_year: 건축년도
+      deal_year: 거래년도
+      deal_month: 거래월
+      deal_day: 거래일
+      deal_amount_10k_krw: 거래금액_만원
+      lot_number: 지번
+      deal_date: 거래일자
+      registration_date: 등기일자
+      apartment_seq: 아파트일련번호
+
 output:
   hf_repo: "kpubdata/seoul-apartment-trades"
   kaggle_slug: "yschoe/seoul-apartment-trades"
-  parquet_filename: "data/train.parquet"
   # Local staging directory (relative to script working dir)
   staging_dir: "./staging/seoul-apartment-trades"
 

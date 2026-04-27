@@ -179,3 +179,37 @@ def _add_derived_column(df: pl.DataFrame, derived: dict[str, Any]) -> pl.DataFra
     if dtype_str != "str":
         df = _cast_column(df, name, dtype_str)
     return df
+
+
+def build_variant_dataframes(df: pl.DataFrame, config: dict[str, Any]) -> dict[str, pl.DataFrame]:
+    """Build dataset variants (e.g. ko/en) based on config.
+
+    If no variants configured, returns {"default": df}.
+    """
+    variants_cfg: dict[str, Any] = config.get("variants", {})
+    if not variants_cfg:
+        return {"default": df}
+
+    result: dict[str, pl.DataFrame] = {}
+    for name, opts in variants_cfg.items():
+        variant_df = df.clone()
+
+        romanize_cols = opts.get("romanize_columns", [])
+        if romanize_cols:
+            from kr_building_normalizer import romanize
+
+            for col in romanize_cols:
+                if col in variant_df.columns:
+                    variant_df = variant_df.with_columns(
+                        pl.col(col).map_elements(romanize, return_dtype=pl.Utf8).alias(col)
+                    )
+
+        col_rename = opts.get("column_rename", {})
+        if col_rename:
+            rename_map = {k: v for k, v in col_rename.items() if k in variant_df.columns}
+            variant_df = variant_df.rename(rename_map)
+
+        result[name] = variant_df
+        logger.info("Variant '%s': %d rows x %d cols", name, variant_df.height, variant_df.width)
+
+    return result
