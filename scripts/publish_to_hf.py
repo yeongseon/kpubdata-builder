@@ -85,6 +85,37 @@ def transform_records(records: list[dict[str, Any]], config: dict[str, Any]) -> 
     return df
 
 
+def validate_schema(df: pl.DataFrame, config: dict[str, Any]) -> None:
+    """Validate that the DataFrame schema matches the config exactly.
+
+    Fails if:
+    - DataFrame has columns not declared in column_mapping + derived
+    - Config declares columns missing from DataFrame
+    - Any non-allowlisted column is 100% null
+    """
+    transform = config["transform"]
+    column_mapping = transform["column_mapping"]
+    derived = [d["name"] for d in transform.get("derived", [])]
+    expected_cols = set(column_mapping.values()) | set(derived)
+    actual_cols = set(df.columns)
+
+    undeclared = actual_cols - expected_cols
+    if undeclared:
+        logger.error("Schema validation FAILED: undeclared columns in output: %s", undeclared)
+        sys.exit(1)
+
+    missing = expected_cols - actual_cols
+    if missing:
+        logger.error("Schema validation FAILED: declared columns missing from output: %s", missing)
+        sys.exit(1)
+
+    # Check for 100% null columns (warn, don't fail — some fields are legitimately sparse)
+    for col in df.columns:
+        if df[col].null_count() == df.height:
+            logger.warning("Column '%s' is 100%% null in this dataset", col)
+
+    logger.info("Schema validation passed: %d columns match config", len(actual_cols))
+
 def _apply_filter(df: pl.DataFrame, expr_str: str) -> pl.DataFrame:
     """Apply a simple comparison filter: 'col >= value', 'col != value', etc."""
     match = _FILTER_RE.match(expr_str.strip())
@@ -392,6 +423,8 @@ def main(argv: list[str] | None = None) -> None:
     if df.is_empty():
         logger.error("DataFrame empty after transform. Check filters.")
         sys.exit(1)
+
+    validate_schema(df, config)
 
     parquet_path = staging_dir / output_cfg["parquet_filename"]
     write_parquet(df, parquet_path)

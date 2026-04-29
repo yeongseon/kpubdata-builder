@@ -3069,22 +3069,24 @@ output:
   staging_dir: "./staging/seoul-apartment-trades"
 
 card:
-  title: "Seoul Apartment Trades"
+  title: "Seoul Apartment Trades (서울 아파트 매매 실거래가)"
   description: |
-    Real apartment trade transaction records in Seoul, South Korea,
+    Real apartment sale transaction records in Seoul, South Korea,
     covering all 25 districts (gu) from January 2020 to December 2024 (60 months).
 
     Sourced from the Ministry of Land, Infrastructure and Transport (MOLIT)
-    via data.go.kr public data API. This dataset provides a comprehensive
-    time-series view of the Seoul housing market, capturing the COVID-19
-    pandemic boom (2020-2021), the interest rate correction (2022),
-    market normalization (2023), and early recovery signals (2024).
+    via data.go.kr public data API.
+
+    **Important**: Text values (neighborhood, apartment_name) are in Korean.
+    Column names are in English for global accessibility.
+    Use `district_code` with the provided mapping table for district-level filtering.
 
     The target variable for regression tasks is `deal_amount_10k_krw`
     (transaction price in units of 10,000 KRW).
   license: "cc-by-4.0"
   language:
     - ko
+    - en
   tags:
     - real-estate
     - housing-prices
@@ -3123,7 +3125,7 @@ card:
     - name: deal_date
       description: "Transaction date as YYYY-MM-DD string (거래일자, derived)"
     - name: registration_date
-      description: "Registration date at registry office (등기일자)"
+      description: "Registration date at registry office (등기일자). May be null for older records."
     - name: apartment_seq
       description: "Unique apartment complex identifier (아파트 일련번호)"
 
