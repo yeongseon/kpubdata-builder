@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Publish kpubdata dataset to HuggingFace Hub.
+"""Publish kpubdata dataset to HuggingFace Hub and/or Kaggle.
 
 This is the CLI entrypoint. All logic lives in the pipeline/ package.
 """
@@ -15,7 +15,7 @@ from typing import Any
 import yaml
 from pipeline.fetch import fetch_records
 from pipeline.package import generate_dataset_card, write_parquet
-from pipeline.publish import upload_to_hf
+from pipeline.publish import upload_to_hf, upload_to_kaggle
 from pipeline.transform import transform_records, validate_schema
 
 logger = logging.getLogger("publish_to_hf")
@@ -33,9 +33,17 @@ def load_config(config_path: str) -> dict[str, Any]:
 
 def main(argv: list[str] | None = None) -> None:
     """Main entrypoint for the publish pipeline."""
-    parser = argparse.ArgumentParser(description="Publish kpubdata dataset to HuggingFace Hub")
+    parser = argparse.ArgumentParser(
+        description="Publish kpubdata dataset to HuggingFace and/or Kaggle"
+    )
     parser.add_argument("config", help="Path to YAML config file")
-    parser.add_argument("--dry-run", action="store_true", help="Skip HF upload, generate locally")
+    parser.add_argument(
+        "--target",
+        choices=["hf", "kaggle", "all"],
+        default="all",
+        help="Upload target: hf (HuggingFace), kaggle, or all (default: all)",
+    )
+    parser.add_argument("--dry-run", action="store_true", help="Skip upload, generate locally")
     parser.add_argument("--local-only", action="store_true", help="Only generate local files")
     parser.add_argument("--resume", action="store_true", help="Resume from last checkpoint")
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable debug logging")
@@ -75,7 +83,11 @@ def main(argv: list[str] | None = None) -> None:
         logger.info("Local-only mode. Files at: %s", staging_dir)
         return
 
-    upload_to_hf(staging_dir, output_cfg["hf_repo"], dry_run=args.dry_run)
+    target = args.target
+    if target in ("hf", "all"):
+        upload_to_hf(staging_dir, output_cfg["hf_repo"], dry_run=args.dry_run)
+    if target in ("kaggle", "all") and output_cfg.get("kaggle_slug"):
+        upload_to_kaggle(staging_dir, config, dry_run=args.dry_run)
 
     # Clean up checkpoint on successful completion
     if checkpoint_dir.exists():
