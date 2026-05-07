@@ -1,0 +1,60 @@
+site_name: "KPubData Builder"
+site_url: "https://yeongseon.github.io/kpubdata-builder/"
+repo_url: "https://github.com/yeongseon/kpubdata-builder"
+repo_name: "yeongseon/kpubdata-builder"
+
+theme:
+  name: material
+  language: ko
+  palette:
+    primary: teal
+    accent: teal
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - content.code.copy
+    - search.suggest
+    - search.highlight
+
+nav:
+  - Home: index.md
+  - 사용 가이드:
+      - API 규약: api-contract.md
+      - 도메인 모델: domain-model.md
+      - 내보내기 모델: export-model.md
+      - 에러 처리: guides/error-handling.md
+  - 아키텍처:
+      - 시스템 구조: ARCHITECTURE.md
+  - 개발 가이드:
+      - 기여 방법: CONTRIBUTING.md
+      - 에이전트 가이드: AGENTS.md
+  - 프로젝트:
+      - 요구사항 (PRD): PRD.md
+      - 로드맵: ROADMAP.md
+      - 작업 계획: PLAN.md
+      - 변경 이력: CHANGELOG.md
+  - ADR:
+      - Builder as Orchestrator: adrs/0001-builder-as-orchestrator.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - pymdownx.details
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.superfences
+  - toc:
+      permalink: true
+
+plugins:
+  - search
+
+extra_javascript:
+  - https://unpkg.com/mermaid@10/dist/mermaid.min.js
+  - javascripts/mermaid.js
