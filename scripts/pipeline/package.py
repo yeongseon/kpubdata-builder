@@ -20,7 +20,7 @@ def write_parquet(df: pl.DataFrame, output_path: Path) -> Path:
     return output_path
 
 
-def generate_dataset_card(df: pl.DataFrame, config: dict[str, Any], output_path: Path) -> Path:
+def generate_dataset_card(df: pl.DataFrame, config: dict[str, Any], output_path: Path, variant_names: list[str] | None = None) -> Path:
     """Generate a HuggingFace dataset card (README.md) from config and data."""
     card = config["card"]
     output_cfg = config["output"]
@@ -39,6 +39,16 @@ def generate_dataset_card(df: pl.DataFrame, config: dict[str, Any], output_path:
     attribution = card.get("attribution", "")
     attribution_block = f"\n{attribution}\n" if attribution else ""
 
+    configs_block = ""
+    if variant_names and len(variant_names) > 1:
+        configs_lines = ["configs:"]
+        for vname in variant_names:
+            configs_lines.append(f"- config_name: {vname}")
+            configs_lines.append(f"  data_files: data/{vname}/train.parquet")
+        default_config = "en" if "en" in variant_names else variant_names[0]
+        configs_lines.append(f"default_config_name: {default_config}")
+        configs_block = "\n".join(configs_lines) + "\n"
+
     content = f"""---
 license: {card.get("license", "cc-by-4.0")}
 language:
@@ -47,7 +57,7 @@ tags:
 {tags_yaml}
 size_categories:
 - {_size_category(df.height)}
-{task_categories_block}---
+{task_categories_block}{configs_block}---
 
 # {card["title"]}
 

@@ -16,7 +16,7 @@ import yaml
 from pipeline.fetch import fetch_records
 from pipeline.package import generate_dataset_card, write_parquet
 from pipeline.publish import upload_to_hf, upload_to_kaggle
-from pipeline.transform import transform_records, validate_schema
+from pipeline.transform import build_variant_dataframes, transform_records, validate_schema
 
 logger = logging.getLogger("publish_to_hf")
 
@@ -73,11 +73,22 @@ def main(argv: list[str] | None = None) -> None:
 
     validate_schema(df, config)
 
-    parquet_path = staging_dir / output_cfg["parquet_filename"]
-    write_parquet(df, parquet_path)
+    # Build variants (ko/en etc.) or single default
+    variants = build_variant_dataframes(df, config)
+    variant_names = sorted(variants.keys())
+
+    if len(variants) == 1 and "default" in variants:
+        parquet_path = staging_dir / "data" / "train.parquet"
+        write_parquet(df, parquet_path)
+        variant_names_for_card: list[str] | None = None
+    else:
+        for vname, vdf in variants.items():
+            parquet_path = staging_dir / "data" / vname / "train.parquet"
+            write_parquet(vdf, parquet_path)
+        variant_names_for_card = variant_names
 
     card_path = staging_dir / "README.md"
-    generate_dataset_card(df, config, card_path)
+    generate_dataset_card(df, config, card_path, variant_names=variant_names_for_card)
 
     if args.local_only:
         logger.info("Local-only mode. Files at: %s", staging_dir)
