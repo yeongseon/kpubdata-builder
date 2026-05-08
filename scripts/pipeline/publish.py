@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 import sys
-import json
 from pathlib import Path
 from typing import Any
 
@@ -76,7 +76,7 @@ def upload_to_kaggle(staging_dir: Path, config: dict[str, Any], *, dry_run: bool
     card = config["card"]
 
     try:
-        from kaggle.api.kaggle_api_extended import KaggleApi
+        from kaggle.api.kaggle_api_extended import KaggleApi  # type: ignore[import-untyped]
     except ImportError:
         logger.error("kaggle not installed. Install with: pip install 'kpubdata-builder[publish]'")
         sys.exit(1)

@@ -20,7 +20,12 @@ def write_parquet(df: pl.DataFrame, output_path: Path) -> Path:
     return output_path
 
 
-def generate_dataset_card(df: pl.DataFrame, config: dict[str, Any], output_path: Path, variant_names: list[str] | None = None) -> Path:
+def generate_dataset_card(
+    df: pl.DataFrame,
+    config: dict[str, Any],
+    output_path: Path,
+    variant_names: list[str] | None = None,
+) -> Path:
     """Generate a HuggingFace dataset card (README.md) from config and data."""
     card = config["card"]
     output_cfg = config["output"]
