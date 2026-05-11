@@ -87,11 +87,11 @@ def test_cast_columns_accepts_polars_dtypes() -> None:
     assert casted.to_dicts() == [{"id": "1", "amount": 1000}]
 
 
-def test_cast_columns_accepts_polars_dtype_class() -> None:
-    """type[pl.DataType] (e.g. pl.Int64 without ()) should also work."""
+def test_cast_columns_accepts_polars_dtype_instance() -> None:
+    """pl.Int64() (instantiated DataType) should work."""
     df = records_to_dataframe(({"id": "1", "amount": "1000"},))
 
-    casted = cast_columns(df, {"amount": pl.Int64})
+    casted = cast_columns(df, {"amount": pl.Int64()})
 
     assert isinstance(casted, pl.DataFrame)
     assert casted.schema["amount"] == pl.Int64
@@ -133,7 +133,7 @@ def test_cast_columns_audit_returns_cast_result() -> None:
 
     assert isinstance(result, CastResult)
     assert result.df.schema["amount"] == pl.Int64
-    assert result.has_data_loss is False
+    assert result.has_nulls_introduced is False
     assert result.reports == ()
 
 
@@ -149,7 +149,7 @@ def test_cast_columns_audit_detects_data_loss() -> None:
     result = cast_columns(df, {"amount": "int"}, audit=True)
 
     assert isinstance(result, CastResult)
-    assert result.has_data_loss is True
+    assert result.has_nulls_introduced is True
     assert len(result.reports) == 1
     report = result.reports[0]
     assert report.column == "amount"

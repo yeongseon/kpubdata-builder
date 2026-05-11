@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from typing import Literal, overload
 
 import polars as pl
 
@@ -31,7 +32,7 @@ _NAMED_DTYPES: Mapping[str, pl.DataType] = {
 
 @dataclass(frozen=True)
 class CastReport:
-    """Report of null values introduced during casting."""
+    """Per-column count of null values introduced by strict=False casting."""
 
     column: str
     nulls_before: int
@@ -44,13 +45,13 @@ class CastReport:
 
 @dataclass(frozen=True)
 class CastResult:
-    """Result of cast_columns with optional audit information."""
+    """Result of cast_columns(audit=True) with null-introduction tracking."""
 
     df: pl.DataFrame
     reports: tuple[CastReport, ...] = field(default_factory=tuple)
 
     @property
-    def has_data_loss(self) -> bool:
+    def has_nulls_introduced(self) -> bool:
         return any(r.nulls_introduced > 0 for r in self.reports)
 
 
@@ -69,6 +70,24 @@ def validate_required_columns(
         missing = ", ".join(missing_columns)
         raise ValueError(f"Missing required columns: {missing}")
     return df
+
+
+@overload
+def cast_columns(
+    df: pl.DataFrame,
+    dtypes: Mapping[str, DtypeSpec],
+    *,
+    audit: Literal[False] = ...,
+) -> pl.DataFrame: ...
+
+
+@overload
+def cast_columns(
+    df: pl.DataFrame,
+    dtypes: Mapping[str, DtypeSpec],
+    *,
+    audit: Literal[True],
+) -> CastResult: ...
 
 
 def cast_columns(
