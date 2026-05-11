@@ -122,7 +122,9 @@ def test_persist_bronze_artifact_writes_jsonl_and_metadata(tmp_path: Path) -> No
 
     result = persist_bronze_artifact(artifact, output_root=tmp_path / "build", run_id="run-1")
 
-    assert result.bronze_dir == tmp_path / "build" / "run-1" / "bronze"
+    assert "run-1" in str(result.bronze_dir)
+    assert "bronze" in str(result.bronze_dir)
+    assert "datago.apt_trade" in str(result.bronze_dir)
     assert result.records_path == result.bronze_dir / "raw_records.jsonl"
     assert result.metadata_path == result.bronze_dir / "metadata.json"
 
@@ -146,3 +148,44 @@ def test_persist_bronze_artifact_writes_jsonl_and_metadata(tmp_path: Path) -> No
         "fetch_params": {"lawd_cd": "11680"},
         "fetched_at": "2026-05-08T12:00:00+00:00",
     }
+
+
+def test_persist_bronze_artifact_separates_different_params(tmp_path: Path) -> None:
+    fetched_at = datetime(2026, 5, 8, 12, 0, tzinfo=timezone.utc)
+    artifact_a = BronzeArtifact(
+        source_key="datago.apt_trade",
+        raw_records=({"id": "1"},),
+        fetch_params={"lawd_cd": "11680"},
+        fetched_at=fetched_at,
+    )
+    artifact_b = BronzeArtifact(
+        source_key="datago.apt_trade",
+        raw_records=({"id": "2"},),
+        fetch_params={"lawd_cd": "11650"},
+        fetched_at=fetched_at,
+    )
+
+    result_a = persist_bronze_artifact(artifact_a, output_root=tmp_path, run_id="run-1")
+    result_b = persist_bronze_artifact(artifact_b, output_root=tmp_path, run_id="run-1")
+
+    assert result_a.bronze_dir != result_b.bronze_dir
+    assert result_a.records_path.read_text(encoding="utf-8").strip() == '{"id": "1"}'
+    assert result_b.records_path.read_text(encoding="utf-8").strip() == '{"id": "2"}'
+
+
+def test_persist_bronze_artifact_rejects_unsafe_run_id(tmp_path: Path) -> None:
+    fetched_at = datetime(2026, 5, 8, 12, 0, tzinfo=timezone.utc)
+    artifact = BronzeArtifact(
+        source_key="datago.apt_trade",
+        raw_records=(),
+        fetched_at=fetched_at,
+    )
+
+    with pytest.raises(ValueError, match="unsafe characters"):
+        persist_bronze_artifact(artifact, output_root=tmp_path, run_id="../escape")
+
+    with pytest.raises(ValueError, match="unsafe characters"):
+        persist_bronze_artifact(artifact, output_root=tmp_path, run_id="/absolute")
+
+    with pytest.raises(ValueError, match="must not be empty"):
+        persist_bronze_artifact(artifact, output_root=tmp_path, run_id="")
