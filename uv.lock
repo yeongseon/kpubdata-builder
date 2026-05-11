@@ -594,6 +594,7 @@ version = "0.1.0a0"
 source = { editable = "." }
 dependencies = [
     { name = "kpubdata" },
+    { name = "polars" },
     { name = "pyyaml" },
 ]
 
@@ -621,7 +622,6 @@ publish = [
     { name = "kaggle", version = "1.7.4.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "kaggle", version = "1.8.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "kr-building-name-normalizer" },
-    { name = "polars" },
     { name = "xmltodict" },
 ]
 
@@ -636,7 +636,7 @@ requires-dist = [
     { name = "mkdocs", marker = "extra == 'docs'", specifier = ">=1.6,<2" },
     { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9,<10" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10,<2" },
-    { name = "polars", marker = "extra == 'publish'", specifier = ">=1.0,<2" },
+    { name = "polars", specifier = ">=1.0,<2" },
     { name = "pyarrow", marker = "extra == 'parquet'", specifier = ">=15,<18" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.2,<9" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5,<6" },
