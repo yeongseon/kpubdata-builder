@@ -76,7 +76,7 @@ def upload_to_kaggle(staging_dir: Path, config: dict[str, Any], *, dry_run: bool
     card = config["card"]
 
     try:
-        from kaggle.api.kaggle_api_extended import KaggleApi  # type: ignore[import-untyped]
+        from kaggle.api.kaggle_api_extended import KaggleApi
     except ImportError:
         logger.error("kaggle not installed. Install with: pip install 'kpubdata-builder[publish]'")
         sys.exit(1)

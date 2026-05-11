@@ -137,8 +137,8 @@ def test_persist_bronze_artifact_writes_jsonl_and_metadata(tmp_path: Path) -> No
     assert metadata["fetched_at"] == "2026-05-08T12:00:00+00:00"
     assert metadata["record_count"] == 2
     assert metadata["artifact_paths"] == {
-        "records": str(result.records_path),
-        "metadata": str(result.metadata_path),
+        "records": "raw_records.jsonl",
+        "metadata": "metadata.json",
     }
     assert metadata["provenance"] == {
         "operation": "fetch",
