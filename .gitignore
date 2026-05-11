@@ -36,3 +36,4 @@ Thumbs.db
 .env
 .env.local
 .github/workflows/ci.yml
+staging/
