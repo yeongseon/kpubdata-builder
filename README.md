@@ -137,6 +137,10 @@ output:
 
 BuildSpec 계약은 [BUILD_SPEC.md](./BUILD_SPEC.md)를 참고하세요. Bronze/Silver/Gold stage는 현재 사용자 입력 필드가 아니라 Builder orchestrator가 내부적으로 관리하는 실행 단계입니다.
 
+### End-to-end 예제
+
+서울 아파트 실거래가를 `kpubdata`로 수집하고 Polars로 정제한 뒤 Hugging Face Dataset 형태의 로컬 산출물로 패키징하는 예제는 [docs/examples/seoul-apt-trade.md](./docs/examples/seoul-apt-trade.md)를 참고하세요.
+
 ## 주요 문서
 
 | 문서 | 설명 |
