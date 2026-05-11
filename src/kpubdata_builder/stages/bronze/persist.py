@@ -42,6 +42,7 @@ def persist_bronze_artifact(
         artifact,
         records_path=records_path,
         metadata_path=metadata_path,
+        bronze_dir=bronze_dir,
     )
     metadata_path.write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
@@ -60,6 +61,7 @@ def _metadata_for_artifact(
     *,
     records_path: Path,
     metadata_path: Path,
+    bronze_dir: Path,
 ) -> dict[str, JsonValue]:
     provenance = artifact.provenance
     return {
@@ -69,8 +71,8 @@ def _metadata_for_artifact(
         "provenance": _provenance_to_dict(provenance) if provenance else None,
         "record_count": artifact.record_count,
         "artifact_paths": {
-            "records": str(records_path),
-            "metadata": str(metadata_path),
+            "records": str(records_path.relative_to(bronze_dir)),
+            "metadata": str(metadata_path.relative_to(bronze_dir)),
         },
     }
 
