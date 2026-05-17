@@ -32,6 +32,9 @@ dependencies = [
   "pyyaml>=6.0,<7",
 ]
 
+[project.scripts]
+kpubdata-builder = "kpubdata_builder.cli:main"
+
 [project.optional-dependencies]
 docs = [
   "mkdocs-material>=9,<10",
