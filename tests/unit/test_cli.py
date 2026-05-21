@@ -125,6 +125,15 @@ def test_preview_is_reserved(capsys: pytest.CaptureFixture[str]) -> None:
     assert "not implemented" in captured.err
 
 
+def test_preview_without_spec_is_reserved(capsys: pytest.CaptureFixture[str]) -> None:
+    exit_code = main(["preview"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "preview" in captured.err
+    assert "not implemented" in captured.err
+
+
 def test_build_is_reserved(capsys: pytest.CaptureFixture[str]) -> None:
     exit_code = main(["build", "any.yaml"])
     captured = capsys.readouterr()
@@ -132,3 +141,25 @@ def test_build_is_reserved(capsys: pytest.CaptureFixture[str]) -> None:
     assert exit_code == 1
     assert "build" in captured.err
     assert "not implemented" in captured.err
+
+
+def test_build_without_spec_is_reserved(capsys: pytest.CaptureFixture[str]) -> None:
+    exit_code = main(["build"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "build" in captured.err
+    assert "not implemented" in captured.err
+
+
+def test_validate_fails_for_malformed_yaml(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    spec_path = tmp_path / "bad.yaml"
+    spec_path.write_text("{{{{not: valid: yaml: [", encoding="utf-8")
+
+    exit_code = main(["validate", str(spec_path)])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "failed to load spec" in captured.err

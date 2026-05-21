@@ -38,13 +38,13 @@ def build_parser() -> argparse.ArgumentParser:
         "preview",
         help="Preview a BuildSpec execution (reserved; not implemented yet).",
     )
-    preview_cmd.add_argument("spec", help="Path to the BuildSpec YAML file.")
+    preview_cmd.add_argument("spec", nargs="?", help="Path to the BuildSpec YAML file.")
 
     build_cmd = subparsers.add_parser(
         "build",
         help="Execute a BuildSpec to produce artifacts (reserved; not implemented yet).",
     )
-    build_cmd.add_argument("spec", help="Path to the BuildSpec YAML file.")
+    build_cmd.add_argument("spec", nargs="?", help="Path to the BuildSpec YAML file.")
 
     return parser
 
@@ -80,7 +80,8 @@ def dispatch(args: argparse.Namespace) -> int:
         return _run_validate(args.spec)
     if command in _RESERVED_COMMANDS:
         return _run_reserved(command)
-    print(f"error: unknown command: {command!r}", file=sys.stderr)
+    # Unreachable via normal CLI (argparse rejects unknown subcommands),
+    # but kept as a defensive fallback for programmatic callers.
     return 2
 
 
