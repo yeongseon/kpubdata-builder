@@ -117,8 +117,8 @@ def parse_spec(data: dict[str, object]) -> BuildSpec:
         transforms = _parse_string_list(data.get("transforms", []), field_name="transforms")
         metadata = _parse_string_dict(data.get("metadata", {}), field_name="metadata")
         publish = _parse_bool(data.get("publish", False), field_name="publish")
-        sources = _parse_sources(data.get("sources", []))
-        exports = _parse_exports(data.get("exports", []))
+        sources = _parse_sources(_require_present(data, "sources"))
+        exports = _parse_exports(_require_present(data, "exports"))
     except (KeyError, TypeError, ValueError) as exc:
         raise SpecLoadError(f"Failed to parse build spec: {exc}") from exc
 
@@ -159,12 +159,23 @@ def load_spec(path: Path) -> BuildSpec:
     return parse_spec(raw_data)
 
 
-def _require_string(data: dict[str, object], key: str) -> str:
+def _require_string(data: dict[str, object], key: str, *, prefix: str = "") -> str:
     """필수 문자열 필드를 추출한다."""
+    label = f"{prefix}.{key}" if prefix else key
+    if key not in data:
+        raise KeyError(f"{label} is required")
     value = data[key]
     if not isinstance(value, str):
-        raise TypeError(f"{key} must be a string")
+        raise TypeError(f"{label} must be a string")
+    if not value:
+        raise ValueError(f"{label} must not be empty")
     return value
+
+
+def _require_present(data: dict[str, object], key: str) -> object:
+    if key not in data:
+        raise KeyError(f"{key} is required")
+    return data[key]
 
 
 def _parse_bool(value: object, *, field_name: str) -> bool:
@@ -205,12 +216,15 @@ def _parse_sources(value: object) -> tuple[SourceRef, ...]:
     """sources 배열을 SourceRef 튜플로 변환한다."""
     if not isinstance(value, list):
         raise TypeError("sources must be a list")
+    if not value:
+        raise ValueError("sources must not be empty")
 
     parsed_sources: list[SourceRef] = []
     for index, item in enumerate(value):
-        mapping = _ensure_mapping(item, field_name=f"sources[{index}]")
-        provider = _require_string(mapping, "provider")
-        dataset = _require_string(mapping, "dataset")
+        prefix = f"sources[{index}]"
+        mapping = _ensure_mapping(item, field_name=prefix)
+        provider = _require_string(mapping, "provider", prefix=prefix)
+        dataset = _require_string(mapping, "dataset", prefix=prefix)
         params = _parse_json_mapping(
             mapping.get("params", {}), field_name=f"sources[{index}].params"
         )
@@ -236,12 +250,15 @@ def _parse_exports(value: object) -> tuple[ExportTarget, ...]:
     """exports 배열을 ExportTarget 튜플로 변환한다."""
     if not isinstance(value, list):
         raise TypeError("exports must be a list")
+    if not value:
+        raise ValueError("exports must not be empty")
 
     parsed_exports: list[ExportTarget] = []
     for index, item in enumerate(value):
-        mapping = _ensure_mapping(item, field_name=f"exports[{index}]")
-        kind = _require_string(mapping, "kind")
-        output_path = _require_string(mapping, "output_path")
+        prefix = f"exports[{index}]"
+        mapping = _ensure_mapping(item, field_name=prefix)
+        kind = _require_string(mapping, "kind", prefix=prefix)
+        output_path = _require_string(mapping, "output_path", prefix=prefix)
         options = _parse_json_mapping(
             mapping.get("options", {}), field_name=f"exports[{index}].options"
         )

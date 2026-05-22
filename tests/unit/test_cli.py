@@ -120,8 +120,8 @@ def test_validate_fails_for_invalid_spec(
     captured = capsys.readouterr()
 
     assert exit_code == 1
-    assert "spec validation failed" in captured.err
-    assert "at least one source is required" in captured.err
+    assert "failed to load spec" in captured.err
+    assert "sources" in captured.err
 
 
 def test_preview_is_reserved(capsys: pytest.CaptureFixture[str]) -> None:
