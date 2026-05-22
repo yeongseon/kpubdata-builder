@@ -22,24 +22,50 @@ def test_validate_spec_accepts_valid_spec() -> None:
     validate_spec(spec)
 
 
+_SRC = (SourceRef(provider="datago", dataset="air_quality"),)
+_EXP = (ExportTarget(kind="markdown", output_path="README.md"),)
+
+
 @pytest.mark.parametrize(
-    ("dataset_id", "sources", "exports", "expected_problems"),
+    ("dataset_id", "title", "description", "sources", "exports", "expected_problems"),
     [
         (
             "   ",
-            (SourceRef(provider="datago", dataset="air_quality"),),
-            (ExportTarget(kind="markdown", output_path="README.md"),),
+            "Sample Dataset",
+            "Sample description",
+            _SRC,
+            _EXP,
             ["dataset_id must be a non-empty string"],
         ),
         (
             "dataset.sample",
+            "  ",
+            "Sample description",
+            _SRC,
+            _EXP,
+            ["title must be a non-empty string"],
+        ),
+        (
+            "dataset.sample",
+            "Sample Dataset",
+            "  ",
+            _SRC,
+            _EXP,
+            ["description must be a non-empty string"],
+        ),
+        (
+            "dataset.sample",
+            "Sample Dataset",
+            "Sample description",
             (),
-            (ExportTarget(kind="markdown", output_path="README.md"),),
+            _EXP,
             ["at least one source is required"],
         ),
         (
             "dataset.sample",
-            (SourceRef(provider="datago", dataset="air_quality"),),
+            "Sample Dataset",
+            "Sample description",
+            _SRC,
             (),
             ["at least one export target is required"],
         ),
@@ -47,14 +73,16 @@ def test_validate_spec_accepts_valid_spec() -> None:
 )
 def test_validate_spec_rejects_invalid_spec(
     dataset_id: str,
+    title: str,
+    description: str,
     sources: tuple[SourceRef, ...],
     exports: tuple[ExportTarget, ...],
     expected_problems: list[str],
 ) -> None:
     spec = BuildSpec(
         dataset_id=dataset_id,
-        title="Sample Dataset",
-        description="Sample description",
+        title=title,
+        description=description,
         sources=sources,
         exports=exports,
     )
@@ -63,3 +91,49 @@ def test_validate_spec_rejects_invalid_spec(
         validate_spec(spec)
 
     assert exc_info.value.problems == expected_problems
+
+
+def test_validate_spec_rejects_unsupported_export_kind() -> None:
+    spec = BuildSpec(
+        dataset_id="dataset.sample",
+        title="Sample Dataset",
+        description="Sample description",
+        sources=_SRC,
+        exports=(ExportTarget(kind="csv", output_path="out/data.csv"),),
+    )
+
+    with pytest.raises(ValidationError) as exc_info:
+        validate_spec(spec)
+
+    assert any("csv" in p and "not supported" in p for p in exc_info.value.problems)
+
+
+def test_validate_spec_rejects_empty_output_path() -> None:
+    spec = BuildSpec(
+        dataset_id="dataset.sample",
+        title="Sample Dataset",
+        description="Sample description",
+        sources=_SRC,
+        exports=(ExportTarget(kind="jsonl", output_path="   "),),
+    )
+
+    with pytest.raises(ValidationError) as exc_info:
+        validate_spec(spec)
+
+    assert any("output_path" in p for p in exc_info.value.problems)
+
+
+def test_validate_spec_rejects_empty_metadata_key() -> None:
+    spec = BuildSpec(
+        dataset_id="dataset.sample",
+        title="Sample Dataset",
+        description="Sample description",
+        sources=_SRC,
+        exports=_EXP,
+        metadata={"": "value"},
+    )
+
+    with pytest.raises(ValidationError) as exc_info:
+        validate_spec(spec)
+
+    assert any("metadata keys" in p for p in exc_info.value.problems)
