@@ -56,8 +56,8 @@ def persist_silver_dataset(
     Raises ValueError if run_id or source_bronze contain unsafe path characters.
     """
     _validate_path_segment(run_id, field_name="run_id")
-    source_segment = dataset.source_bronze.replace("/", "_")
-    _validate_path_segment(source_segment, field_name="source_bronze")
+    _validate_path_segment(dataset.source_bronze, field_name="source_bronze")
+    source_segment = dataset.source_bronze
 
     silver_dir = output_root / run_id / "silver" / source_segment
     table_path = silver_dir / "table.parquet"

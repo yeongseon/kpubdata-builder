@@ -16,7 +16,7 @@ def summarize_schema(table: pl.DataFrame) -> SchemaSummary:
             ColumnInfo(
                 name=name,
                 dtype=str(series.dtype),
-                nullable=series.null_count() > 0,
+                has_nulls=series.null_count() > 0,
                 unique_count=series.n_unique(),
             )
         )

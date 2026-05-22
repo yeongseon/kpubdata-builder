@@ -15,7 +15,7 @@ class ColumnInfo:
 
     name: str
     dtype: str
-    nullable: bool
+    has_nulls: bool
     unique_count: int
 
 

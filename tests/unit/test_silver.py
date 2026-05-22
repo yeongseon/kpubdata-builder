@@ -35,8 +35,8 @@ def test_summarize_schema_reports_dtype_nullable_and_unique() -> None:
     schema = summarize_schema(df)
     by_name = {c.name: c for c in schema.columns}
     assert by_name["name"].unique_count == 2
-    assert by_name["name"].nullable is False
-    assert by_name["amount"].nullable is True
+    assert by_name["name"].has_nulls is False
+    assert by_name["amount"].has_nulls is True
 
 
 def test_summarize_statistics_counts_rows_nulls_and_duplicates() -> None:
@@ -112,3 +112,14 @@ def test_persist_silver_dataset_rejects_unsafe_run_id(tmp_path: Path) -> None:
         persist_silver_dataset(silver, output_root=tmp_path, run_id="../escape")
     with pytest.raises(ValueError, match="must not be empty"):
         persist_silver_dataset(silver, output_root=tmp_path, run_id="")
+
+
+def test_persist_silver_dataset_rejects_source_bronze_with_slash(tmp_path: Path) -> None:
+    artifact = BronzeArtifact(
+        source_key="a/b",
+        raw_records=({"id": "1"},),
+        fetched_at=datetime(2026, 5, 8, tzinfo=timezone.utc),
+    )
+    silver = build_silver_dataset(artifact)
+    with pytest.raises(ValueError, match="unsafe characters"):
+        persist_silver_dataset(silver, output_root=tmp_path, run_id="run-1")
