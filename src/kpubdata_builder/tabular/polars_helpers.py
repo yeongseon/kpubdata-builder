@@ -1,4 +1,4 @@
-"""Small Polars helpers for tabularizing raw records."""
+"""원시 레코드를 표 형태로 만들기 위한 작은 Polars 도우미."""
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ _NAMED_DTYPES: Mapping[str, pl.DataType] = {
 
 @dataclass(frozen=True)
 class CastReport:
-    """Per-column count of null values introduced by strict=False casting."""
+    """strict=False 캐스팅으로 추가된 null 값의 컬럼별 개수."""
 
     column: str
     nulls_before: int
@@ -45,7 +45,7 @@ class CastReport:
 
 @dataclass(frozen=True)
 class CastResult:
-    """Result of cast_columns(audit=True) with null-introduction tracking."""
+    """audit 결과와 컬럼별 null 보고서를 담는 값 객체."""
 
     df: pl.DataFrame
     reports: tuple[CastReport, ...] = field(default_factory=tuple)
@@ -56,7 +56,7 @@ class CastResult:
 
 
 def records_to_dataframe(records: Sequence[dict[str, JsonValue]]) -> pl.DataFrame:
-    """Convert raw record mappings into a Polars DataFrame."""
+    """원시 레코드 매핑을 Polars DataFrame으로 변환한다."""
     return pl.DataFrame(list(records))
 
 
@@ -64,7 +64,7 @@ def validate_required_columns(
     df: pl.DataFrame,
     required_columns: Sequence[str],
 ) -> pl.DataFrame:
-    """Validate that a DataFrame contains all required columns."""
+    """필수 컬럼이 모두 있는지 확인하고 누락 시 예외를 발생시킨다."""
     missing_columns = [column for column in required_columns if column not in df.columns]
     if missing_columns:
         missing = ", ".join(missing_columns)
@@ -96,10 +96,10 @@ def cast_columns(
     *,
     audit: bool = False,
 ) -> pl.DataFrame | CastResult:
-    """Cast DataFrame columns according to a column-to-dtype mapping.
+    """지정한 타입으로 컬럼을 캐스팅하고 필요하면 null 보고서를 함께 반환한다.
 
-    When audit=True, returns a CastResult with per-column null reports.
-    When audit=False (default), returns the DataFrame directly.
+    audit=True이면 컬럼별 null 보고서를 담은 CastResult를 반환한다.
+    audit=False(기본값)이면 데이터프레임을 직접 반환한다.
     """
     reports: list[CastReport] = []
     expressions: list[pl.Expr] = []

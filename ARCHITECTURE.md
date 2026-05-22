@@ -1,4 +1,4 @@
-# Architecture — KPubData Builder
+# 아키텍처 — KPubData Builder
 
 ## 1. 역할 정의
 
@@ -31,25 +31,25 @@ Builder는 다음을 하지 않습니다.
 
 ## 3. 계층 분리
 
-### 3.1 Pipeline orchestrator
+### 3.1 파이프라인 오케스트레이터
 
 - BuildSpec 로딩/검증
 - Bronze/Silver/Gold stage 전이 관리
 - run workspace(`build/{run_id}/bronze/`, `silver/`, `gold/`) 관리
 
-### 3.2 Bronze stage
+### 3.2 Bronze 단계
 
 - `kpubdata` 호출로 원시 fetch 수행
 - source snapshot 저장
 - provenance logging 기록
 
-### 3.3 Silver stage
+### 3.3 Silver 단계
 
 - Bronze snapshot을 표 형태로 정렬
 - **Polars 단일 내부 엔진**으로 tabularize 수행
 - schema validation, statistics, preview generation 수행
 
-### 3.4 Gold stage
+### 3.4 Gold 단계
 
 - Silver 결과를 split-ready package로 조립
 - export-ready artifact 집합 준비
@@ -85,7 +85,7 @@ Builder는 외부와 다음 경계로 연결됩니다.
 | 원격 게시 대상 | 게시 대상 설정/자격 증명 | 게시 요청 |
 | `kpubdata-studio` | BuildSpec, 실행 요청 | 검증 결과, stage-aware preview, build 상태, manifest |
 
-Studio는 여기서 **external UI client**로만 동작합니다.
+Studio는 여기서 **외부 UI 클라이언트**로만 동작합니다.
 
 ## 5. Medallion 파이프라인 흐름
 
@@ -119,9 +119,9 @@ Studio/UI -> Builder Service -> Spec Loader -> Validator -> Pipeline Orchestrato
 | :--- | :--- | :--- | :--- |
 | Spec Loader | YAML/구조화된 spec | BuildSpec 객체 | build 시작 불가 |
 | Validator | BuildSpec | 검증 결과 | `failed`로 종료 |
-| Bronze Stage | 검증된 BuildSpec | raw snapshot + provenance | Silver 이전에 중단 |
-| Silver Stage | Bronze snapshot | Polars table + schema/stats/preview | Gold 이전에 중단 |
-| Gold Stage | Silver dataset | split-ready/export-ready package | export 이전에 중단 |
+| Bronze 단계 | 검증된 BuildSpec | raw snapshot + provenance | Silver 이전에 중단 |
+| Silver 단계 | Bronze snapshot | Polars table + schema/stats/preview | Gold 이전에 중단 |
+| Gold 단계 | Silver dataset | split-ready/export-ready package | export 이전에 중단 |
 | Exporter | Gold package + export 설정 | artifact 목록 | publish 이전에 중단 |
 | Manifest Writer | spec digest + 실행 결과 | manifest.json | 감사 기록 상실 위험 |
 | Publisher | artifact + publish 설정 | 게시 결과 | artifact는 유지될 수 있음 |

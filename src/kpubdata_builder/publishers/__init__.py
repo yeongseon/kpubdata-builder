@@ -1,4 +1,4 @@
-"""Publisher registry for remote artifact publication integrations."""
+"""원격 산출물 게시 연동을 위한 게시 도구 레지스트리."""
 
 from __future__ import annotations
 

@@ -1,22 +1,22 @@
-# Task Plan
+# 작업 계획
 
-## Scope
-- Initialize `kpubdata-builder` as a Python package repository.
-- Mirror `kpubdata` project conventions for tooling, CI, and quality gates.
-- Add required architecture-aligned package stubs, tests, and documentation.
+## 범위
+- `kpubdata-builder`를 Python 패키지 저장소로 초기화한다.
+- 도구, CI, 품질 게이트에 대해 `kpubdata` 프로젝트의 관례를 따른다.
+- 아키텍처에 맞는 필수 패키지 스텁, 테스트, 문서를 추가한다.
 
-## Touched modules
-- Project metadata/config: `pyproject.toml`, `.gitignore`, `LICENSE`, `.github/workflows/ci.yml`, `CHANGELOG.md`
-- Product docs in repo root and `docs/adrs/`
-- Source package under `src/kpubdata_builder/`
-- Unit tests under `tests/unit/`
+## 영향 받는 모듈
+- 프로젝트 메타데이터/설정: `pyproject.toml`, `.gitignore`, `LICENSE`, `.github/workflows/ci.yml`, `CHANGELOG.md`
+- 저장소 루트와 `docs/adrs/`의 제품 문서
+- `src/kpubdata_builder/` 아래 소스 패키지
+- `tests/unit/` 아래 단위 테스트
 
-## Risks
-- Strict mypy mode may fail on incomplete or weakly typed stubs.
-- Ruff import ordering and formatting can fail if file layout diverges.
-- Build may fail if package data markers or wheel package path are incorrect.
+## 위험 요소
+- 엄격한 mypy 모드에서 불완전하거나 타입이 약한 스텁이 실패할 수 있다.
+- 파일 배치가 어긋나면 Ruff import 순서 및 포맷 검사가 실패할 수 있다.
+- 패키지 데이터 마커나 wheel 패키지 경로가 잘못되면 빌드가 실패할 수 있다.
 
-## Validation steps
+## 검증 단계
 - `uv sync --extra dev`
 - `uv run ruff check .`
 - `uv run ruff format --check .`

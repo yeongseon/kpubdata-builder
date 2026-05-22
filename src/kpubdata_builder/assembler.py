@@ -1,4 +1,4 @@
-"""Assembly layer for combining source records into a canonical artifact."""
+"""소스 레코드를 표준 산출물로 결합하는 조립 계층."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ def assemble_artifact(
     spec: BuildSpec,
     records_by_source: dict[str, Sequence[dict[str, JsonValue]]],
 ) -> AssemblyResult:
-    """Assemble source records with minimal deterministic merge behavior."""
+    """최소한의 결정적 병합 동작으로 소스 레코드를 조립한다."""
     merged_records: list[dict[str, JsonValue]] = []
     warnings: list[str] = []
     present_sources: list[str] = []

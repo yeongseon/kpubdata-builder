@@ -1,4 +1,4 @@
-# 서울 아파트 실거래가 end-to-end 예제
+# 서울 아파트 실거래가 종단 간 예제
 
 이 문서는 `kpubdata`의 `datago.apt_trade` 데이터를 사용해 서울 아파트 실거래가를 수집하고, Polars로 정제한 뒤, Hugging Face Dataset 형태의 로컬 산출물로 패키징하는 end-to-end 예제입니다.
 
@@ -70,7 +70,7 @@ uv run python scripts/publish_to_hf.py scripts/configs/korean_apartment_trades.y
 uv run python scripts/publish_to_hf.py scripts/configs/korean_apartment_trades.yaml --local-only --verbose
 ```
 
-## Pipeline 매핑
+## 파이프라인 매핑
 
 현재 스크립트는 Builder의 장기 모듈 구조를 설명하기 위한 config-driven 레퍼런스입니다. Issue #50의 Bronze/Silver/Gold 흐름은 다음처럼 매핑됩니다.
 

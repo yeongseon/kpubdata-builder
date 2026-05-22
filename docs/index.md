@@ -1,4 +1,4 @@
-# KPubData Builder — Korea Public Data Builder
+# KPubData Builder — 한국 공공데이터 빌더
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/yeongseon/kpubdata-builder/blob/main/LICENSE)
@@ -167,7 +167,7 @@ src/kpubdata_builder/
 
 ---
 
-## 문서 가이드 (Document Guide)
+## 문서 가이드
 
 ### 핵심 설계
 - [아키텍처](ARCHITECTURE.md): 시스템 아키텍처 및 레이어 설계
@@ -185,7 +185,7 @@ src/kpubdata_builder/
 - [작업 계획](PLAN.md): 초기 구축 및 작업 계획
 
 ### 자세한 참고
-- [ADR: Builder as Orchestrator](adrs/0001-builder-as-orchestrator.md): 빌더 아키텍처 결정 기록
+- [ADR: 오케스트레이터로서의 Builder](adrs/0001-builder-as-orchestrator.md): 빌더 아키텍처 결정 기록
 - [에러 처리](guides/error-handling.md): 예외 계층 및 오류 응답 정책
 - [제품군 전체 아키텍처](https://github.com/yeongseon/kpubdata/blob/main/docs/product-family-architecture.md): **KPubData 3개 저장소의 전체 시스템 아키텍처**
 

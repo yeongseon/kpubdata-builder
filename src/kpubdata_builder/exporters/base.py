@@ -1,4 +1,4 @@
-"""Base exporter contract for artifact output generation."""
+"""산출물 출력 생성을 위한 기본 내보내기 도구 계약."""
 
 from __future__ import annotations
 
@@ -28,12 +28,12 @@ def ensure_output_dir(output_dir: Path, relative_output_path: str) -> Path:
 
 
 class BaseExporter(ABC):
-    """Abstract base class for all artifact exporters."""
+    """모든 산출물 내보내기 도구를 위한 추상 기반 클래스."""
 
     @property
     @abstractmethod
     def name(self) -> str:
-        """Return exporter identifier used by registry and specs."""
+        """레지스트리와 스펙에서 사용하는 내보내기 도구 식별자를 반환한다."""
 
     @abstractmethod
     def export(

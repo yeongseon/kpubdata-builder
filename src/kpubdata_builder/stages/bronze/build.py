@@ -1,4 +1,4 @@
-"""Bronze stage source fetch helpers."""
+"""브론즈 단계 소스 가져오기 도우미."""
 
 from __future__ import annotations
 
@@ -11,25 +11,25 @@ from .models import BronzeArtifact, ProvenanceEvent, require_timezone_aware, utc
 
 
 class DatasetResult(Protocol):
-    """Minimal result shape returned by compatible kpubdata datasets."""
+    """호환되는 kpubdata 데이터셋이 반환하는 최소 결과 형태."""
 
     @property
     def items(self) -> Iterable[dict[str, JsonValue]]:
-        """Return fetched records."""
+        """가져온 레코드를 반환한다."""
 
 
 class SourceDataset(Protocol):
-    """Minimal dataset shape used by the Bronze stage."""
+    """브론즈 단계에서 사용하는 최소 데이터셋 형태."""
 
     def list(self, **params: JsonValue) -> DatasetResult:
-        """Fetch records for one parameter set."""
+        """하나의 파라미터 집합에 대해 레코드를 가져온다."""
 
 
 class SourceClient(Protocol):
-    """Minimal client shape used by the Bronze stage."""
+    """브론즈 단계에서 사용하는 최소 클라이언트 형태."""
 
     def dataset(self, source_key: str) -> SourceDataset:
-        """Return a dataset object for a source key."""
+        """소스 키에 대한 데이터셋 객체를 반환한다."""
 
 
 def build_bronze_artifact(
@@ -39,7 +39,7 @@ def build_bronze_artifact(
     fetch_params: dict[str, JsonValue] | None = None,
     fetched_at: datetime | None = None,
 ) -> BronzeArtifact:
-    """Fetch raw records from a compatible client and return a Bronze artifact."""
+    """호환 클라이언트에서 원시 레코드를 가져와 브론즈 산출물을 반환한다."""
     resolved_params = dict(fetch_params or {})
     resolved_fetched_at = fetched_at or utc_now()
     require_timezone_aware(resolved_fetched_at, field_name="fetched_at")

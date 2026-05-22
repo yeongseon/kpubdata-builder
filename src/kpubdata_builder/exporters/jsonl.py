@@ -1,4 +1,4 @@
-"""JSONL exporter stub implementation."""
+"""JSONL 내보내기 도구 스텁 구현."""
 
 from __future__ import annotations
 
@@ -12,17 +12,17 @@ from .base import BaseExporter, ExportResult, ensure_output_dir
 
 
 class JsonlExporter(BaseExporter):
-    """Exporter that writes records as newline-delimited JSON."""
+    """레코드를 줄바꿈 구분 JSON으로 기록하는 내보내기 도구."""
 
     @property
     def name(self) -> str:
-        """Return exporter name."""
+        """내보내기 도구 이름을 반환한다."""
         return "jsonl"
 
     def export(
         self, artifact: ArtifactDataset, target: ExportTarget, output_dir: Path
     ) -> ExportResult:
-        """Export canonical records to a JSONL file."""
+        """표준 레코드를 JSONL 파일로 내보낸다."""
         destination = ensure_output_dir(output_dir, target.output_path)
         content = "\n".join(
             json.dumps(record, ensure_ascii=False, sort_keys=True) for record in artifact.records

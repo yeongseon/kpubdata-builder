@@ -1,6 +1,6 @@
-# Domain Model — KPubData Builder
+# 도메인 모델 — KPubData Builder
 
-## Core Entities (핵심 모델 상세)
+## 핵심 엔티티(핵심 모델 상세)
 
 ```mermaid
 classDiagram
@@ -123,7 +123,7 @@ flowchart LR
     - `warnings`: 빌드 중 발생한 사소한 문제들
     - `errors`: 빌드 실패 시 에러 요약 목록
 
-## 엔티티 관계도 (Entity Relationship)
+## 엔티티 관계도
 
 ```text
 [BuildSpec] (레시피)
@@ -140,7 +140,7 @@ flowchart LR
     +-- [Physical Files] (실제 파일: .md, .jsonl 등)
 ```
 
-## 실제 BuildSpec YAML 예시 (Full Example)
+## 실제 BuildSpec YAML 예시
 
 ```yaml
 # 2025년 기상청 날씨 예보 빌드 기획서

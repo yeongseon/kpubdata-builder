@@ -1,4 +1,4 @@
-"""Bronze stage public API."""
+"""브론즈 단계 공개 API."""
 
 from __future__ import annotations
 

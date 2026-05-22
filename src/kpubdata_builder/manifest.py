@@ -1,4 +1,4 @@
-"""Build manifest model and writer for reproducible build metadata."""
+"""재현 가능한 빌드 메타데이터를 위한 빌드 매니페스트 모델과 기록기."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from .errors import ManifestError
 
 @dataclass(frozen=True)
 class BuildManifest:
-    """Execution summary artifact for build auditing."""
+    """빌드 감사를 위한 실행 요약 산출물."""
 
     build_id: str
     started_at: datetime
@@ -25,7 +25,7 @@ class BuildManifest:
 
 
 def manifest_writer(manifest: BuildManifest, output_path: Path) -> None:
-    """Write a build manifest as deterministic JSON to disk."""
+    """빌드 매니페스트를 결정적 JSON으로 디스크에 기록한다."""
     payload = {
         "build_id": manifest.build_id,
         "started_at": manifest.started_at.astimezone(timezone.utc).isoformat(),
@@ -45,7 +45,7 @@ def manifest_writer(manifest: BuildManifest, output_path: Path) -> None:
 
 
 def write_manifest(manifest: BuildManifest, output_path: Path) -> None:
-    """Write a build manifest as deterministic JSON to disk."""
+    """빌드 매니페스트를 결정적 JSON으로 디스크에 기록한다."""
     manifest_writer(manifest, output_path)
 
 

@@ -1,4 +1,4 @@
-"""Validation routines for builder specifications."""
+"""빌더 명세를 위한 검증 루틴."""
 
 from __future__ import annotations
 

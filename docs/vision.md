@@ -1,85 +1,85 @@
-# Why kpubdata-builder
+# 왜 kpubdata-builder인가
 
-## Problem
+## 문제
 
-Korea's [data.go.kr](https://www.data.go.kr) hosts thousands of valuable public datasets.
-But for global researchers and developers, they're practically invisible:
+한국의 [data.go.kr](https://www.data.go.kr)에는 수천 개의 가치 있는 공공데이터셋이 있다.
+하지만 전 세계 연구자와 개발자에게는 사실상 보이지 않는 것과 같다:
 
-1. API requires Korean government service key registration (in Korean)
-2. Responses are XML with Korean field names
-3. No documentation in English
-4. No standard format — no Parquet, no HuggingFace, no Kaggle
+1. API 사용을 위해 한국어 기반 정부 서비스 키 등록이 필요하다.
+2. 응답은 한국어 필드명을 가진 XML이다.
+3. 영어 문서가 없다.
+4. 표준 형식이 없다 — Parquet도, HuggingFace도, Kaggle도 없다.
 
-## What We Do
+## 우리가 하는 일
 
-kpubdata-builder is the pipeline that turns raw Korean public API data
-into publish-ready HuggingFace Datasets.
+kpubdata-builder는 한국 공공 API의 원시 데이터를
+게시 가능한 HuggingFace 데이터셋으로 바꾸는 파이프라인이다.
 
 ```
 [data.go.kr API] → [kpubdata SDK] → [builder pipeline] → [HuggingFace Dataset]
 ```
 
-The goal: **한국 공공데이터를 전세계 누구나 `load_dataset()` 한 줄로 쓸 수 있게 만든다.**
+목표: **한국 공공데이터를 전 세계 누구나 `load_dataset()` 한 줄로 쓸 수 있게 만든다.**
 
-(Make Korean public data accessible to anyone worldwide with a single `load_dataset()` call.)
+(전 세계 누구나 `load_dataset()` 한 번으로 한국 공공데이터에 접근할 수 있게 한다.)
 
-## Design Decisions
+## 설계 결정
 
-### Keep Korean text values
+### 한국어 텍스트 값 유지
 
-Neighborhood and building names stay in Korean. Romanization is lossy and inconsistent
-(`효성주얼리시티` → `hyoseong Jewelry City`? No.). English column names are sufficient
-for programmatic access. Domain context is explained in dataset cards.
+동 이름과 건물 이름은 한국어 그대로 유지한다. 로마자 표기는 정보 손실이 크고 일관되지 않다
+(`효성주얼리시티` → `hyoseong Jewelry City`? 아니다). 프로그래밍 방식 접근에는 영어 컬럼명만으로 충분하다.
+도메인 맥락은 데이터셋 카드에서 설명한다.
 
-### One config = one dataset
+### 하나의 설정 = 하나의 데이터셋
 
-A YAML config fully defines what gets published: source, column mapping, types, filters, output.
-No undeclared columns, no surprises. Config is the single source of truth.
+YAML 설정 하나가 게시될 내용을 완전히 정의한다: 소스, 컬럼 매핑, 타입, 필터, 출력.
+선언되지 않은 컬럼도 없고, 예상 밖의 결과도 없다. 이 설정이 단일 진실 공급원이다.
 
-### Validation gates
+### 검증 게이트
 
-Publish fails if the output schema drifts from the config. Specifically:
-- Undeclared columns in output → **fail**
-- Declared columns missing from output → **fail**
-- 100% null columns → **warning**
+출력 스키마가 설정에서 벗어나면 게시가 실패한다. 구체적으로는 다음과 같다:
+- 출력에 선언되지 않은 컬럼이 있으면 → **실패**
+- 선언된 컬럼이 출력에 없으면 → **실패**
+- 100% null 컬럼이면 → **경고**
 
-### No feature engineering
+### 피처 엔지니어링 없음
 
-We publish clean raw government data, not derived analytics tables.
-Users add lat/lon, subway distances, interest rates, etc. themselves — just like Kaggle.
-The dataset's job is source fidelity and accessibility, not ML-readiness.
+우리는 파생 분석 테이블이 아니라 정리된 원시 정부 데이터를 게시한다.
+위도/경도, 지하철 거리, 금리 등은 사용자가 직접 추가한다 — Kaggle과 같은 방식이다.
+데이터셋의 역할은 ML 준비 상태가 아니라 원본 충실성과 접근성이다.
 
-### Source fidelity over convenience
+### 편의성보다 원본 충실성
 
-- Original values preserved (no translation, no romanization of data)
-- Null handling: standardized null tokens, but no imputation
-- Filtering: only obviously invalid records removed (e.g. price = 0)
+- 원본 값 보존(번역 없음, 데이터 로마자화 없음)
+- null 처리: null 토큰은 표준화하지만 결측치 대체는 하지 않음
+- 필터링: 명백히 잘못된 레코드만 제거(예: price = 0)
 
-## Naming Convention
+## 네이밍 규칙
 
-HuggingFace datasets follow: `kpubdata/{scope}-{subject}-{type}`
+HuggingFace 데이터셋은 `kpubdata/{scope}-{subject}-{type}` 규칙을 따른다.
 
-Examples:
-- `kpubdata/seoul-apartment-trades` — Seoul apartment sale transactions
-- `kpubdata/korea-air-quality-hourly` — Nationwide hourly air quality
-- `kpubdata/busan-bus-ridership` — Busan bus passenger counts
+예시:
+- `kpubdata/seoul-apartment-trades` — 서울 아파트 매매 실거래
+- `kpubdata/korea-air-quality-hourly` — 전국 시간별 대기질
+- `kpubdata/busan-bus-ridership` — 부산 버스 승객 수
 
-## Quality Standards
+## 품질 기준
 
-From [hf-publishing-standards.md](./hf-publishing-standards.md):
+[hf-publishing-standards.md](./hf-publishing-standards.md)의 기준:
 
-- Minimum 10,000 records (recommended 50,000+)
-- Time series: minimum 36 months coverage
-- Types declared and enforced
-- Dataset card with English descriptions + Korean context
-- Legal attribution (공공누리 → CC mapping)
-- Pre-publish checklist with local dry-run
+- 최소 10,000개 레코드(권장 50,000개 이상)
+- 시계열: 최소 36개월 범위
+- 타입 선언 및 강제 적용
+- 영어 설명 + 한국어 맥락을 담은 데이터셋 카드
+- 법적 출처표시(공공누리 → CC 매핑)
+- 로컬 dry-run을 포함한 사전 게시 체크리스트
 
-## Relationship to Other Projects
+## 다른 프로젝트와의 관계
 
-| Project | Role |
+| 프로젝트 | 역할 |
 |---|---|
-| **kpubdata** | Python SDK — handles API auth, pagination, response parsing |
-| **kpubdata-builder** | Build pipeline — fetch, transform, validate, publish |
-| **kpubdata-studio** | Visual workbench UI (future) — inspect, preview, export |
-| **HuggingFace kpubdata org** | Published datasets — the end product users consume |
+| **kpubdata** | Python SDK — API 인증, 페이지네이션, 응답 파싱 담당 |
+| **kpubdata-builder** | 빌드 파이프라인 — 수집, 변환, 검증, 게시 담당 |
+| **kpubdata-studio** | 시각적 워크벤치 UI(향후) — 탐색, 미리보기, 내보내기 담당 |
+| **HuggingFace kpubdata org** | 게시된 데이터셋 — 사용자가 최종적으로 소비하는 결과물 |
