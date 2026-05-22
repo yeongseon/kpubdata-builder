@@ -1,4 +1,4 @@
-"""Markdown exporter stub implementation."""
+"""마크다운 내보내기 도구 스텁 구현."""
 
 from __future__ import annotations
 
@@ -11,17 +11,17 @@ from .base import BaseExporter, ExportResult, ensure_output_dir
 
 
 class MarkdownExporter(BaseExporter):
-    """Exporter that emits a simple Markdown dataset summary."""
+    """간단한 마크다운 데이터셋 요약을 출력하는 내보내기 도구."""
 
     @property
     def name(self) -> str:
-        """Return exporter name."""
+        """내보내기 도구 이름을 반환한다."""
         return "markdown"
 
     def export(
         self, artifact: ArtifactDataset, target: ExportTarget, output_dir: Path
     ) -> ExportResult:
-        """Export artifact metadata and row count as Markdown."""
+        """산출물 메타데이터와 행 수를 마크다운으로 내보낸다."""
         destination = ensure_output_dir(output_dir, target.output_path)
         lines = [
             "# Dataset Artifact",

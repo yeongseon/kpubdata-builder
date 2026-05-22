@@ -1,4 +1,4 @@
-"""Public package surface for kpubdata-builder."""
+"""kpubdata-builder의 공개 패키지 표면."""
 
 from __future__ import annotations
 

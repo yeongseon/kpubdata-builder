@@ -1,4 +1,4 @@
-"""Source execution layer for producing artifact-ready records."""
+"""산출물 준비가 된 레코드를 만드는 소스 실행 계층."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ class ExecutionResult:
 
 
 def source_executor(spec: BuildSpec) -> ExecutionResult:
-    """Execute declared sources and return a minimal assembled artifact stub."""
+    """선언된 소스를 실행하고 최소한의 조립 산출물 스텁을 반환한다."""
     try:
         validate_spec(spec)
     except ValidationError:

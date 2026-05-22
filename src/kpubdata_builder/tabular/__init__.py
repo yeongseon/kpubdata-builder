@@ -1,4 +1,4 @@
-"""Tabular helpers backed by Polars."""
+"""Polars 기반 표 처리 도우미."""
 
 from __future__ import annotations
 

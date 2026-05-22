@@ -1,4 +1,4 @@
-# Export Model — KPubData Builder
+# 내보내기 모델 — KPubData Builder
 
 ## 0. "Exporter란?" (초보자용 설명)
 
@@ -6,9 +6,9 @@ Exporter는 **"데이터 변환기"**입니다.
 
 KPubData Builder가 여러 곳에서 수집한 데이터는 컴퓨터의 메모리상에만 존재합니다. 이 데이터를 사용자가 실제로 파일로 읽으려면, 특정 형식(예: 메모장으로 볼 수 있는 Markdown, 엑셀과 비슷한 Parquet 등)에 맞춰 파일로 써주어야 합니다. 이 역할을 담당하는 것이 Exporter입니다.
 
-## 1. Philosophy
+## 1. 철학
 
-Exporters consume a canonical artifact model and produce concrete files or publishable layouts.
+Exporter는 표준 산출물 모델을 입력으로 받아 구체적인 파일 또는 게시 가능한 레이아웃을 만든다.
 
 ```mermaid
 classDiagram
@@ -35,7 +35,7 @@ classDiagram
     BaseExporter <|-- HuggingFaceExporter
 ```
 
-They must not fetch source data directly. (데이터를 직접 API에서 가져오지 않고, 이미 준비된 `ArtifactDataset`만을 사용하여 파일을 만듭니다.)
+이들은 소스 데이터를 직접 가져오면 안 된다. (데이터를 직접 API에서 가져오지 않고, 이미 준비된 `ArtifactDataset`만을 사용하여 파일을 만든다.)
 
 ```mermaid
 sequenceDiagram
@@ -51,16 +51,16 @@ sequenceDiagram
     E->>AD: 4. Return generated file paths
 ```
 
-## 2. Canonical Export Input (Exporter가 받는 재료)
+## 2. 표준 내보내기 입력(Exporter가 받는 재료)
 
-Every exporter receives:
+모든 exporter는 다음을 입력으로 받는다:
 - artifact records (실제 데이터 내용)
 - metadata (작성자, 생성일 등 부가 정보)
 - provenance (이 데이터가 어디서 왔는지에 대한 정보)
 - schema summary (데이터 항목들의 이름과 타입)
 - optional statistics (건수, 평균 등 통계)
 
-## 3. Built-in Exporters (기본 제공 변환기)
+## 3. 내장 Exporter(기본 제공 변환기)
 
 ### 3.1 Markdown
 - **출력 형태:** 사람이 읽기 좋은 문서 형식 (`.md`)
@@ -91,7 +91,7 @@ Every exporter receives:
 - **출력 형태:** AI 모델 공유 사이트인 Hugging Face에 올리기 좋은 파일 구조
 - **포함 내용:** `data/` 폴더 내의 데이터 파일, `README.md` (Dataset Card), 설정 메타데이터
 
-## 4. 새 Exporter 만들기 (Step-by-Step 튜토리얼)
+## 4. 새 Exporter 만들기(단계별 튜토리얼)
 
 새로운 형식(예: CSV)으로 데이터를 저장하고 싶다면 다음 순서대로 코드를 작성하면 됩니다.
 

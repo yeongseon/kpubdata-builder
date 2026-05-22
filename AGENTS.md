@@ -1,35 +1,35 @@
 # AGENTS.md — kpubdata-builder
 
-## Mission
+## 미션
 
-Implement KPubData Builder as the orchestration and artifact pipeline layer on top of `kpubdata`.
+`kpubdata` 위에서 동작하는 오케스트레이션 및 산출물 파이프라인 계층으로 KPubData Builder를 구현한다.
 
-## Ground Rules
+## 기본 규칙
 
-- Do not duplicate provider logic from `kpubdata`
-- Keep build specs declarative
-- Prefer deterministic behavior over magic
-- Keep exporters pluggable
-- Every build must emit a manifest
-- Validation must fail early and clearly
+- `kpubdata`의 provider 로직을 중복 구현하지 말 것
+- 빌드 스펙은 선언적으로 유지할 것
+- 마법 같은 동작보다 결정적 동작을 우선할 것
+- exporter는 플러그형으로 유지할 것
+- 모든 빌드는 반드시 manifest를 생성할 것
+- 검증은 빠르고 명확하게 실패해야 할 것
 
-## Language policy
+## 언어 정책
 
-- **Documentation**: Write in Korean by default. English expansion is planned for future releases.
-- **Code**: All code (variable names, function names, comments, docstrings) must be in English.
-- **Commit messages**: Always in English.
-- **Issue / PR titles and descriptions**: Korean is acceptable; English is also fine.
+- **Documentation**: 기본적으로 한국어로 작성한다. 영어 확장은 향후 릴리스에서 계획한다.
+- **Code**: 코드(변수명, 함수명, 주석, docstring)는 한국어 우선으로 작성한다.
+- **Commit messages**: 항상 영어로 작성한다.
+- **Issue / PR titles and descriptions**: 한국어를 사용해도 되고, 영어도 가능하다.
 
-## Branch rules
+## 브랜치 규칙
 
-- Default branch is `main`. **Never push directly to `main`.**
-- Always work on a feature branch and open a PR.
-- Branch naming: `feat/issue-<number>-<short-description>`, `fix/issue-<number>-<short-description>`, `docs/<short-description>`
-- Never force-push to `main`. Never delete `main`.
-- Never rename or delete branches you did not create.
-- If unsure about any git operation, **ask first — do not guess.**
+- 기본 브랜치는 `main`이다. **절대 `main`에 직접 push하지 말 것.**
+- 항상 기능 브랜치에서 작업하고 PR을 열 것.
+- 브랜치 이름 규칙: `feat/issue-<number>-<short-description>`, `fix/issue-<number>-<short-description>`, `docs/<short-description>`
+- `main`에 force-push하지 말고, `main`을 삭제하지 말 것.
+- 자신이 만들지 않은 브랜치를 이름 변경하거나 삭제하지 말 것.
+- 어떤 git 작업이든 확신이 없으면 **추측하지 말고 먼저 물어볼 것.**
 
-## Priorities
+## 우선순위
 
 1. spec models
 2. Medallion pipeline orchestration
@@ -40,13 +40,13 @@ Implement KPubData Builder as the orchestration and artifact pipeline layer on t
 7. huggingface layout exporter
 8. stage-aware publish hooks
 
-## Testing Expectations
+## 테스트 기대사항
 
-- unit tests for spec validation
-- stage-aware tests for Bronze/Silver/Gold promotion
-- golden tests for Markdown output
-- manifest contract tests
-- fixture-based source execution tests
+- spec 검증용 unit test
+- Bronze/Silver/Gold 승격을 위한 stage-aware test
+- Markdown 출력용 golden test
+- manifest contract test
+- fixture 기반 source execution test
 
 ---
 
@@ -189,5 +189,5 @@ flowchart TD
 ### KPubData Product Family
 | 저장소 | 문서 | 설명 |
 | :--- | :--- | :--- |
-| [kpubdata](https://github.com/yeongseon/kpubdata) | [AGENTS.md](https://github.com/yeongseon/kpubdata/blob/main/AGENTS.md) | Core 에이전트 가이드 |
-| [kpubdata-studio](https://github.com/yeongseon/kpubdata-studio) | [AGENTS.md](https://github.com/yeongseon/kpubdata-studio/blob/main/AGENTS.md) | Studio 에이전트 가이드 |
+| [kpubdata](https://github.com/yeongseon/kpubdata) | [AGENTS.md](https://github.com/yeongseon/kpubdata/blob/main/AGENTS.md) | 코어 에이전트 가이드 |
+| [kpubdata-studio](https://github.com/yeongseon/kpubdata-studio) | [AGENTS.md](https://github.com/yeongseon/kpubdata-studio/blob/main/AGENTS.md) | 스튜디오 에이전트 가이드 |

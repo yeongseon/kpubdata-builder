@@ -1,4 +1,4 @@
-"""Medallion stage implementations."""
+"""메달리온 단계 구현 모음."""
 
 from __future__ import annotations
 

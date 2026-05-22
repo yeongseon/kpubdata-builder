@@ -1,4 +1,4 @@
-"""Command-line entrypoint for kpubdata-builder."""
+"""kpubdata-builder용 명령줄 진입점."""
 
 from __future__ import annotations
 
@@ -80,8 +80,8 @@ def dispatch(args: argparse.Namespace) -> int:
         return _run_validate(args.spec)
     if command in _RESERVED_COMMANDS:
         return _run_reserved(command)
-    # Unreachable via normal CLI (argparse rejects unknown subcommands),
-    # but kept as a defensive fallback for programmatic callers.
+    # 일반적인 CLI 경로로는 도달할 수 없지만(argparse가 알 수 없는 하위 명령을 거부함),
+    # 프로그래밍 방식 호출자를 위한 방어적 대체 경로로 유지한다.
     return 2
 
 

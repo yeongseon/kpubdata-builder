@@ -1,4 +1,4 @@
-"""Build specification models for orchestrating dataset builds."""
+"""데이터셋 빌드를 오케스트레이션하기 위한 빌드 명세 모델."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ JsonValue: TypeAlias = JsonPrimitive | list["JsonValue"] | dict[str, "JsonValue"
 
 @dataclass(frozen=True)
 class SourceRef:
-    """Reference to a normalized source query from kpubdata."""
+    """kpubdata의 정규화된 소스 쿼리를 가리키는 참조."""
 
     provider: str
     dataset: str
@@ -27,7 +27,7 @@ class SourceRef:
 
 @dataclass(frozen=True)
 class ExportTarget:
-    """Concrete exporter target definition for a build."""
+    """빌드를 위한 구체적인 내보내기 대상 정의."""
 
     kind: str
     output_path: str
@@ -36,7 +36,7 @@ class ExportTarget:
 
 @dataclass(frozen=True)
 class BuildSpec:
-    """Declarative build specification for a dataset artifact."""
+    """데이터셋 산출물을 위한 선언적 빌드 명세."""
 
     dataset_id: str
     title: str

@@ -1,7 +1,7 @@
-# Roadmap — kpubdata-builder
+# 로드맵 — kpubdata-builder
 
 > kpubdata-builder는 **원시 공공데이터를 정제된, 검증된, 배포 가능한 데이터셋으로 변환하는 빌드 엔진**입니다.
-> raw public data → Bronze → Silver → Gold → export → manifest → publish
+> 원시 공공데이터 → Bronze → Silver → Gold → export → manifest → publish
 
 ## 개발 축
 
@@ -32,7 +32,7 @@ Medallion 파이프라인 기반 구축.
 
 ## v0.2
 
-Export 확장, stage-aware exporter, Dataset Identity 도입.
+export 확장, stage-aware exporter, Dataset Identity 도입.
 
 ### Export & Publish
 - Markdown exporter (#5)
@@ -67,7 +67,7 @@ Plugin 생태계와 고급 빌드 기능.
 - **Kaggle dataset export** 지원
 - **Data catalog page** 생성 — 브랜드 배포용 정적 페이지
 
-## v1.0 criteria
+## v1.0 기준
 
 - BuildSpec 계약 안정, 하위 호환성 보장
 - 3개 이상 exporter 안정 (Markdown, JSONL, Parquet)
@@ -78,7 +78,7 @@ Plugin 생태계와 고급 빌드 기능.
 
 ---
 
-## 출력 타깃 (Output Targets)
+## 출력 타깃
 
 | 타깃 | 설명 | 버전 |
 | :--- | :--- | :--- |

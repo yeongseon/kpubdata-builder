@@ -1,4 +1,4 @@
-"""Exporter registry for built-in exporter implementations."""
+"""내장 내보내기 구현을 위한 내보내기 도구 레지스트리."""
 
 from __future__ import annotations
 

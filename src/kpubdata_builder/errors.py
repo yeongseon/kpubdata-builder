@@ -1,18 +1,18 @@
-"""Error hierarchy for builder pipeline failures."""
+"""빌더 파이프라인 실패를 위한 오류 계층."""
 
 from __future__ import annotations
 
 
 class BuildError(Exception):
-    """Base exception for all builder errors."""
+    """모든 빌더 오류의 기반 예외."""
 
 
 class SpecLoadError(BuildError):
-    """Failed to load or parse a build spec."""
+    """빌드 스펙을 로드하거나 파싱하지 못했다."""
 
 
 class ValidationError(BuildError):
-    """Build spec validation failed."""
+    """빌드 스펙 검증에 실패했다."""
 
     def __init__(self, problems: list[str]) -> None:
         self.problems = problems
@@ -20,19 +20,19 @@ class ValidationError(BuildError):
 
 
 class ExecutionError(BuildError):
-    """Source execution failed."""
+    """소스 실행에 실패했다."""
 
 
 class AssemblyError(BuildError):
-    """Artifact assembly failed."""
+    """산출물 조립에 실패했다."""
 
 
 class ExportError(BuildError):
-    """Export operation failed."""
+    """내보내기 작업에 실패했다."""
 
 
 class ManifestError(BuildError):
-    """Manifest write failed."""
+    """매니페스트 쓰기에 실패했다."""
 
 
 __all__ = [

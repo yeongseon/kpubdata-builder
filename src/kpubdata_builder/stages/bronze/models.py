@@ -1,4 +1,4 @@
-"""Bronze stage artifact and provenance models."""
+"""브론즈 단계 산출물과 출처 추적 모델."""
 
 from __future__ import annotations
 
@@ -9,19 +9,19 @@ from ...spec import JsonValue
 
 
 def utc_now() -> datetime:
-    """Return a timezone-aware UTC timestamp."""
+    """시간대 정보가 있는 UTC 시각을 반환한다."""
     return datetime.now(tz=timezone.utc)
 
 
 def require_timezone_aware(value: datetime, *, field_name: str) -> None:
-    """Validate that a datetime includes timezone information."""
+    """datetime에 시간대 정보가 포함되어 있는지 검증한다."""
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError(f"{field_name} must be timezone-aware")
 
 
 @dataclass(frozen=True)
 class ProvenanceEvent:
-    """Record where and when a Bronze source fetch happened."""
+    """브론즈 소스 가져오기가 언제 어디서 일어났는지 기록한다."""
 
     source_key: str
     fetch_params: dict[str, JsonValue] = field(default_factory=dict)
@@ -34,7 +34,7 @@ class ProvenanceEvent:
 
 @dataclass(frozen=True)
 class BronzeArtifact:
-    """Raw source records captured by the Bronze stage."""
+    """브론즈 단계가 수집한 원시 소스 레코드."""
 
     source_key: str
     raw_records: tuple[dict[str, JsonValue], ...]
@@ -47,5 +47,5 @@ class BronzeArtifact:
 
     @property
     def record_count(self) -> int:
-        """Return the number of preserved raw records."""
+        """보존된 원시 레코드 수를 반환한다."""
         return len(self.raw_records)
