@@ -45,7 +45,7 @@ class CastReport:
 
 @dataclass(frozen=True)
 class CastResult:
-    """null 추가 추적을 포함한 cast_columns(audit=True) 결과."""
+    """audit 결과와 컬럼별 null 보고서를 담는 값 객체."""
 
     df: pl.DataFrame
     reports: tuple[CastReport, ...] = field(default_factory=tuple)
@@ -64,7 +64,7 @@ def validate_required_columns(
     df: pl.DataFrame,
     required_columns: Sequence[str],
 ) -> pl.DataFrame:
-    """DataFrame이 필요한 모든 컬럼을 포함하는지 검증한다."""
+    """필수 컬럼이 모두 있는지 확인하고 누락 시 예외를 발생시킨다."""
     missing_columns = [column for column in required_columns if column not in df.columns]
     if missing_columns:
         missing = ", ".join(missing_columns)
@@ -96,14 +96,13 @@ def cast_columns(
     *,
     audit: bool = False,
 ) -> pl.DataFrame | CastResult:
-    """컬럼-데이터 타입 매핑에 따라 DataFrame 컬럼을 캐스팅한다.
+    """지정한 타입으로 컬럼을 캐스팅하고 필요하면 null 보고서를 함께 반환한다.
 
-    audit=True이면 컬럼별 null 보고서를 포함한 CastResult를 반환한다.
-    audit=False(기본값)이면 DataFrame을 직접 반환한다.
+    audit=True이면 컬럼별 null 보고서를 담은 CastResult를 반환한다.
+    audit=False(기본값)이면 데이터프레임을 직접 반환한다.
     """
     reports: list[CastReport] = []
     expressions: list[pl.Expr] = []
-    nulls_before: dict[str, int] = {}
 
     for column, dtype in dtypes.items():
         if column not in df.columns:

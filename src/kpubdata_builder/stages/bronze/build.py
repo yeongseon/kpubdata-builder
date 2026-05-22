@@ -16,7 +16,6 @@ class DatasetResult(Protocol):
     @property
     def items(self) -> Iterable[dict[str, JsonValue]]:
         """가져온 레코드를 반환한다."""
-        ...
 
 
 class SourceDataset(Protocol):
@@ -24,7 +23,6 @@ class SourceDataset(Protocol):
 
     def list(self, **params: JsonValue) -> DatasetResult:
         """하나의 파라미터 집합에 대해 레코드를 가져온다."""
-        ...
 
 
 class SourceClient(Protocol):
@@ -32,7 +30,6 @@ class SourceClient(Protocol):
 
     def dataset(self, source_key: str) -> SourceDataset:
         """소스 키에 대한 데이터셋 객체를 반환한다."""
-        ...
 
 
 def build_bronze_artifact(
