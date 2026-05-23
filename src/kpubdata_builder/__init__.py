@@ -13,6 +13,7 @@ from .errors import (
     ValidationError,
 )
 from .manifest import BuildManifest, manifest_writer
+from .preview import PreviewResult, preview_build
 from .spec import BuildSpec, ExportTarget, SourceRef
 from .validator import validate_spec
 
@@ -27,11 +28,13 @@ __all__ = [
     "ExportError",
     "ManifestError",
     "ExportTarget",
+    "PreviewResult",
     "SourceRef",
     "SpecLoadError",
     "ValidationError",
     "AssemblyError",
     "__version__",
     "manifest_writer",
+    "preview_build",
     "validate_spec",
 ]

@@ -116,22 +116,51 @@ def test_validate_fails_for_invalid_spec(
     assert "at least one source is required" in captured.err
 
 
-def test_preview_is_reserved(capsys: pytest.CaptureFixture[str]) -> None:
-    exit_code = main(["preview", "any.yaml"])
+def test_preview_succeeds_for_valid_spec(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    spec_path = tmp_path / "spec.yaml"
+    spec_path.write_text(VALID_SPEC_YAML, encoding="utf-8")
+
+    exit_code = main(["preview", str(spec_path)])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "preview: dataset.sample" in captured.out
+    assert "schema:" in captured.out
+    assert "records (" in captured.out
+    assert captured.err == ""
+
+
+def test_preview_writes_no_artifact_files(tmp_path: Path) -> None:
+    spec_path = tmp_path / "spec.yaml"
+    spec_path.write_text(VALID_SPEC_YAML, encoding="utf-8")
+
+    main(["preview", str(spec_path)])
+
+    # The spec declares out/data.jsonl; preview must not create it.
+    assert not (tmp_path / "out").exists()
+    assert list(tmp_path.iterdir()) == [spec_path]
+
+
+def test_preview_fails_for_invalid_spec(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    spec_path = tmp_path / "spec.yaml"
+    spec_path.write_text(INVALID_SPEC_YAML_NO_SOURCES, encoding="utf-8")
+
+    exit_code = main(["preview", str(spec_path)])
     captured = capsys.readouterr()
 
     assert exit_code == 1
-    assert "preview" in captured.err
-    assert "not implemented" in captured.err
+    assert "spec validation failed" in captured.err
+    assert "at least one source is required" in captured.err
 
 
-def test_preview_without_spec_is_reserved(capsys: pytest.CaptureFixture[str]) -> None:
+def test_preview_without_spec_errors(capsys: pytest.CaptureFixture[str]) -> None:
     exit_code = main(["preview"])
     captured = capsys.readouterr()
 
-    assert exit_code == 1
-    assert "preview" in captured.err
-    assert "not implemented" in captured.err
+    assert exit_code == 2
+    assert captured.err
 
 
 def test_build_is_reserved(capsys: pytest.CaptureFixture[str]) -> None:

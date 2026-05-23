@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from collections.abc import Sequence
 from pathlib import Path
 
 from . import __version__
 from .errors import SpecLoadError, ValidationError
-from .spec import load_spec
+from .preview import PreviewResult, preview_build
+from .spec import BuildSpec, load_spec
 from .validator import validate_spec
 
-_RESERVED_COMMANDS: frozenset[str] = frozenset({"preview", "build"})
+_RESERVED_COMMANDS: frozenset[str] = frozenset({"build"})
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -36,9 +38,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     preview_cmd = subparsers.add_parser(
         "preview",
-        help="Preview a BuildSpec execution (reserved; not implemented yet).",
+        help="Preview a build's schema and sample records without writing artifacts.",
     )
-    preview_cmd.add_argument("spec", nargs="?", help="Path to the BuildSpec YAML file.")
+    preview_cmd.add_argument("spec", help="Path to the BuildSpec YAML file.")
 
     build_cmd = subparsers.add_parser(
         "build",
@@ -65,6 +67,33 @@ def _run_validate(spec_path: str) -> int:
     return 0
 
 
+def _print_preview(spec: BuildSpec, preview: PreviewResult) -> None:
+    print(f"preview: {spec.dataset_id}")
+    print(f"schema: {', '.join(preview.schema) if preview.schema else '(empty)'}")
+    shown = len(preview.sample_records)
+    print(f"records ({shown} of {preview.total_records} shown):")
+    for record in preview.sample_records:
+        print(f"  {json.dumps(record, ensure_ascii=False, sort_keys=True)}")
+    for warning in preview.warnings:
+        print(f"warning: {warning}")
+
+
+def _run_preview(spec_path: str) -> int:
+    try:
+        spec = load_spec(Path(spec_path))
+        preview = preview_build(spec)
+    except SpecLoadError as exc:
+        print(f"error: failed to load spec: {exc}", file=sys.stderr)
+        return 1
+    except ValidationError as exc:
+        print("error: spec validation failed:", file=sys.stderr)
+        for problem in exc.problems:
+            print(f"  - {problem}", file=sys.stderr)
+        return 1
+    _print_preview(spec, preview)
+    return 0
+
+
 def _run_reserved(command: str) -> int:
     print(
         f"error: '{command}' is not implemented yet "
@@ -78,6 +107,8 @@ def dispatch(args: argparse.Namespace) -> int:
     command = args.command
     if command == "validate":
         return _run_validate(args.spec)
+    if command == "preview":
+        return _run_preview(args.spec)
     if command in _RESERVED_COMMANDS:
         return _run_reserved(command)
     # Unreachable via normal CLI (argparse rejects unknown subcommands),
