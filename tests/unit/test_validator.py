@@ -6,7 +6,7 @@ import pytest
 
 from kpubdata_builder import ValidationError
 from kpubdata_builder.spec import BuildSpec, ExportTarget, SourceRef
-from kpubdata_builder.validator import validate_spec
+from kpubdata_builder.spec.validator import validate_spec
 
 
 def test_validate_spec_accepts_valid_spec() -> None:
