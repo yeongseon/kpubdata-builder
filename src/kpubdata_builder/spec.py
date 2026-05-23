@@ -1,4 +1,14 @@
-"""데이터셋 빌드를 오케스트레이션하기 위한 빌드 명세 모델."""
+"""데이터셋 빌드를 오케스트레이션하기 위한 빌드 명세 모델.
+
+이 모듈은 YAML 기반 BuildSpec을 로드하고, 파이썬 데이터 구조로 파싱하며,
+후속 검증 단계가 사용할 불변 데이터 클래스를 제공한다.
+
+주요 구성:
+    - SourceRef: 원본 데이터 소스 참조
+    - ExportTarget: 출력 대상 정의
+    - BuildSpec: 전체 빌드 선언 모델
+    - load_spec / parse_spec: YAML 로드 및 구조 파싱 진입점
+"""
 
 from __future__ import annotations
 
@@ -16,7 +26,15 @@ JsonValue: TypeAlias = JsonPrimitive | list["JsonValue"] | dict[str, "JsonValue"
 
 @dataclass(frozen=True)
 class SourceRef:
-    """kpubdata의 정규화된 소스 쿼리를 가리키는 참조."""
+    """kpubdata의 정규화된 소스 쿼리를 가리키는 참조.
+
+    속성:
+        provider: provider 식별자.
+        dataset: dataset 식별자.
+        params: list 호출에 전달할 원시 파라미터.
+        normalization_mode: canonical/raw 같은 정규화 모드.
+        alias: 조립 단계에서 사용할 사용자 정의 소스 이름.
+    """
 
     provider: str
     dataset: str
@@ -27,7 +45,13 @@ class SourceRef:
 
 @dataclass(frozen=True)
 class ExportTarget:
-    """빌드를 위한 구체적인 내보내기 대상 정의."""
+    """빌드를 위한 구체적인 내보내기 대상 정의.
+
+    속성:
+        kind: exporter 레지스트리 키.
+        output_path: output_dir 기준 상대 출력 경로.
+        options: exporter 전용 선택 옵션.
+    """
 
     kind: str
     output_path: str
@@ -36,7 +60,21 @@ class ExportTarget:
 
 @dataclass(frozen=True)
 class BuildSpec:
-    """데이터셋 산출물을 위한 선언적 빌드 명세."""
+    """데이터셋 산출물을 위한 선언적 빌드 명세.
+
+    속성:
+        dataset_id: 데이터셋의 전역 식별자.
+        title: 사람이 읽는 제목.
+        description: 빌드 목적과 데이터 설명.
+        sources: 입력 소스 목록.
+        exports: 출력 대상 목록.
+        transforms: 적용 예정인 변환 단계 이름 목록.
+        metadata: 산출물에 실을 임의 메타데이터.
+        publish: 빌드 후 게시까지 수행할지 여부.
+
+    예시:
+        >>> BuildSpec.from_yaml("specs/sample.yaml")
+    """
 
     dataset_id: str
     title: str
@@ -49,10 +87,29 @@ class BuildSpec:
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> BuildSpec:
+        """YAML 파일에서 BuildSpec을 로드한다.
+
+        매개변수:
+            path: YAML 파일 경로.
+
+        반환값:
+            BuildSpec: 파싱 완료된 불변 명세 객체.
+        """
         return load_spec(Path(path))
 
 
 def parse_spec(data: dict[str, object]) -> BuildSpec:
+    """메모리 상의 매핑 데이터를 BuildSpec으로 파싱한다.
+
+    매개변수:
+        data: YAML 로더가 반환한 최상위 매핑.
+
+    반환값:
+        BuildSpec: 검증 가능한 빌드 명세 객체.
+
+    예외:
+        SpecLoadError: 필드 타입이 맞지 않거나 필수 키가 없을 때.
+    """
     try:
         dataset_id = _require_string(data, "dataset_id")
         title = _require_string(data, "title")
@@ -78,6 +135,17 @@ def parse_spec(data: dict[str, object]) -> BuildSpec:
 
 
 def load_spec(path: Path) -> BuildSpec:
+    """YAML 파일을 읽어 BuildSpec으로 변환한다.
+
+    매개변수:
+        path: BuildSpec YAML 경로.
+
+    반환값:
+        BuildSpec: 로드된 명세 객체.
+
+    예외:
+        SpecLoadError: 파일 읽기, YAML 파싱, 최상위 구조 검증 실패 시.
+    """
     try:
         raw_data = yaml.safe_load(path.read_text(encoding="utf-8"))
     except (FileNotFoundError, OSError, yaml.YAMLError) as exc:
@@ -92,6 +160,7 @@ def load_spec(path: Path) -> BuildSpec:
 
 
 def _require_string(data: dict[str, object], key: str) -> str:
+    """필수 문자열 필드를 추출한다."""
     value = data[key]
     if not isinstance(value, str):
         raise TypeError(f"{key} must be a string")
@@ -99,12 +168,14 @@ def _require_string(data: dict[str, object], key: str) -> str:
 
 
 def _parse_bool(value: object, *, field_name: str) -> bool:
+    """불리언 필드 타입을 검증한다."""
     if not isinstance(value, bool):
         raise TypeError(f"{field_name} must be a boolean")
     return value
 
 
 def _parse_string_list(value: object, *, field_name: str) -> tuple[str, ...]:
+    """문자열 목록 필드를 불변 튜플로 변환한다."""
     if not isinstance(value, list):
         raise TypeError(f"{field_name} must be a list")
     if not all(isinstance(item, str) for item in value):
@@ -113,6 +184,7 @@ def _parse_string_list(value: object, *, field_name: str) -> tuple[str, ...]:
 
 
 def _parse_string_dict(value: object, *, field_name: str) -> dict[str, str]:
+    """문자열 키/값 매핑을 검증하고 새 dict로 복사한다."""
     if not isinstance(value, dict):
         raise TypeError(f"{field_name} must be a mapping")
     if not all(isinstance(key, str) and isinstance(item, str) for key, item in value.items()):
@@ -121,6 +193,7 @@ def _parse_string_dict(value: object, *, field_name: str) -> dict[str, str]:
 
 
 def _parse_json_mapping(value: object, *, field_name: str) -> dict[str, JsonValue]:
+    """JSON 호환 값만 담는 매핑 필드를 검증한다."""
     if not isinstance(value, dict):
         raise TypeError(f"{field_name} must be a mapping")
     if not all(isinstance(key, str) for key in value):
@@ -129,6 +202,7 @@ def _parse_json_mapping(value: object, *, field_name: str) -> dict[str, JsonValu
 
 
 def _parse_sources(value: object) -> tuple[SourceRef, ...]:
+    """sources 배열을 SourceRef 튜플로 변환한다."""
     if not isinstance(value, list):
         raise TypeError("sources must be a list")
 
@@ -159,6 +233,7 @@ def _parse_sources(value: object) -> tuple[SourceRef, ...]:
 
 
 def _parse_exports(value: object) -> tuple[ExportTarget, ...]:
+    """exports 배열을 ExportTarget 튜플로 변환한다."""
     if not isinstance(value, list):
         raise TypeError("exports must be a list")
 
@@ -175,6 +250,7 @@ def _parse_exports(value: object) -> tuple[ExportTarget, ...]:
 
 
 def _ensure_mapping(value: object, *, field_name: str) -> dict[str, object]:
+    """문자열 키를 가진 매핑인지 확인하고 복사본을 반환한다."""
     if not isinstance(value, dict):
         raise TypeError(f"{field_name} must be a mapping")
     if not all(isinstance(key, str) for key in value):
