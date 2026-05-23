@@ -34,6 +34,12 @@ class TableStatistics:
     null_counts: dict[str, int] = field(default_factory=dict)
     duplicate_rate: float = 0.0
 
+    def __post_init__(self) -> None:
+        # frozen=True only blocks attribute reassignment; the mapping itself
+        # stays mutable. Store a defensive copy so a caller mutating the dict
+        # they passed in cannot alter this otherwise-immutable value.
+        object.__setattr__(self, "null_counts", dict(self.null_counts))
+
 
 @dataclass(frozen=True)
 class PreviewSlice:
@@ -58,7 +64,12 @@ class ValidationResult:
 
 @dataclass(frozen=True)
 class SilverDataset:
-    """Tabularized, validated dataset produced by the Silver stage."""
+    """Tabularized, validated dataset produced by the Silver stage.
+
+    ``frozen=True`` here is shallow: ``table`` is held by reference. A Polars
+    ``DataFrame`` is treated as immutable by convention (its operations return
+    new frames), so this is safe in practice but is not deep immutability.
+    """
 
     table: pl.DataFrame
     schema_summary: SchemaSummary

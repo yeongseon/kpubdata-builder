@@ -13,6 +13,7 @@ from kpubdata_builder.stages.silver import (
     build_silver_dataset,
     persist_silver_dataset,
 )
+from kpubdata_builder.stages.silver.models import TableStatistics
 from kpubdata_builder.stages.silver.normalize import normalize_table
 from kpubdata_builder.stages.silver.preview import build_preview
 from kpubdata_builder.stages.silver.summarize import (
@@ -45,6 +46,13 @@ def test_summarize_statistics_counts_rows_nulls_and_duplicates() -> None:
     assert stats.row_count == 3
     assert stats.null_counts == {"id": 0, "amount": 0}
     assert stats.duplicate_rate == pytest.approx(1 / 3)
+
+
+def test_table_statistics_defends_against_external_mutation() -> None:
+    source = {"id": 0}
+    stats = TableStatistics(row_count=1, null_counts=source)
+    source["id"] = 999  # mutating the original must not affect the frozen value
+    assert stats.null_counts == {"id": 0}
 
 
 def test_build_preview_limits_rows_but_keeps_total() -> None:
