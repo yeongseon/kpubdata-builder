@@ -1,6 +1,6 @@
 """Silver 단계 산출물을 실행 워크스페이스에 저장한다 (#46).
 
-SilverDataset을 build/{run_id}/silver/{source_key}/ 아래에 저장한다. 테이블은
+SilverDataset을 output_root/{run_id}/silver/{source_key}/ 아래에 저장한다. 테이블은
 parquet으로, 스키마/통계/미리보기/검증 정보는 결정적 JSON으로 기록한다.
 
 주요 구성:
@@ -66,7 +66,7 @@ def persist_silver_dataset(
     output_root: Path,
     run_id: str,
 ) -> SilverPersistResult:
-    """Silver 산출물을 build/{run_id}/silver/{source_key}/ 아래에 기록한다.
+    """Silver 산출물을 output_root/{run_id}/silver/{source_key}/ 아래에 기록한다.
 
     run_id 또는 source_key에 안전하지 않은 경로 문자가 포함되면 ValueError를
     발생시킨다.
