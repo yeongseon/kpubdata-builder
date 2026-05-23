@@ -80,3 +80,9 @@ class TestPersistGoldPackage:
 
         with pytest.raises(ValueError, match="dataset_name"):
             _ = persist_gold_package(package, output_root=tmp_path, run_id="run1")
+
+    def test_rejects_unsafe_run_id(self, tmp_path: Path) -> None:
+        package = build_gold_package(_silver(({"id": "1"},)), dataset_name="apt_trade")
+
+        with pytest.raises(ValueError, match="run_id"):
+            _ = persist_gold_package(package, output_root=tmp_path, run_id="../escape")

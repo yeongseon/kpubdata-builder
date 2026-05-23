@@ -1,6 +1,6 @@
 """Gold 단계 산출물을 실행 워크스페이스에 저장한다 (#47).
 
-GoldPackage를 build/{run_id}/gold/{dataset_name}/ 아래에 저장한다. 테이블은
+GoldPackage를 output_root/{run_id}/gold/{dataset_name}/ 아래에 저장한다. 테이블은
 parquet으로, 패키지 메타데이터는 결정적 JSON으로 기록한다.
 
 주요 구성:
@@ -62,7 +62,7 @@ def persist_gold_package(
     output_root: Path,
     run_id: str,
 ) -> GoldPersistResult:
-    """Gold 산출물을 build/{run_id}/gold/{dataset_name}/ 아래에 기록한다.
+    """Gold 산출물을 output_root/{run_id}/gold/{dataset_name}/ 아래에 기록한다.
 
     run_id 또는 dataset_name에 안전하지 않은 경로 문자가 포함되면 ValueError를
     발생시킨다.
