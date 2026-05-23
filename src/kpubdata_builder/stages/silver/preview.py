@@ -16,7 +16,7 @@ DEFAULT_PREVIEW_ROWS = 10
 def _to_json_safe(value: object) -> JsonValue:
     """Convert a Polars-deserialized value to a JSON-serializable Python type."""
     if value is None or isinstance(value, (bool, int, float, str)):
-        return value  # type: ignore[return-value]
+        return value
     if isinstance(value, (datetime.datetime, datetime.date)):
         return value.isoformat()
     if isinstance(value, datetime.timedelta):
