@@ -55,7 +55,8 @@ def persist_bronze_artifact(
     output_root: Path,
     run_id: str,
 ) -> BronzePersistResult:
-    """원시 레코드와 메타데이터를 build/{run_id}/bronze/{source_key}/{artifact_id} 아래에 기록한다.
+    """원시 레코드와 메타데이터를 output_root/{run_id}/bronze/{source_key}/{artifact_id}
+    아래에 기록한다.
 
     run_id 또는 source_key에 안전하지 않은 경로 문자가 포함되면 ValueError를 발생시킨다.
     """
