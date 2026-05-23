@@ -11,15 +11,13 @@ parquet으로, 패키지 메타데이터는 결정적 JSON으로 기록한다.
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
 from ...spec import JsonValue
+from .._path_safety import ensure_within, validate_path_segment
 from .models import GoldPackage
-
-_SAFE_PATH_SEGMENT = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
 
 
 @dataclass(frozen=True)
@@ -35,19 +33,6 @@ class GoldPersistResult:
     gold_dir: Path
     table_path: Path
     package_path: Path
-
-
-def _validate_path_segment(value: str, *, field_name: str) -> None:
-    """워크스페이스를 벗어날 수 있는 경로 세그먼트를 거부한다."""
-    if not value:
-        raise ValueError(f"{field_name} must not be empty")
-    if value != value.strip():
-        raise ValueError(f"{field_name} must not have leading/trailing whitespace")
-    if not _SAFE_PATH_SEGMENT.match(value):
-        raise ValueError(
-            f"{field_name} contains unsafe characters: {value!r}. "
-            "Only alphanumeric, dot, hyphen, and underscore are allowed."
-        )
 
 
 def _package_metadata(package: GoldPackage) -> dict[str, JsonValue]:
@@ -90,18 +75,11 @@ def persist_gold_package(
     반환값:
         GoldPersistResult: 기록된 파일 경로 모음.
     """
-    _validate_path_segment(run_id, field_name="run_id")
-    _validate_path_segment(package.dataset_name, field_name="dataset_name")
+    validate_path_segment(run_id, field_name="run_id")
+    validate_path_segment(package.dataset_name, field_name="dataset_name")
 
     gold_dir = output_root / run_id / "gold" / package.dataset_name
-
-    # 최종 포함 여부 검사: 해석된 경로는 반드시 output_root 아래에 있어야 한다.
-    resolved_root = output_root.resolve()
-    resolved_gold = gold_dir.resolve()
-    if not str(resolved_gold).startswith(str(resolved_root)):
-        raise ValueError(
-            f"Resolved gold directory {resolved_gold} escapes output_root {resolved_root}"
-        )
+    ensure_within(output_root, gold_dir, label="gold directory")
 
     gold_dir.mkdir(parents=True, exist_ok=True)
 
