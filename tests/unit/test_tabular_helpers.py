@@ -10,9 +10,9 @@ from kpubdata_builder.tabular import (
     CastReport,
     CastResult,
     cast_columns,
-    records_to_dataframe,
     validate_required_columns,
 )
+from kpubdata_builder.tabular.convert import records_to_dataframe
 
 
 def test_records_to_dataframe_converts_raw_records_without_mutating_input() -> None:
@@ -50,7 +50,7 @@ def test_validate_required_columns_raises_for_missing_columns() -> None:
     df = records_to_dataframe(({"id": "1"},))
 
     with pytest.raises(ValueError, match="Missing required columns: amount, district"):
-        validate_required_columns(df, ("id", "amount", "district"))
+        _ = validate_required_columns(df, ("id", "amount", "district"))
 
 
 def test_cast_columns_casts_named_dtypes_without_changing_original_dataframe() -> None:
@@ -122,7 +122,7 @@ def test_cast_columns_raises_for_missing_column() -> None:
     df = records_to_dataframe(({"id": "1"},))
 
     with pytest.raises(ValueError, match="Cannot cast missing column"):
-        cast_columns(df, {"amount": "int"})
+        _ = cast_columns(df, {"amount": "int"})
 
 
 def test_cast_columns_raises_for_unknown_dtype() -> None:
@@ -130,7 +130,7 @@ def test_cast_columns_raises_for_unknown_dtype() -> None:
     df = records_to_dataframe(({"id": "1"},))
 
     with pytest.raises(ValueError, match="Unsupported dtype"):
-        cast_columns(df, {"id": "money"})
+        _ = cast_columns(df, {"id": "money"})
 
 
 def test_cast_columns_audit_returns_cast_result() -> None:
