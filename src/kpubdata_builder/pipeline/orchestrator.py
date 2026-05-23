@@ -1,0 +1,177 @@
+"""Medallion 파이프라인 오케스트레이터 (#48).
+
+BuildSpec의 각 소스를 Bronze → Silver → Gold 순서로 실행하고, 각 단계 산출물을
+실행 워크스페이스에 저장한 뒤 빌드 매니페스트를 기록한다.
+
+부분 성공 정책(BUILD_STATE.md): 소스 중 하나라도 실패하면 전체 상태는 failed로
+기록하되, 성공한 소스의 산출물과 실패 정보를 매니페스트에 함께 남긴다.
+
+Export 단계 연결은 stage-aware exporter 도입(#28/v0.2) 시점으로 연기한다.
+
+주요 구성:
+    - SourceBuildOutcome: 소스별 실행 결과
+    - BuildResult: 전체 실행 결과
+    - run_build: 파이프라인 진입점
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+
+from ..manifest import BuildManifest, manifest_writer
+from ..spec import BuildSpec, SourceRef
+from ..stages.bronze.build import SourceClient, build_bronze_artifact
+from ..stages.bronze.models import utc_now
+from ..stages.bronze.persist import persist_bronze_artifact
+from ..stages.gold.build import build_gold_package
+from ..stages.gold.persist import persist_gold_package
+from ..stages.silver.build import build_silver_dataset
+from ..stages.silver.persist import persist_silver_dataset
+from .context import BuildContext
+
+
+@dataclass(frozen=True)
+class SourceBuildOutcome:
+    """단일 소스에 대한 파이프라인 실행 결과.
+
+    속성:
+        source_key: 소스 식별자.
+        status: "ok" 또는 "failed".
+        stages_completed: 성공적으로 끝난 단계 이름 순서 (bronze/silver/gold).
+        error: 실패 시 오류 메시지.
+    """
+
+    source_key: str
+    status: str
+    stages_completed: tuple[str, ...] = ()
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class BuildResult:
+    """전체 빌드 실행 결과.
+
+    속성:
+        context: 실행 컨텍스트.
+        status: 전체 상태 ("ok" 또는 "failed").
+        outcomes: 소스별 실행 결과.
+        manifest_path: 기록된 빌드 매니페스트 경로.
+    """
+
+    context: BuildContext
+    status: str
+    outcomes: tuple[SourceBuildOutcome, ...]
+    manifest_path: Path
+
+
+def _source_key(source: SourceRef) -> str:
+    """소스 식별자를 alias 우선으로 결정한다."""
+    return source.alias if source.alias else f"{source.provider}.{source.dataset}"
+
+
+def _run_source_pipeline(
+    source: SourceRef,
+    *,
+    client: SourceClient,
+    context: BuildContext,
+    outputs: list[str],
+    row_counts: dict[str, int],
+) -> SourceBuildOutcome:
+    """한 소스를 Bronze → Silver → Gold로 실행하고 산출물을 저장한다."""
+    key = _source_key(source)
+    completed: list[str] = []
+    try:
+        bronze = build_bronze_artifact(client, source_key=key, fetch_params=dict(source.params))
+        bronze_paths = persist_bronze_artifact(
+            bronze, output_root=context.output_root, run_id=context.run_id
+        )
+        completed.append("bronze")
+        outputs.extend([str(bronze_paths.records_path), str(bronze_paths.metadata_path)])
+
+        silver = build_silver_dataset(bronze)
+        silver_paths = persist_silver_dataset(
+            silver, output_root=context.output_root, run_id=context.run_id
+        )
+        completed.append("silver")
+        outputs.append(str(silver_paths.table_path))
+
+        gold = build_gold_package(silver, dataset_name=key, exports=context.spec.exports)
+        gold_paths = persist_gold_package(
+            gold, output_root=context.output_root, run_id=context.run_id
+        )
+        completed.append("gold")
+        outputs.append(str(gold_paths.table_path))
+
+        row_counts[key] = silver.statistics.row_count
+        return SourceBuildOutcome(source_key=key, status="ok", stages_completed=tuple(completed))
+    except Exception as exc:  # stage 실패를 결과로 변환하여 매니페스트에 기록
+        return SourceBuildOutcome(
+            source_key=key,
+            status="failed",
+            stages_completed=tuple(completed),
+            error=str(exc),
+        )
+
+
+def run_build(
+    spec: BuildSpec,
+    *,
+    client: SourceClient,
+    output_root: Path,
+    run_id: str | None = None,
+) -> BuildResult:
+    """BuildSpec을 Medallion 파이프라인으로 실행한다.
+
+    매개변수:
+        spec: 실행할 빌드 명세.
+        client: Bronze fetch에 사용할 kpubdata 호환 클라이언트.
+        output_root: 실행 워크스페이스 루트.
+        run_id: 실행 식별자. 생략 시 타임스탬프 기반으로 생성.
+
+    반환값:
+        BuildResult: 전체 상태, 소스별 결과, 매니페스트 경로.
+
+    예외:
+        ValueError: run_id에 안전하지 않은 문자가 포함된 경우.
+    """
+    context = BuildContext.create(spec, output_root=output_root, run_id=run_id)
+
+    outputs: list[str] = []
+    row_counts: dict[str, int] = {}
+    outcomes = tuple(
+        _run_source_pipeline(
+            source,
+            client=client,
+            context=context,
+            outputs=outputs,
+            row_counts=row_counts,
+        )
+        for source in spec.sources
+    )
+
+    errors = tuple(
+        f"{outcome.source_key}: {outcome.error}"
+        for outcome in outcomes
+        if outcome.status == "failed" and outcome.error is not None
+    )
+    status = "ok" if not errors else "failed"
+
+    manifest = BuildManifest(
+        build_id=context.run_id,
+        started_at=context.started_at,
+        finished_at=utc_now(),
+        inputs=tuple(_source_key(source) for source in spec.sources),
+        outputs=tuple(outputs),
+        errors=errors,
+        row_counts=row_counts,
+    )
+    manifest_path = context.output_root / context.run_id / "manifest.json"
+    manifest_writer(manifest, manifest_path)
+
+    return BuildResult(
+        context=context,
+        status=status,
+        outcomes=outcomes,
+        manifest_path=manifest_path,
+    )
