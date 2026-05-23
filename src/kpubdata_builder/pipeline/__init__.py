@@ -1,10 +1,22 @@
-"""파이프라인 오케스트레이션 패키지 (Medallion 재구성 골격).
+"""파이프라인 오케스트레이션 패키지 (#48).
 
-Bronze → Silver → Gold → Export → Manifest 흐름을 묶는 orchestrator와
-BuildContext가 이 패키지에 들어온다 (issue #48). 현재는 디렉터리 구조로
-Medallion 파이프라인의 진입점 위치를 드러내기 위한 골격이다.
+Bronze → Silver → Gold → (Export) → Manifest 흐름을 묶는 orchestrator와 실행
+컨텍스트를 노출한다. Export 단계 연결은 stage-aware exporter(#28/v0.2)에서 추가한다.
+
+주요 구성:
+    - BuildContext: 단일 실행 컨텍스트
+    - run_build: 파이프라인 진입점
+    - BuildResult / SourceBuildOutcome: 실행 결과 모델
 """
 
 from __future__ import annotations
 
-__all__: list[str] = []
+from .context import BuildContext
+from .orchestrator import BuildResult, SourceBuildOutcome, run_build
+
+__all__ = [
+    "BuildContext",
+    "BuildResult",
+    "SourceBuildOutcome",
+    "run_build",
+]
