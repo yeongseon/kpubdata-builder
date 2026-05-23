@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import pytest
-
+import kpubdata_builder.tabular as tabular
 from kpubdata_builder.spec import JsonValue
 from kpubdata_builder.tabular import (
     ColumnInfo,
@@ -11,11 +10,10 @@ from kpubdata_builder.tabular import (
     SchemaInfo,
     TableStatistics,
     compute_statistics,
-    dataframe_to_records,
     generate_preview,
     infer_schema,
-    records_to_dataframe,
 )
+from kpubdata_builder.tabular.convert import dataframe_to_records, records_to_dataframe
 
 
 class TestInferSchema:
@@ -65,7 +63,7 @@ class TestComputeStatistics:
         assert stats.row_count == 3
         assert stats.null_counts == {"id": 0, "v": 1}
         # 3행 중 고유 행 2개 → 중복률 = 1 - 2/3
-        assert stats.duplicate_rate == pytest.approx(1 / 3)
+        assert abs(stats.duplicate_rate - (1 / 3)) < 1e-9
 
     def test_empty_dataframe_yields_zeroed_statistics(self) -> None:
         stats = compute_statistics(records_to_dataframe(()))
@@ -101,6 +99,12 @@ class TestGeneratePreview:
         assert preview.rows == ()
         assert preview.total_rows == 0
 
+    def test_zero_limit_returns_no_rows_but_keeps_total(self) -> None:
+        preview = generate_preview(records_to_dataframe(({"n": 1}, {"n": 2})), limit=0)
+
+        assert preview.rows == ()
+        assert preview.total_rows == 2
+
 
 class TestDataframeToRecords:
     def test_round_trips_with_records_to_dataframe(self) -> None:
@@ -115,3 +119,17 @@ class TestDataframeToRecords:
 
     def test_empty_dataframe_returns_empty_list(self) -> None:
         assert dataframe_to_records(records_to_dataframe(())) == []
+
+    def test_round_trips_nested_json_values(self) -> None:
+        records: list[dict[str, JsonValue]] = [
+            {"id": "1", "meta": {"city": "서울", "codes": ["1", "2", None]}},
+        ]
+
+        assert dataframe_to_records(records_to_dataframe(records)) == records
+
+
+def test_root_package_does_not_reexport_dataframe_converters() -> None:
+    assert "records_to_dataframe" not in tabular.__all__
+    assert "dataframe_to_records" not in tabular.__all__
+    assert not hasattr(tabular, "records_to_dataframe")
+    assert not hasattr(tabular, "dataframe_to_records")
