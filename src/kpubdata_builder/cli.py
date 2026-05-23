@@ -17,11 +17,13 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from . import __version__
-from .errors import SpecLoadError, ValidationError
+from .build import execute_build
+from .errors import BuildError, SpecLoadError, ValidationError
+from .executor import SourceClient
 from .spec import load_spec
 from .spec.validator import validate_spec
 
-_RESERVED_COMMANDS: frozenset[str] = frozenset({"preview", "build"})
+_RESERVED_COMMANDS: frozenset[str] = frozenset({"preview"})
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -64,9 +66,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     build_cmd = subparsers.add_parser(
         "build",
-        help="Execute a BuildSpec to produce artifacts (reserved; not implemented yet).",
+        help="Execute a BuildSpec to produce artifacts.",
     )
-    build_cmd.add_argument("spec", nargs="?", help="Path to the BuildSpec YAML file.")
+    build_cmd.add_argument("spec", help="Path to the BuildSpec YAML file.")
+    build_cmd.add_argument(
+        "--output-dir",
+        default="./dist",
+        help="Directory where artifacts and manifest are written (default: ./dist).",
+    )
 
     return parser
 
@@ -95,6 +102,41 @@ def _run_validate(spec_path: str) -> int:
             print(f"  - {problem}", file=sys.stderr)
         return 1
     print(f"spec is valid: {spec.dataset_id}")
+    return 0
+
+
+def _make_default_client() -> SourceClient:
+    """Create the default kpubdata client. Isolated for test injection."""
+    from kpubdata import Client
+
+    return Client.from_env()    # type: ignore[return-value]
+
+
+def _run_build(spec_path: str, output_dir: str) -> int:
+    try:
+        spec = load_spec(Path(spec_path))
+        validate_spec(spec)
+    except SpecLoadError as exc:
+        print(f"error: failed to load spec: {exc}", file=sys.stderr)
+        return 1
+    except ValidationError as exc:
+        print("error: spec validation failed:", file=sys.stderr)
+        for problem in exc.problems:
+            print(f"  - {problem}", file=sys.stderr)
+        return 1
+
+    try:
+        client = _make_default_client()
+        result = execute_build(spec, client, output_dir=Path(output_dir))
+    except BuildError as exc:
+        print(f"error: build failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"built spec: {spec.dataset_id}")
+    print("artifacts:")
+    for path in result.artifact_paths:
+        print(f"  - {path}")
+    print(f"manifest: {result.manifest_path}")
     return 0
 
 
@@ -132,6 +174,8 @@ def dispatch(args: argparse.Namespace) -> int:
     command = args.command
     if command == "validate":
         return _run_validate(args.spec)
+    if command == "build":
+        return _run_build(args.spec, args.output_dir)
     if command in _RESERVED_COMMANDS:
         return _run_reserved(command)
     # 일반적인 CLI 경로로는 도달할 수 없지만(argparse가 알 수 없는 하위 명령을 거부함),
