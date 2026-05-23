@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
+from pathlib import Path
+from typing import cast
 
 import polars as pl
 import pytest
@@ -18,9 +21,11 @@ from kpubdata_builder.stages.gold import (
 from kpubdata_builder.stages.silver import SilverDataset, build_silver_dataset
 
 
-def _silver(records: tuple[dict[str, JsonValue], ...]) -> SilverDataset:
+def _silver(records: tuple[Mapping[str, JsonValue], ...]) -> SilverDataset:
     bronze = BronzeArtifact(
-        source_key="datago.apt_trade", raw_records=records, fetched_at=utc_now()
+        source_key="datago.apt_trade",
+        raw_records=tuple(dict(record) for record in records),
+        fetched_at=utc_now(),
     )
     return build_silver_dataset(bronze)
 
@@ -46,7 +51,7 @@ class TestBuildGoldPackage:
 
 
 class TestPersistGoldPackage:
-    def test_writes_parquet_and_package_json(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    def test_writes_parquet_and_package_json(self, tmp_path: Path) -> None:
         silver = _silver(({"id": "1", "amount": 1000}, {"id": "2", "amount": 2500}))
         package = build_gold_package(
             silver,
@@ -60,14 +65,18 @@ class TestPersistGoldPackage:
         assert result.package_path.exists()
         assert pl.read_parquet(result.table_path).to_dicts() == package.table.to_dicts()
 
-        meta = json.loads(result.package_path.read_text(encoding="utf-8"))
+        meta = cast(
+            dict[str, JsonValue], json.loads(result.package_path.read_text(encoding="utf-8"))
+        )
         assert meta["dataset_name"] == "apt_trade"
         assert meta["row_count"] == 2
-        assert meta["export_plan"]["targets"][0]["kind"] == "jsonl"
+        export_plan = cast(dict[str, JsonValue], meta["export_plan"])
+        targets = cast(list[dict[str, JsonValue]], export_plan["targets"])
+        assert targets[0]["kind"] == "jsonl"
         assert meta["source_silver"] == "datago.apt_trade"
 
-    def test_rejects_unsafe_dataset_name(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    def test_rejects_unsafe_dataset_name(self, tmp_path: Path) -> None:
         package = build_gold_package(_silver(({"id": "1"},)), dataset_name="../escape")
 
         with pytest.raises(ValueError, match="dataset_name"):
-            persist_gold_package(package, output_root=tmp_path, run_id="run1")
+            _ = persist_gold_package(package, output_root=tmp_path, run_id="run1")
