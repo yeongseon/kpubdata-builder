@@ -22,8 +22,7 @@ from pathlib import Path
 from ..manifest import BuildManifest, manifest_writer
 from ..spec import BuildSpec, SourceRef
 from ..stages.bronze.build import SourceClient, build_bronze_artifact
-from ..stages.bronze.models import BronzeArtifact
-from ..stages.bronze.models import utc_now
+from ..stages.bronze.models import BronzeArtifact, utc_now
 from ..stages.bronze.persist import persist_bronze_artifact
 from ..stages.gold.build import build_gold_package
 from ..stages.gold.persist import persist_gold_package
