@@ -8,7 +8,6 @@ flat 모듈(spec.py, validator.py, manifest.py)이 Medallion 구조의 패키지
 from __future__ import annotations
 
 import importlib
-import importlib.util
 
 import pytest
 
@@ -92,15 +91,14 @@ class TestPublicSurfacePreserved:
             assert hasattr(pkg, name), name
 
 
-class TestFlatModulesRemoved:
-    @pytest.mark.parametrize(
-        "module",
-        [
-            "kpubdata_builder.validator",
-        ],
-    )
-    def test_flat_module_no_longer_exists(self, module: str) -> None:
-        assert importlib.util.find_spec(module) is None
+class TestBackwardCompatShim:
+    def test_flat_validator_path_reexports_spec_validator(self) -> None:
+        # `from kpubdata_builder.validator import validate_spec` 경로가 유지되며
+        # spec.validator의 동일 함수를 가리키는지 확인한다 (compat shim).
+        from kpubdata_builder import validator
+        from kpubdata_builder.spec import validator as spec_validator
+
+        assert validator.validate_spec is spec_validator.validate_spec
 
     def test_spec_and_manifest_are_packages(self) -> None:
         for name in ("kpubdata_builder.spec", "kpubdata_builder.manifest"):
