@@ -14,7 +14,7 @@ from collections.abc import Mapping
 
 import polars as pl
 
-from ...tabular import records_to_dataframe
+from ...tabular.convert import records_to_dataframe
 from ...tabular.polars_helpers import DtypeSpec, cast_columns
 from ..bronze.models import BronzeArtifact
 

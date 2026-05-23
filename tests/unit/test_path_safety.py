@@ -41,3 +41,14 @@ class TestEnsureWithin:
 
         with pytest.raises(ValueError, match="escapes output_root"):
             ensure_within(root, root / ".." / "outside", label="dir")
+
+    def test_rejects_escape_via_existing_symlink(self, tmp_path: Path) -> None:
+        root = tmp_path / "root"
+        root.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        link = root / "linked"
+        link.symlink_to(outside, target_is_directory=True)
+
+        with pytest.raises(ValueError, match="escapes output_root"):
+            ensure_within(root, link / "child", label="dir")

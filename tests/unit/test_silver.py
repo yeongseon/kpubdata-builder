@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
+from pathlib import Path
+from typing import cast
 
 import polars as pl
 import pytest
@@ -19,9 +22,14 @@ from kpubdata_builder.tabular import PreviewSlice, SchemaInfo, TableStatistics
 
 
 def _bronze(
-    records: tuple[dict[str, JsonValue], ...], *, source_key: str = "datago.apt_trade"
+    records: tuple[Mapping[str, JsonValue], ...], *, source_key: str = "datago.apt_trade"
 ) -> BronzeArtifact:
-    return BronzeArtifact(source_key=source_key, raw_records=records, fetched_at=utc_now())
+    normalized_records = tuple(dict(record) for record in records)
+    return BronzeArtifact(
+        source_key=source_key,
+        raw_records=normalized_records,
+        fetched_at=utc_now(),
+    )
 
 
 class TestBuildSilverDataset:
@@ -78,7 +86,7 @@ class TestBuildSilverDataset:
 
 
 class TestPersistSilverDataset:
-    def test_writes_parquet_and_json_sidecars(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    def test_writes_parquet_and_json_sidecars(self, tmp_path: Path) -> None:
         bronze = _bronze(
             (
                 {"id": "1", "amount": 1000},
@@ -99,18 +107,22 @@ class TestPersistSilverDataset:
         assert pl.read_parquet(result.table_path).to_dicts() == dataset.table.to_dicts()
 
         # json sidecars are well-formed and reflect the dataset
-        stats = json.loads(result.stats_path.read_text(encoding="utf-8"))
+        stats = cast(
+            dict[str, JsonValue], json.loads(result.stats_path.read_text(encoding="utf-8"))
+        )
         assert stats["row_count"] == 2
-        validation = json.loads(result.validation_path.read_text(encoding="utf-8"))
+        validation = cast(
+            dict[str, JsonValue], json.loads(result.validation_path.read_text(encoding="utf-8"))
+        )
         assert validation["ok"] is True
 
-    def test_rejects_unsafe_run_id(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    def test_rejects_unsafe_run_id(self, tmp_path: Path) -> None:
         dataset = build_silver_dataset(_bronze(({"id": "1"},)))
 
         with pytest.raises(ValueError, match="run_id"):
-            persist_silver_dataset(dataset, output_root=tmp_path, run_id="../escape")
+            _ = persist_silver_dataset(dataset, output_root=tmp_path, run_id="../escape")
 
-    def test_serializes_date_values_as_iso_strings(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    def test_serializes_date_values_as_iso_strings(self, tmp_path: Path) -> None:
         # Date/Datetime으로 캐스팅된 컬럼이 preview에 들어가도 persist가 깨지지 않고
         # ISO 문자열로 직렬화되는지 검증한다 (#93 review).
         bronze = _bronze(({"d": "2025-01-01"}, {"d": "2025-01-02"}))
@@ -118,5 +130,8 @@ class TestPersistSilverDataset:
 
         result = persist_silver_dataset(dataset, output_root=tmp_path, run_id="run1")
 
-        preview = json.loads(result.preview_path.read_text(encoding="utf-8"))
-        assert preview["rows"][0]["d"] == "2025-01-01"
+        preview = cast(
+            dict[str, JsonValue], json.loads(result.preview_path.read_text(encoding="utf-8"))
+        )
+        rows = cast(list[dict[str, JsonValue]], preview["rows"])
+        assert rows[0]["d"] == "2025-01-01"
