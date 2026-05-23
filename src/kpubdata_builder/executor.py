@@ -10,11 +10,13 @@ BuildSpec 검증과 최소 provenance 구성을 수행하는 실행 스텁을 �
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from typing import Protocol
 
 from .artifact import ArtifactDataset
 from .errors import ExecutionError, ValidationError
-from .spec import BuildSpec
+from .spec import BuildSpec, JsonValue, SourceRef
 from .spec.validator import validate_spec
 
 
@@ -64,8 +66,58 @@ def source_executor(spec: BuildSpec) -> ExecutionResult:
         raise ExecutionError(
             f"Failed to execute sources for dataset {spec.dataset_id}: {exc}"
         ) from exc
-
     return ExecutionResult(artifact=artifact)
 
 
-__all__ = ["ExecutionResult", "source_executor"]
+class DatasetResult(Protocol):
+    """Minimal result shape returned by a kpubdata dataset query."""
+
+    @property
+    def items(self) -> Iterable[dict[str, JsonValue]]:
+        """Return fetched records."""
+
+
+class SourceDataset(Protocol):
+    """Minimal dataset shape used to fetch source records."""
+
+    def list(self, **params: JsonValue) -> DatasetResult:
+        """Fetch records for one parameter set."""
+
+
+class SourceClient(Protocol):
+    """Minimal client shape used to resolve source datasets."""
+
+    def dataset(self, dataset_id: str) -> SourceDataset:
+        """Return a dataset object for a dataset_id."""
+
+
+def _source_key(source: SourceRef) -> str:
+    """Key a source by its alias when present, else provider.dataset."""
+    return source.alias if source.alias else f"{source.provider}.{source.dataset}"
+
+
+def execute_sources(
+    spec: BuildSpec,
+    client: SourceClient,
+) -> dict[str, Sequence[dict[str, JsonValue]]]:
+    """Fetch records for every declared source via a kpubdata-compatible client.
+
+    Returns a mapping of source key (alias or provider.dataset) to its records,
+    suitable for ``assemble_artifact``. The client is injected so tests can
+    supply a fake without hitting the network.
+    """
+    records_by_source: dict[str, Sequence[dict[str, JsonValue]]] = {}
+    for source in spec.sources:
+        key = _source_key(source)
+        try:
+            dataset = client.dataset(f"{source.provider}.{source.dataset}")
+            result = dataset.list(**source.params)
+            records_by_source[key] = list(result.items)
+        except Exception as exc:
+            raise ExecutionError(
+                f"Failed to fetch source {key} for dataset {spec.dataset_id}: {exc}"
+            ) from exc
+    return records_by_source
+
+
+__all__ = ["ExecutionResult", "execute_sources", "source_executor"]

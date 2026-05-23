@@ -144,26 +144,6 @@ def test_preview_without_spec_is_reserved(capsys: pytest.CaptureFixture[str]) ->
     assert "not implemented" in captured.err
 
 
-def test_build_is_reserved(capsys: pytest.CaptureFixture[str]) -> None:
-    # 예약 명령 build가 미구현 오류를 반환하는지 검증한다.
-    exit_code = main(["build", "any.yaml"])
-    captured = capsys.readouterr()
-
-    assert exit_code == 1
-    assert "build" in captured.err
-    assert "not implemented" in captured.err
-
-
-def test_build_without_spec_is_reserved(capsys: pytest.CaptureFixture[str]) -> None:
-    # build 인자가 없어도 예약 명령 오류 메시지를 유지해야 한다.
-    exit_code = main(["build"])
-    captured = capsys.readouterr()
-
-    assert exit_code == 1
-    assert "build" in captured.err
-    assert "not implemented" in captured.err
-
-
 def test_validate_fails_for_malformed_yaml(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
