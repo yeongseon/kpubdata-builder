@@ -86,7 +86,7 @@ def test_validate_succeeds_for_valid_spec(
 ) -> None:
     # 유효한 YAML 명세는 validate 명령에서 성공해야 한다.
     spec_path = tmp_path / "spec.yaml"
-    spec_path.write_text(VALID_SPEC_YAML, encoding="utf-8")
+    _ = spec_path.write_text(VALID_SPEC_YAML, encoding="utf-8")
 
     exit_code = main(["validate", str(spec_path)])
     captured = capsys.readouterr()
@@ -114,7 +114,7 @@ def test_validate_fails_for_invalid_spec(
 ) -> None:
     # YAML 문법은 맞아도 필수 필드 검증에 실패하면 오류가 출력되는지 확인한다.
     spec_path = tmp_path / "spec.yaml"
-    spec_path.write_text(INVALID_SPEC_YAML_NO_SOURCES, encoding="utf-8")
+    _ = spec_path.write_text(INVALID_SPEC_YAML_NO_SOURCES, encoding="utf-8")
 
     exit_code = main(["validate", str(spec_path)])
     captured = capsys.readouterr()
@@ -169,7 +169,7 @@ def test_validate_fails_for_malformed_yaml(
 ) -> None:
     # YAML 문법 자체가 깨진 경우 로드 실패로 처리되는지 확인한다.
     spec_path = tmp_path / "bad.yaml"
-    spec_path.write_text("{{{{not: valid: yaml: [", encoding="utf-8")
+    _ = spec_path.write_text("{{{{not: valid: yaml: [", encoding="utf-8")
 
     exit_code = main(["validate", str(spec_path)])
     captured = capsys.readouterr()

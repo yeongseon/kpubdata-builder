@@ -102,7 +102,7 @@ def test_parse_spec_rejects_missing_required_top_level_field(missing: str) -> No
     del payload[missing]
 
     with pytest.raises(SpecLoadError, match=missing):
-        parse_spec(payload)
+        _ = parse_spec(payload)
 
 
 @pytest.mark.parametrize("empty_field", ["dataset_id", "title", "description"])
@@ -112,7 +112,7 @@ def test_parse_spec_rejects_empty_required_top_level_field(empty_field: str) -> 
     payload[empty_field] = ""
 
     with pytest.raises(SpecLoadError, match=empty_field):
-        parse_spec(payload)
+        _ = parse_spec(payload)
 
 
 def test_parse_spec_rejects_missing_sources() -> None:
@@ -120,7 +120,7 @@ def test_parse_spec_rejects_missing_sources() -> None:
     del payload["sources"]
 
     with pytest.raises(SpecLoadError, match="sources"):
-        parse_spec(payload)
+        _ = parse_spec(payload)
 
 
 def test_parse_spec_rejects_empty_sources() -> None:
@@ -128,7 +128,7 @@ def test_parse_spec_rejects_empty_sources() -> None:
     payload["sources"] = []
 
     with pytest.raises(SpecLoadError, match="sources"):
-        parse_spec(payload)
+        _ = parse_spec(payload)
 
 
 def test_parse_spec_rejects_missing_exports() -> None:
@@ -136,7 +136,7 @@ def test_parse_spec_rejects_missing_exports() -> None:
     del payload["exports"]
 
     with pytest.raises(SpecLoadError, match="exports"):
-        parse_spec(payload)
+        _ = parse_spec(payload)
 
 
 def test_parse_spec_rejects_empty_exports() -> None:
@@ -144,7 +144,7 @@ def test_parse_spec_rejects_empty_exports() -> None:
     payload["exports"] = []
 
     with pytest.raises(SpecLoadError, match="exports"):
-        parse_spec(payload)
+        _ = parse_spec(payload)
 
 
 @pytest.mark.parametrize("missing", ["provider", "dataset"])
@@ -156,7 +156,7 @@ def test_parse_spec_rejects_source_missing_required_field(missing: str) -> None:
     del sources[0][missing]
 
     with pytest.raises(SpecLoadError, match=rf"sources\[0\]\.{missing}"):
-        parse_spec(payload)
+        _ = parse_spec(payload)
 
 
 @pytest.mark.parametrize("missing", ["kind", "output_path"])
@@ -168,13 +168,13 @@ def test_parse_spec_rejects_export_missing_required_field(missing: str) -> None:
     del exports[0][missing]
 
     with pytest.raises(SpecLoadError, match=rf"exports\[0\]\.{missing}"):
-        parse_spec(payload)
+        _ = parse_spec(payload)
 
 
 def test_load_spec_round_trips_from_yaml(tmp_path: Path) -> None:
     """A full YAML document parses into the expected BuildSpec."""
     spec_path = tmp_path / "spec.yaml"
-    spec_path.write_text(
+    _ = spec_path.write_text(
         """
 dataset_id: dataset.sample
 title: Sample Dataset
@@ -211,16 +211,16 @@ exports:
 
 def test_load_spec_rejects_empty_yaml(tmp_path: Path) -> None:
     spec_path = tmp_path / "spec.yaml"
-    spec_path.write_text("", encoding="utf-8")
+    _ = spec_path.write_text("", encoding="utf-8")
 
     with pytest.raises(SpecLoadError):
-        load_spec(spec_path)
+        _ = load_spec(spec_path)
 
 
 def test_build_spec_from_yaml_classmethod(tmp_path: Path) -> None:
     """BuildSpec.from_yaml mirrors load_spec for ergonomic call sites."""
     spec_path = tmp_path / "spec.yaml"
-    spec_path.write_text(
+    _ = spec_path.write_text(
         """
 dataset_id: dataset.sample
 title: Sample Dataset

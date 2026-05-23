@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TypeAlias
+from typing import TypeAlias, cast
 
 import yaml
 
@@ -147,7 +147,7 @@ def load_spec(path: Path) -> BuildSpec:
         SpecLoadError: 파일 읽기, YAML 파싱, 최상위 구조 검증 실패 시.
     """
     try:
-        raw_data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        raw_data = cast(object, yaml.safe_load(path.read_text(encoding="utf-8")))
     except (FileNotFoundError, OSError, yaml.YAMLError) as exc:
         raise SpecLoadError(f"Failed to load build spec from {path}: {exc}") from exc
 
@@ -156,7 +156,7 @@ def load_spec(path: Path) -> BuildSpec:
             f"Failed to parse build spec from {path}: top-level YAML must be a mapping"
         )
 
-    return parse_spec(raw_data)
+    return parse_spec(cast(dict[str, object], raw_data))
 
 
 def _require_string(data: dict[str, object], key: str, *, prefix: str = "") -> str:
@@ -189,27 +189,39 @@ def _parse_string_list(value: object, *, field_name: str) -> tuple[str, ...]:
     """문자열 목록 필드를 불변 튜플로 변환한다."""
     if not isinstance(value, list):
         raise TypeError(f"{field_name} must be a list")
-    if not all(isinstance(item, str) for item in value):
+
+    items = cast(list[object], value)
+    if not all(isinstance(item, str) for item in items):
         raise TypeError(f"{field_name} entries must be strings")
-    return tuple(value)
+    return tuple(cast(str, item) for item in items)
 
 
 def _parse_string_dict(value: object, *, field_name: str) -> dict[str, str]:
     """문자열 키/값 매핑을 검증하고 새 dict로 복사한다."""
     if not isinstance(value, dict):
         raise TypeError(f"{field_name} must be a mapping")
-    if not all(isinstance(key, str) and isinstance(item, str) for key, item in value.items()):
-        raise TypeError(f"{field_name} entries must be string pairs")
-    return dict(value)
+
+    raw_mapping = cast(dict[object, object], value)
+    parsed: dict[str, str] = {}
+    for key, item in raw_mapping.items():
+        if not isinstance(key, str) or not isinstance(item, str):
+            raise TypeError(f"{field_name} entries must be string pairs")
+        parsed[key] = item
+    return parsed
 
 
 def _parse_json_mapping(value: object, *, field_name: str) -> dict[str, JsonValue]:
     """JSON 호환 값만 담는 매핑 필드를 검증한다."""
     if not isinstance(value, dict):
         raise TypeError(f"{field_name} must be a mapping")
-    if not all(isinstance(key, str) for key in value):
-        raise TypeError(f"{field_name} keys must be strings")
-    return {key: item for key, item in value.items()}
+
+    raw_mapping = cast(dict[object, JsonValue], value)
+    parsed: dict[str, JsonValue] = {}
+    for key, item in raw_mapping.items():
+        if not isinstance(key, str):
+            raise TypeError(f"{field_name} keys must be strings")
+        parsed[key] = item
+    return parsed
 
 
 def _parse_sources(value: object) -> tuple[SourceRef, ...]:
@@ -219,8 +231,9 @@ def _parse_sources(value: object) -> tuple[SourceRef, ...]:
     if not value:
         raise ValueError("sources must not be empty")
 
+    items = cast(list[object], value)
     parsed_sources: list[SourceRef] = []
-    for index, item in enumerate(value):
+    for index, item in enumerate(items):
         prefix = f"sources[{index}]"
         mapping = _ensure_mapping(item, field_name=prefix)
         provider = _require_string(mapping, "provider", prefix=prefix)
@@ -253,8 +266,9 @@ def _parse_exports(value: object) -> tuple[ExportTarget, ...]:
     if not value:
         raise ValueError("exports must not be empty")
 
+    items = cast(list[object], value)
     parsed_exports: list[ExportTarget] = []
-    for index, item in enumerate(value):
+    for index, item in enumerate(items):
         prefix = f"exports[{index}]"
         mapping = _ensure_mapping(item, field_name=prefix)
         kind = _require_string(mapping, "kind", prefix=prefix)
@@ -270,9 +284,14 @@ def _ensure_mapping(value: object, *, field_name: str) -> dict[str, object]:
     """문자열 키를 가진 매핑인지 확인하고 복사본을 반환한다."""
     if not isinstance(value, dict):
         raise TypeError(f"{field_name} must be a mapping")
-    if not all(isinstance(key, str) for key in value):
-        raise TypeError(f"{field_name} keys must be strings")
-    return {key: item for key, item in value.items()}
+
+    raw_mapping = cast(dict[object, object], value)
+    parsed: dict[str, object] = {}
+    for key, item in raw_mapping.items():
+        if not isinstance(key, str):
+            raise TypeError(f"{field_name} keys must be strings")
+        parsed[key] = item
+    return parsed
 
 
 __all__ = [
