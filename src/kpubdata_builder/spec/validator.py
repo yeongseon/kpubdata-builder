@@ -1,6 +1,8 @@
-"""빌더 명세를 위한 검증 루틴.
+"""빌더 명세 검증 루틴 (Medallion 재구성: 기존 validator.py에서 이동).
 
-이 모듈은 BuildSpec이 최소 실행 요건을 충족하는지 빠르게 검사한다.
+이 모듈은 BuildSpec이 최소 실행 요건을 충족하는지 검사한다. exporter
+레지스트리에 의존하므로 spec 패키지 __init__에서 re-export 하지 않고
+``kpubdata_builder.spec.validator`` 경로로 직접 가져온다 (순환 import 회피).
 
 주요 함수:
     - validate_spec: dataset_id, sources, exports 같은 필수 조건 검증
@@ -8,9 +10,9 @@
 
 from __future__ import annotations
 
-from .errors import ValidationError
-from .exporters import EXPORTER_REGISTRY
-from .spec import BuildSpec
+from ..errors import ValidationError
+from ..exporters import EXPORTER_REGISTRY
+from .models import BuildSpec
 
 
 def validate_spec(spec: BuildSpec) -> None:
@@ -42,8 +44,7 @@ def validate_spec(spec: BuildSpec) -> None:
         if export.kind not in EXPORTER_REGISTRY:
             supported = sorted(EXPORTER_REGISTRY)
             problems.append(
-                f"exports[{i}].kind {export.kind!r} is not supported; "
-                f"supported kinds: {supported}"
+                f"exports[{i}].kind {export.kind!r} is not supported; supported kinds: {supported}"
             )
     for key in spec.metadata:
         if not key.strip():
@@ -51,3 +52,6 @@ def validate_spec(spec: BuildSpec) -> None:
             break
     if problems:
         raise ValidationError(problems)
+
+
+__all__ = ["validate_spec"]

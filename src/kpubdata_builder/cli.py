@@ -19,7 +19,7 @@ from pathlib import Path
 from . import __version__
 from .errors import SpecLoadError, ValidationError
 from .spec import load_spec
-from .validator import validate_spec
+from .spec.validator import validate_spec
 
 _RESERVED_COMMANDS: frozenset[str] = frozenset({"preview", "build"})
 

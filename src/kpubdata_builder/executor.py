@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from .artifact import ArtifactDataset
 from .errors import ExecutionError, ValidationError
 from .spec import BuildSpec
-from .validator import validate_spec
+from .spec.validator import validate_spec
 
 
 @dataclass(frozen=True)
