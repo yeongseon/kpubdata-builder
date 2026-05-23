@@ -5,9 +5,10 @@
 
 주요 구성:
     - CastReport / CastResult: 캐스팅 중 null 증가를 추적하는 보고 객체
-    - records_to_dataframe: 레코드 시퀀스를 DataFrame으로 변환
     - validate_required_columns: 필수 컬럼 존재 여부 확인
     - cast_columns: 지정 타입으로 컬럼 캐스팅
+
+records ↔ DataFrame 변환은 convert 모듈로 이동했다 (#49).
 """
 
 from __future__ import annotations
@@ -17,8 +18,6 @@ from dataclasses import dataclass, field
 from typing import Literal, overload
 
 import polars as pl
-
-from ..spec import JsonValue
 
 DtypeSpec = str | pl.DataType | type[pl.DataType]
 
@@ -76,18 +75,6 @@ class CastResult:
     def has_nulls_introduced(self) -> bool:
         """하나 이상의 컬럼에서 null 증가가 있었는지 반환한다."""
         return any(r.nulls_introduced > 0 for r in self.reports)
-
-
-def records_to_dataframe(records: Sequence[dict[str, JsonValue]]) -> pl.DataFrame:
-    """원시 레코드 매핑을 Polars DataFrame으로 변환한다.
-
-    매개변수:
-        records: JSON 호환 레코드 시퀀스.
-
-    반환값:
-        pl.DataFrame: 입력 레코드의 컬럼 구조를 반영한 DataFrame.
-    """
-    return pl.DataFrame(list(records))
 
 
 def validate_required_columns(

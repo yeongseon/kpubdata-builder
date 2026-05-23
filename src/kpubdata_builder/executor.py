@@ -75,6 +75,7 @@ class DatasetResult(Protocol):
     @property
     def items(self) -> Iterable[dict[str, JsonValue]]:
         """Return fetched records."""
+        ...
 
 
 class SourceDataset(Protocol):
@@ -82,6 +83,7 @@ class SourceDataset(Protocol):
 
     def list(self, **params: JsonValue) -> DatasetResult:
         """Fetch records for one parameter set."""
+        ...
 
 
 class SourceClient(Protocol):
@@ -89,6 +91,7 @@ class SourceClient(Protocol):
 
     def dataset(self, dataset_id: str) -> SourceDataset:
         """Return a dataset object for a dataset_id."""
+        ...
 
 
 def _source_key(source: SourceRef) -> str:

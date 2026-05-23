@@ -93,8 +93,6 @@ class TestPublicSurfacePreserved:
 
 class TestBackwardCompatShim:
     def test_flat_validator_path_reexports_spec_validator(self) -> None:
-        # `from kpubdata_builder.validator import validate_spec` 경로가 유지되며
-        # spec.validator의 동일 함수를 가리키는지 확인한다 (compat shim).
         from kpubdata_builder import validator
         from kpubdata_builder.spec import validator as spec_validator
 
