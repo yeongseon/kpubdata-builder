@@ -1,3 +1,5 @@
+"""실행 스텁의 성공, 검증 실패, 래핑 오류 동작을 검증한다."""
+
 from __future__ import annotations
 
 import pytest
@@ -8,6 +10,7 @@ from kpubdata_builder.spec import BuildSpec, ExportTarget, SourceRef
 
 
 def test_source_executor_returns_execution_result() -> None:
+    # 유효한 명세가 provenance를 포함한 ExecutionResult로 반환되는지 확인한다.
     spec = BuildSpec(
         dataset_id="dataset.sample",
         title="Sample Dataset",
@@ -27,6 +30,7 @@ def test_source_executor_returns_execution_result() -> None:
 
 
 def test_source_executor_wraps_validation_failures() -> None:
+    # 잘못된 명세는 ValidationError를 그대로 올리는지 검증한다.
     spec = BuildSpec(
         dataset_id=" ",
         title="Sample Dataset",
@@ -40,6 +44,7 @@ def test_source_executor_wraps_validation_failures() -> None:
 
 
 def test_source_executor_wraps_source_processing_failures() -> None:
+    # 내부 provenance 구성 중 예기치 않은 오류가 ExecutionError로 래핑되는지 확인한다.
     class BrokenString(str):
         def __str__(self) -> str:
             raise RuntimeError("boom")

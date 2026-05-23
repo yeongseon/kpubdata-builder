@@ -1,4 +1,4 @@
-"""Tests for specification validation."""
+"""BuildSpec 최소 검증 규칙과 오류 수집 동작을 검증한다."""
 
 from __future__ import annotations
 
@@ -10,7 +10,8 @@ from kpubdata_builder.validator import validate_spec
 
 
 def test_validate_spec_accepts_valid_spec() -> None:
-    """validate_spec runs without raising for a valid build spec."""
+    """유효한 BuildSpec에 대해서는 validate_spec가 예외 없이 통과해야 한다."""
+    # sources와 exports가 모두 있는 기본 명세를 허용하는지 확인한다.
     spec = BuildSpec(
         dataset_id="dataset.sample",
         title="Sample Dataset",
@@ -51,6 +52,7 @@ def test_validate_spec_rejects_invalid_spec(
     exports: tuple[ExportTarget, ...],
     expected_problems: list[str],
 ) -> None:
+    # 잘못된 입력 조합마다 기대한 problems 목록이 수집되는지 검증한다.
     spec = BuildSpec(
         dataset_id=dataset_id,
         title="Sample Dataset",

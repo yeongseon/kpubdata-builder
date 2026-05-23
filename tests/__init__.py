@@ -1,1 +1,1 @@
-"""Test package for kpubdata-builder."""
+"""kpubdata-builder 테스트 패키지 루트."""
