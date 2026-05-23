@@ -4,17 +4,20 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable
+from pathlib import Path
+from typing import cast
 
 import polars as pl
 import pytest
 
+import kpubdata_builder.pipeline.orchestrator as orchestrator
 from kpubdata_builder.pipeline import BuildContext, BuildResult, run_build
 from kpubdata_builder.spec import BuildSpec, ExportTarget, JsonValue, SourceRef
 
 
 class _FakeResult:
     def __init__(self, items: list[dict[str, JsonValue]]) -> None:
-        self._items = items
+        self._items: list[dict[str, JsonValue]] = items
 
     @property
     def items(self) -> Iterable[dict[str, JsonValue]]:
@@ -23,9 +26,9 @@ class _FakeResult:
 
 class _FakeDataset:
     def __init__(self, items: list[dict[str, JsonValue]]) -> None:
-        self._items = items
+        self._items: list[dict[str, JsonValue]] = items
 
-    def list(self, **params: JsonValue) -> _FakeResult:
+    def list(self, **_params: JsonValue) -> _FakeResult:
         return _FakeResult(self._items)
 
 
@@ -33,7 +36,7 @@ class _FakeClient:
     """source_key → 레코드 매핑을 돌려주는 테스트용 클라이언트."""
 
     def __init__(self, data: dict[str, list[dict[str, JsonValue]]]) -> None:
-        self._data = data
+        self._data: dict[str, list[dict[str, JsonValue]]] = data
 
     def dataset(self, source_key: str) -> _FakeDataset:
         if source_key not in self._data:
@@ -51,7 +54,7 @@ def _spec(*sources: SourceRef) -> BuildSpec:
     )
 
 
-def test_build_context_create_validates_and_defaults_run_id(tmp_path) -> None:  # type: ignore[no-untyped-def]
+def test_build_context_create_validates_and_defaults_run_id(tmp_path: Path) -> None:
     spec = _spec(SourceRef(provider="datago", dataset="apt_trade"))
 
     ctx = BuildContext.create(spec, output_root=tmp_path)
@@ -61,7 +64,7 @@ def test_build_context_create_validates_and_defaults_run_id(tmp_path) -> None:  
     assert ctx.spec is spec
 
 
-def test_run_build_executes_full_pipeline_and_writes_workspace(tmp_path) -> None:  # type: ignore[no-untyped-def]
+def test_run_build_executes_full_pipeline_and_writes_workspace(tmp_path: Path) -> None:
     spec = _spec(SourceRef(provider="datago", dataset="apt_trade"))
     client = _FakeClient(
         {"datago.apt_trade": [{"id": "1", "amount": 1000}, {"id": "2", "amount": 2500}]}
@@ -85,9 +88,18 @@ def test_run_build_executes_full_pipeline_and_writes_workspace(tmp_path) -> None
 
     # manifest 기록
     assert result.manifest_path.exists()
-    manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+    manifest = cast(
+        dict[str, JsonValue], json.loads(result.manifest_path.read_text(encoding="utf-8"))
+    )
     assert manifest["build_id"] == "run1"
-    assert "datago.apt_trade" in manifest["inputs"]
+    inputs = cast(list[str], manifest["inputs"])
+    assert "datago.apt_trade" in inputs
+    outputs = cast(list[str], manifest["outputs"])
+    assert str(run_dir / "silver" / "datago.apt_trade" / "schema.json") in outputs
+    assert str(run_dir / "silver" / "datago.apt_trade" / "stats.json") in outputs
+    assert str(run_dir / "silver" / "datago.apt_trade" / "preview.json") in outputs
+    assert str(run_dir / "silver" / "datago.apt_trade" / "validation.json") in outputs
+    assert str(run_dir / "gold" / "datago.apt_trade" / "package.json") in outputs
 
     # gold parquet 산출
     gold_parquet = run_dir / "gold" / "datago.apt_trade" / "table.parquet"
@@ -98,17 +110,18 @@ def test_run_build_executes_full_pipeline_and_writes_workspace(tmp_path) -> None
     ]
 
 
-def test_run_build_uses_alias_as_source_key(tmp_path) -> None:  # type: ignore[no-untyped-def]
+def test_run_build_uses_alias_as_source_key(tmp_path: Path) -> None:
     spec = _spec(SourceRef(provider="datago", dataset="apt_trade", alias="trades"))
-    client = _FakeClient({"trades": [{"id": "1"}]})
+    client = _FakeClient({"datago.apt_trade": [{"id": "1"}]})
 
     result = run_build(spec, client=client, output_root=tmp_path, run_id="run1")
 
     assert result.status == "ok"
     assert result.outcomes[0].source_key == "trades"
+    assert (tmp_path / "run1" / "gold" / "trades" / "table.parquet").exists()
 
 
-def test_run_build_records_failure_when_source_missing(tmp_path) -> None:  # type: ignore[no-untyped-def]
+def test_run_build_records_failure_when_source_missing(tmp_path: Path) -> None:
     spec = _spec(SourceRef(provider="datago", dataset="missing"))
     client = _FakeClient({"datago.apt_trade": [{"id": "1"}]})
 
@@ -122,13 +135,42 @@ def test_run_build_records_failure_when_source_missing(tmp_path) -> None:  # typ
 
     # 실패해도 manifest는 남는다
     assert result.manifest_path.exists()
-    manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+    manifest = cast(
+        dict[str, JsonValue], json.loads(result.manifest_path.read_text(encoding="utf-8"))
+    )
     assert manifest["errors"]
 
 
-def test_run_build_rejects_unsafe_run_id(tmp_path) -> None:  # type: ignore[no-untyped-def]
+def test_run_build_preserves_partial_artifacts_when_later_stage_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _spec(SourceRef(provider="datago", dataset="apt_trade"))
+    client = _FakeClient({"datago.apt_trade": [{"id": "1"}, {"id": "2"}]})
+
+    def _fail_gold(*_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("gold failed")
+
+    monkeypatch.setattr(orchestrator, "build_gold_package", _fail_gold)
+
+    result = run_build(spec, client=client, output_root=tmp_path, run_id="run1")
+
+    assert result.status == "failed"
+    assert result.outcomes[0].stages_completed == ("bronze", "silver")
+    assert (tmp_path / "run1" / "bronze" / "datago.apt_trade").is_dir()
+    assert (tmp_path / "run1" / "silver" / "datago.apt_trade" / "table.parquet").exists()
+    assert not (tmp_path / "run1" / "gold" / "datago.apt_trade").exists()
+
+    manifest = cast(
+        dict[str, JsonValue], json.loads(result.manifest_path.read_text(encoding="utf-8"))
+    )
+    outputs = cast(list[str], manifest["outputs"])
+    assert str(tmp_path / "run1" / "silver" / "datago.apt_trade" / "preview.json") in outputs
+    assert str(tmp_path / "run1" / "gold" / "datago.apt_trade" / "table.parquet") not in outputs
+
+
+def test_run_build_rejects_unsafe_run_id(tmp_path: Path) -> None:
     spec = _spec(SourceRef(provider="datago", dataset="apt_trade"))
     client = _FakeClient({"datago.apt_trade": [{"id": "1"}]})
 
     with pytest.raises(ValueError, match="run_id"):
-        run_build(spec, client=client, output_root=tmp_path, run_id="../escape")
+        _ = run_build(spec, client=client, output_root=tmp_path, run_id="../escape")

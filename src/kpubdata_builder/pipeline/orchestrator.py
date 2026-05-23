@@ -22,6 +22,7 @@ from pathlib import Path
 from ..manifest import BuildManifest, manifest_writer
 from ..spec import BuildSpec, SourceRef
 from ..stages.bronze.build import SourceClient, build_bronze_artifact
+from ..stages.bronze.models import BronzeArtifact
 from ..stages.bronze.models import utc_now
 from ..stages.bronze.persist import persist_bronze_artifact
 from ..stages.gold.build import build_gold_package
@@ -65,9 +66,30 @@ class BuildResult:
     manifest_path: Path
 
 
-def _source_key(source: SourceRef) -> str:
-    """소스 식별자를 alias 우선으로 결정한다."""
-    return source.alias if source.alias else f"{source.provider}.{source.dataset}"
+def _fetch_source_key(source: SourceRef) -> str:
+    """Bronze fetch에 사용할 실제 provider.dataset 키를 반환한다."""
+    return f"{source.provider}.{source.dataset}"
+
+
+def _output_source_key(source: SourceRef) -> str:
+    """워크스페이스/결과 기록에 사용할 사용자 노출 키를 반환한다."""
+    return source.alias if source.alias else _fetch_source_key(source)
+
+
+def _retag_bronze_artifact(artifact: BronzeArtifact, *, output_key: str) -> BronzeArtifact:
+    """fetch provenance는 유지하고 산출물 경로용 source_key만 교체한다."""
+    return BronzeArtifact(
+        source_key=output_key,
+        raw_records=artifact.raw_records,
+        fetch_params=artifact.fetch_params,
+        fetched_at=artifact.fetched_at,
+        provenance=artifact.provenance,
+    )
+
+
+def _record_output_paths(outputs: list[str], *paths: Path) -> None:
+    """생성된 산출물 경로를 manifest outputs에 모두 기록한다."""
+    outputs.extend(str(path) for path in paths)
 
 
 def _run_source_pipeline(
@@ -79,35 +101,48 @@ def _run_source_pipeline(
     row_counts: dict[str, int],
 ) -> SourceBuildOutcome:
     """한 소스를 Bronze → Silver → Gold로 실행하고 산출물을 저장한다."""
-    key = _source_key(source)
+    fetch_key = _fetch_source_key(source)
+    output_key = _output_source_key(source)
     completed: list[str] = []
     try:
-        bronze = build_bronze_artifact(client, source_key=key, fetch_params=dict(source.params))
+        bronze = build_bronze_artifact(
+            client, source_key=fetch_key, fetch_params=dict(source.params)
+        )
+        bronze = _retag_bronze_artifact(bronze, output_key=output_key)
         bronze_paths = persist_bronze_artifact(
             bronze, output_root=context.output_root, run_id=context.run_id
         )
         completed.append("bronze")
-        outputs.extend([str(bronze_paths.records_path), str(bronze_paths.metadata_path)])
+        _record_output_paths(outputs, bronze_paths.records_path, bronze_paths.metadata_path)
 
         silver = build_silver_dataset(bronze)
         silver_paths = persist_silver_dataset(
             silver, output_root=context.output_root, run_id=context.run_id
         )
         completed.append("silver")
-        outputs.append(str(silver_paths.table_path))
+        _record_output_paths(
+            outputs,
+            silver_paths.table_path,
+            silver_paths.schema_path,
+            silver_paths.stats_path,
+            silver_paths.preview_path,
+            silver_paths.validation_path,
+        )
 
-        gold = build_gold_package(silver, dataset_name=key, exports=context.spec.exports)
+        gold = build_gold_package(silver, dataset_name=output_key, exports=context.spec.exports)
         gold_paths = persist_gold_package(
             gold, output_root=context.output_root, run_id=context.run_id
         )
         completed.append("gold")
-        outputs.append(str(gold_paths.table_path))
+        _record_output_paths(outputs, gold_paths.table_path, gold_paths.package_path)
 
-        row_counts[key] = silver.statistics.row_count
-        return SourceBuildOutcome(source_key=key, status="ok", stages_completed=tuple(completed))
+        row_counts[output_key] = silver.statistics.row_count
+        return SourceBuildOutcome(
+            source_key=output_key, status="ok", stages_completed=tuple(completed)
+        )
     except Exception as exc:  # stage 실패를 결과로 변환하여 매니페스트에 기록
         return SourceBuildOutcome(
-            source_key=key,
+            source_key=output_key,
             status="failed",
             stages_completed=tuple(completed),
             error=str(exc),
@@ -161,7 +196,7 @@ def run_build(
         build_id=context.run_id,
         started_at=context.started_at,
         finished_at=utc_now(),
-        inputs=tuple(_source_key(source) for source in spec.sources),
+        inputs=tuple(_output_source_key(source) for source in spec.sources),
         outputs=tuple(outputs),
         errors=errors,
         row_counts=row_counts,
