@@ -12,15 +12,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 from ...spec import JsonValue
+from .._path_safety import ensure_within, validate_path_segment
 from .models import BronzeArtifact, ProvenanceEvent
-
-_SAFE_PATH_SEGMENT = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
 
 
 @dataclass(frozen=True)
@@ -36,27 +34,6 @@ class BronzePersistResult:
     bronze_dir: Path
     records_path: Path
     metadata_path: Path
-
-
-def _validate_path_segment(value: str, *, field_name: str) -> None:
-    """워크스페이스를 벗어날 수 있는 경로 세그먼트를 거부한다.
-
-    매개변수:
-        value: 검증할 경로 세그먼트.
-        field_name: 오류 메시지에 사용할 필드명.
-
-    예외:
-        ValueError: 비어 있거나 허용되지 않은 문자가 포함된 경우.
-    """
-    if not value:
-        raise ValueError(f"{field_name} must not be empty")
-    if value != value.strip():
-        raise ValueError(f"{field_name} must not have leading/trailing whitespace")
-    if not _SAFE_PATH_SEGMENT.match(value):
-        raise ValueError(
-            f"{field_name} contains unsafe characters: {value!r}. "
-            "Only alphanumeric, dot, hyphen, and underscore are allowed."
-        )
 
 
 def _artifact_id(artifact: BronzeArtifact) -> str:
@@ -82,11 +59,11 @@ def persist_bronze_artifact(
 
     run_id 또는 source_key에 안전하지 않은 경로 문자가 포함되면 ValueError를 발생시킨다.
     """
-    _validate_path_segment(run_id, field_name="run_id")
+    validate_path_segment(run_id, field_name="run_id")
 
     # 파일시스템용으로 source_key를 정리한다(예: "datago.apt_trade" → "datago.apt_trade").
     source_key_segment = artifact.source_key.replace("/", "_")
-    _validate_path_segment(source_key_segment, field_name="source_key")
+    validate_path_segment(source_key_segment, field_name="source_key")
 
     artifact_id = _artifact_id(artifact)
 
@@ -94,13 +71,7 @@ def persist_bronze_artifact(
     records_path = bronze_dir / "raw_records.jsonl"
     metadata_path = bronze_dir / "metadata.json"
 
-    # 최종 포함 여부 검사: 해석된 경로는 반드시 output_root 아래에 있어야 한다.
-    resolved_root = output_root.resolve()
-    resolved_bronze = bronze_dir.resolve()
-    if not str(resolved_bronze).startswith(str(resolved_root)):
-        raise ValueError(
-            f"Resolved bronze directory {resolved_bronze} escapes output_root {resolved_root}"
-        )
+    ensure_within(output_root, bronze_dir, label="bronze directory")
 
     bronze_dir.mkdir(parents=True, exist_ok=True)
 

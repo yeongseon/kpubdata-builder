@@ -109,3 +109,14 @@ class TestPersistSilverDataset:
 
         with pytest.raises(ValueError, match="run_id"):
             persist_silver_dataset(dataset, output_root=tmp_path, run_id="../escape")
+
+    def test_serializes_date_values_as_iso_strings(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
+        # Date/Datetime으로 캐스팅된 컬럼이 preview에 들어가도 persist가 깨지지 않고
+        # ISO 문자열로 직렬화되는지 검증한다 (#93 review).
+        bronze = _bronze(({"d": "2025-01-01"}, {"d": "2025-01-02"}))
+        dataset = build_silver_dataset(bronze, casts={"d": "date"})
+
+        result = persist_silver_dataset(dataset, output_root=tmp_path, run_id="run1")
+
+        preview = json.loads(result.preview_path.read_text(encoding="utf-8"))
+        assert preview["rows"][0]["d"] == "2025-01-01"
