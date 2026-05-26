@@ -12,10 +12,12 @@ from __future__ import annotations
 from .base import BaseExporter, ExportResult, ensure_output_dir
 from .jsonl import JsonlExporter
 from .markdown import MarkdownExporter
+from .parquet import ParquetExporter
 
 EXPORTER_REGISTRY: dict[str, BaseExporter] = {
     "jsonl": JsonlExporter(),
     "markdown": MarkdownExporter(),
+    "parquet": ParquetExporter(),
 }
 
 __all__ = [
@@ -24,5 +26,6 @@ __all__ = [
     "ExportResult",
     "JsonlExporter",
     "MarkdownExporter",
+    "ParquetExporter",
     "ensure_output_dir",
 ]
