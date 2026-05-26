@@ -54,6 +54,24 @@ class ExportTarget:
 
 
 @dataclass(frozen=True)
+class SplitSpec:
+    """데이터셋을 명명된 분할로 나누는 방법 정의 (#38).
+
+    속성:
+        mode: 분할 방식. "ratio"는 비율 기반(train/val/test), "key"는 컬럼 값
+            기반(연도/지역/카테고리)으로 나눈다.
+        ratios: ratio 모드에서 분할 이름 → 비율 매핑 (합이 1.0이어야 한다).
+        key: key 모드에서 분할 기준이 되는 컬럼 이름.
+        seed: ratio 모드의 결정적 셔플 시드.
+    """
+
+    mode: str
+    ratios: dict[str, float] = field(default_factory=dict)
+    key: str = ""
+    seed: int = 0
+
+
+@dataclass(frozen=True)
 class BuildSpec:
     """데이터셋 산출물을 위한 선언적 빌드 명세.
 
@@ -66,6 +84,7 @@ class BuildSpec:
         transforms: 적용 예정인 변환 단계 이름 목록.
         metadata: 산출물에 실을 임의 메타데이터.
         publish: 빌드 후 게시까지 수행할지 여부.
+        splits: 데이터셋 분할 정의. 없으면 분할하지 않는다.
 
     예시:
         >>> BuildSpec.from_yaml("specs/sample.yaml")
@@ -79,6 +98,7 @@ class BuildSpec:
     transforms: tuple[str, ...] = ()
     metadata: dict[str, str] = field(default_factory=dict)
     publish: bool = False
+    splits: SplitSpec | None = None
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> BuildSpec:
@@ -102,4 +122,5 @@ __all__ = [
     "JsonPrimitive",
     "JsonValue",
     "SourceRef",
+    "SplitSpec",
 ]

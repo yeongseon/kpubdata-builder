@@ -50,8 +50,33 @@ def validate_spec(spec: BuildSpec) -> None:
         if not key.strip():
             problems.append("metadata keys must be non-empty strings")
             break
+    problems.extend(_split_problems(spec))
     if problems:
         raise ValidationError(problems)
+
+
+def _split_problems(spec: BuildSpec) -> list[str]:
+    """splits 정의의 검증 문제를 모은다."""
+    split = spec.splits
+    if split is None:
+        return []
+    problems: list[str] = []
+    if split.mode == "ratio":
+        if not split.ratios:
+            problems.append("splits.ratios must define at least one split")
+        if any(not name.strip() for name in split.ratios):
+            problems.append("splits.ratios names must be non-empty strings")
+        if any(fraction <= 0 for fraction in split.ratios.values()):
+            problems.append("splits.ratios values must be positive")
+        total = sum(split.ratios.values())
+        if split.ratios and abs(total - 1.0) > 1e-6:
+            problems.append(f"splits.ratios must sum to 1.0 (got {total})")
+    elif split.mode == "key":
+        if not split.key.strip():
+            problems.append("splits.key must be a non-empty column name for key mode")
+    else:
+        problems.append(f"splits.mode {split.mode!r} is not supported; use 'ratio' or 'key'")
+    return problems
 
 
 __all__ = ["validate_spec"]
