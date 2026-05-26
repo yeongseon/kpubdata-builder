@@ -110,6 +110,29 @@ def test_run_build_executes_full_pipeline_and_writes_workspace(tmp_path: Path) -
     ]
 
 
+def test_run_build_writes_dataset_card_readme(tmp_path: Path) -> None:
+    # 성공한 빌드의 gold 디렉터리에 dataset card README.md가 생성되는지 검증한다 (#37).
+    spec = _spec(SourceRef(provider="datago", dataset="apt_trade"))
+    client = _FakeClient(
+        {"datago.apt_trade": [{"id": "1", "amount": 1000}, {"id": "2", "amount": 2500}]}
+    )
+
+    result = run_build(spec, client=client, output_root=tmp_path, run_id="run1")
+
+    readme = tmp_path / "run1" / "gold" / "datago.apt_trade" / "README.md"
+    assert readme.exists()
+    text = readme.read_text(encoding="utf-8")
+    assert "# Apartment Trades" in text
+    assert "## Schema" in text
+    assert "- datago.apt_trade" in text
+
+    manifest = cast(
+        dict[str, JsonValue], json.loads(result.manifest_path.read_text(encoding="utf-8"))
+    )
+    outputs = cast(list[str], manifest["outputs"])
+    assert str(readme) in outputs
+
+
 def test_run_build_uses_alias_as_source_key(tmp_path: Path) -> None:
     spec = _spec(SourceRef(provider="datago", dataset="apt_trade", alias="trades"))
     client = _FakeClient({"datago.apt_trade": [{"id": "1"}]})
