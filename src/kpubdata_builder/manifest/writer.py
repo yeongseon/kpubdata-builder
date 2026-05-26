@@ -40,6 +40,7 @@ def manifest_writer(manifest: BuildManifest, output_path: Path) -> None:
         "schema_summaries": {
             key: asdict(summary) for key, summary in manifest.schema_summaries.items()
         },
+        "provenance": [asdict(entry) for entry in manifest.provenance],
     }
     serialized = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
     try:

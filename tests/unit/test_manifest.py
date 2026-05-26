@@ -13,6 +13,8 @@ from kpubdata_builder.manifest import (
     BuildManifest,
     SchemaSummary,
     build_schema_summary,
+    build_source_provenance,
+    compute_data_checksum,
     manifest_writer,
     write_manifest,
 )
@@ -57,6 +59,9 @@ def test_manifest_writer_wraps_io_failures(tmp_path: Path, monkeypatch: pytest.M
 
     with pytest.raises(ManifestError):
         manifest_writer(manifest, output_path)
+
+
+# --- schema summary tests (#11) ---
 
 
 def test_build_schema_summary_sets_total_and_preserves_order() -> None:
@@ -114,6 +119,88 @@ def test_manifest_writer_omits_schema_summaries_when_empty(tmp_path: Path) -> No
 
     payload = json.loads(output_path.read_text(encoding="utf-8"))
     assert payload["schema_summaries"] == {}
+
+
+# --- provenance tests (#12) ---
+
+
+def test_compute_data_checksum_is_reproducible_and_order_independent() -> None:
+    a = compute_data_checksum([{"id": "1", "amount": 1000}])
+    b = compute_data_checksum([{"amount": 1000, "id": "1"}])
+
+    assert a == b
+    assert a.startswith("sha256:")
+    assert a != compute_data_checksum([{"id": "2", "amount": 1000}])
+
+
+def test_build_source_provenance_fills_checksum_count_and_utc_time() -> None:
+    kst = timezone(timedelta(hours=9))
+    records = [{"id": "1"}, {"id": "2"}]
+
+    prov = build_source_provenance(
+        provider="datago",
+        dataset="apt_trade",
+        fetched_at=datetime(2026, 5, 26, 10, 0, 0, tzinfo=kst),
+        records=records,
+        params={"page": 1},
+    )
+
+    assert prov.provider == "datago"
+    assert prov.dataset == "apt_trade"
+    assert prov.fetched_at == "2026-05-26T01:00:00+00:00"
+    assert prov.record_count == 2
+    assert prov.data_checksum == compute_data_checksum(records)
+    assert prov.api_version == "unknown"
+    assert prov.params == {"page": 1}
+
+
+def test_manifest_writer_serializes_provenance(tmp_path: Path) -> None:
+    prov = build_source_provenance(
+        provider="datago",
+        dataset="apt_trade",
+        fetched_at=datetime(2026, 5, 26, 1, 0, 0, tzinfo=timezone.utc),
+        records=[{"id": "1"}],
+        params={"page": 1},
+    )
+    manifest = BuildManifest(
+        build_id="build-1",
+        started_at=datetime(2026, 5, 26, 1, 0, 0, tzinfo=timezone.utc),
+        finished_at=datetime(2026, 5, 26, 1, 0, 0, tzinfo=timezone.utc),
+        provenance=(prov,),
+    )
+    output_path = tmp_path / "manifest.json"
+
+    manifest_writer(manifest, output_path)
+
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["provenance"] == [
+        {
+            "provider": "datago",
+            "dataset": "apt_trade",
+            "fetched_at": "2026-05-26T01:00:00+00:00",
+            "record_count": 1,
+            "data_checksum": prov.data_checksum,
+            "api_version": "unknown",
+            "params": {"page": 1},
+        }
+    ]
+
+
+def test_manifest_writer_provenance_defaults_to_empty_list(tmp_path: Path) -> None:
+    manifest = BuildManifest(
+        build_id="build-1",
+        started_at=datetime(2026, 5, 26, 1, 0, 0, tzinfo=timezone.utc),
+        finished_at=datetime(2026, 5, 26, 1, 0, 0, tzinfo=timezone.utc),
+    )
+    output_path = tmp_path / "manifest.json"
+
+    manifest_writer(manifest, output_path)
+
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["provenance"] == []
+
+
+# --- serialization contract tests (#7) ---
 
 
 def test_manifest_writer_emits_valid_json_with_all_fields(tmp_path: Path) -> None:

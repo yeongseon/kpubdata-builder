@@ -19,7 +19,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..manifest import BuildManifest, SchemaSummary, build_schema_summary, manifest_writer
+from ..manifest import (
+    BuildManifest,
+    SchemaSummary,
+    SourceProvenance,
+    build_schema_summary,
+    build_source_provenance,
+    manifest_writer,
+)
 from ..spec import BuildSpec, SourceRef
 from ..stages.bronze.build import SourceClient, build_bronze_artifact
 from ..stages.bronze.models import BronzeArtifact, utc_now
@@ -100,6 +107,7 @@ def _run_source_pipeline(
     outputs: list[str],
     row_counts: dict[str, int],
     schema_summaries: dict[str, SchemaSummary],
+    provenance: list[SourceProvenance],
 ) -> SourceBuildOutcome:
     """한 소스를 Bronze → Silver → Gold로 실행하고 산출물을 저장한다."""
     fetch_key = _fetch_source_key(source)
@@ -115,6 +123,15 @@ def _run_source_pipeline(
         )
         completed.append("bronze")
         _record_output_paths(outputs, bronze_paths.records_path, bronze_paths.metadata_path)
+        provenance.append(
+            build_source_provenance(
+                provider=source.provider,
+                dataset=source.dataset,
+                fetched_at=bronze.fetched_at,
+                records=bronze.raw_records,
+                params=source.params,
+            )
+        )
 
         silver = build_silver_dataset(bronze)
         silver_paths = persist_silver_dataset(
@@ -194,6 +211,7 @@ def run_build(
     outputs: list[str] = []
     row_counts: dict[str, int] = {}
     schema_summaries: dict[str, SchemaSummary] = {}
+    provenance: list[SourceProvenance] = []
     outcomes = tuple(
         _run_source_pipeline(
             source,
@@ -202,6 +220,7 @@ def run_build(
             outputs=outputs,
             row_counts=row_counts,
             schema_summaries=schema_summaries,
+            provenance=provenance,
         )
         for source in spec.sources
     )
@@ -222,6 +241,7 @@ def run_build(
         errors=errors,
         row_counts=row_counts,
         schema_summaries=schema_summaries,
+        provenance=tuple(provenance),
     )
     manifest_path = context.output_root / context.run_id / "manifest.json"
     manifest_writer(manifest, manifest_path)
