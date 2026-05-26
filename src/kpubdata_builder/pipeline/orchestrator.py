@@ -19,7 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..manifest import BuildManifest, manifest_writer
+from ..manifest import BuildManifest, SchemaSummary, build_schema_summary, manifest_writer
 from ..spec import BuildSpec, SourceRef
 from ..stages.bronze.build import SourceClient, build_bronze_artifact
 from ..stages.bronze.models import BronzeArtifact, utc_now
@@ -99,6 +99,7 @@ def _run_source_pipeline(
     context: BuildContext,
     outputs: list[str],
     row_counts: dict[str, int],
+    schema_summaries: dict[str, SchemaSummary],
 ) -> SourceBuildOutcome:
     """한 소스를 Bronze → Silver → Gold로 실행하고 산출물을 저장한다."""
     fetch_key = _fetch_source_key(source)
@@ -152,6 +153,9 @@ def _run_source_pipeline(
         _record_output_paths(outputs, card_path)
 
         row_counts[output_key] = silver.statistics.row_count
+        schema_summaries[output_key] = build_schema_summary(
+            (column.name, column.dtype, column.nullable) for column in silver.schema.columns
+        )
         return SourceBuildOutcome(
             source_key=output_key, status="ok", stages_completed=tuple(completed)
         )
@@ -189,6 +193,7 @@ def run_build(
 
     outputs: list[str] = []
     row_counts: dict[str, int] = {}
+    schema_summaries: dict[str, SchemaSummary] = {}
     outcomes = tuple(
         _run_source_pipeline(
             source,
@@ -196,6 +201,7 @@ def run_build(
             context=context,
             outputs=outputs,
             row_counts=row_counts,
+            schema_summaries=schema_summaries,
         )
         for source in spec.sources
     )
@@ -215,6 +221,7 @@ def run_build(
         outputs=tuple(outputs),
         errors=errors,
         row_counts=row_counts,
+        schema_summaries=schema_summaries,
     )
     manifest_path = context.output_root / context.run_id / "manifest.json"
     manifest_writer(manifest, manifest_path)

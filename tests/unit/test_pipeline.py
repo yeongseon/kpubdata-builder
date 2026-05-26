@@ -191,6 +191,28 @@ def test_run_build_preserves_partial_artifacts_when_later_stage_fails(
     assert str(tmp_path / "run1" / "gold" / "datago.apt_trade" / "table.parquet") not in outputs
 
 
+def test_run_build_writes_schema_summaries_to_manifest(tmp_path: Path) -> None:
+    # 성공한 빌드의 manifest.json에 소스별 schema summary가 기록되는지 검증한다 (#11).
+    spec = _spec(SourceRef(provider="datago", dataset="apt_trade"))
+    client = _FakeClient(
+        {"datago.apt_trade": [{"id": "1", "amount": 1000}, {"id": "2", "amount": 2500}]}
+    )
+
+    result = run_build(spec, client=client, output_root=tmp_path, run_id="run1")
+
+    manifest = cast(
+        dict[str, JsonValue], json.loads(result.manifest_path.read_text(encoding="utf-8"))
+    )
+    summaries = cast(dict[str, JsonValue], manifest["schema_summaries"])
+    apt = cast(dict[str, JsonValue], summaries["datago.apt_trade"])
+    assert apt["total_fields"] == 2
+    fields = cast(list[dict[str, JsonValue]], apt["fields"])
+    assert [(f["name"], f["nullable"]) for f in fields] == [("id", False), ("amount", False)]
+    # 타입 문자열은 polars dtype 표현을 그대로 싣는다(정수 컬럼).
+    amount_type = cast(str, fields[1]["type"])
+    assert "Int" in amount_type
+
+
 def test_run_build_rejects_unsafe_run_id(tmp_path: Path) -> None:
     spec = _spec(SourceRef(provider="datago", dataset="apt_trade"))
     client = _FakeClient({"datago.apt_trade": [{"id": "1"}]})

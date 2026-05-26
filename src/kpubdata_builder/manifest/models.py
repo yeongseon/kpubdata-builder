@@ -12,6 +12,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from .schema_summary import SchemaSummary
+
 
 @dataclass(frozen=True)
 class BuildManifest:
@@ -26,6 +28,7 @@ class BuildManifest:
         warnings: 경고 메시지 목록.
         errors: 실패 또는 부분 실패 메시지 목록.
         row_counts: 단계별 또는 산출물별 레코드 수 요약.
+        schema_summaries: 소스(산출물) 키별 스키마 요약. row_counts와 동일한 키를 사용한다.
     """
 
     build_id: str
@@ -36,6 +39,7 @@ class BuildManifest:
     warnings: tuple[str, ...] = ()
     errors: tuple[str, ...] = ()
     row_counts: dict[str, int] = field(default_factory=dict)
+    schema_summaries: dict[str, SchemaSummary] = field(default_factory=dict)
 
 
 __all__ = ["BuildManifest"]
