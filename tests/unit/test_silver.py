@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import cast
 
@@ -18,7 +19,14 @@ from kpubdata_builder.stages.silver import (
     build_silver_dataset,
     persist_silver_dataset,
 )
-from kpubdata_builder.tabular import PreviewSlice, SchemaInfo, TableStatistics
+from kpubdata_builder.tabular import (
+    PreviewSlice,
+    SchemaInfo,
+    TableStatistics,
+    compute_statistics,
+    generate_preview,
+    infer_schema,
+)
 
 
 def _bronze(
@@ -135,3 +143,51 @@ class TestPersistSilverDataset:
         )
         rows = cast(list[dict[str, JsonValue]], preview["rows"])
         assert rows[0]["d"] == "2025-01-01"
+
+    def test_serializes_naive_datetime_values_as_iso_strings(self, tmp_path: Path) -> None:
+        # naive datetime으로 캐스팅된 컬럼이 preview에서 offset 없는 ISO 문자열로
+        # 직렬화되는지 검증한다 (#97 datetime regression).
+        bronze = _bronze(({"ts": "2025-01-01T12:30:00"}, {"ts": "2025-01-02T08:00:00"}))
+        dataset = build_silver_dataset(bronze, casts={"ts": "datetime"})
+
+        result = persist_silver_dataset(dataset, output_root=tmp_path, run_id="run1")
+
+        preview = cast(
+            dict[str, JsonValue], json.loads(result.preview_path.read_text(encoding="utf-8"))
+        )
+        rows = cast(list[dict[str, JsonValue]], preview["rows"])
+        assert rows[0]["ts"] == "2025-01-01T12:30:00"
+        assert rows[1]["ts"] == "2025-01-02T08:00:00"
+
+    def test_serializes_timezone_aware_datetime_values_as_iso_strings(self, tmp_path: Path) -> None:
+        # timezone-aware datetime 컬럼이 UTC offset을 보존한 ISO 문자열로 직렬화되는지
+        # 검증한다. cast map은 naive Datetime만 만들므로 aware 테이블을 직접 구성한다
+        # (#97 datetime regression).
+        kst = timezone(timedelta(hours=9))
+        table = pl.DataFrame(
+            {
+                "ts": [
+                    datetime(2025, 1, 1, 12, 30, tzinfo=timezone.utc),
+                    datetime(2025, 1, 2, 17, 0, tzinfo=kst),
+                ]
+            }
+        )
+        assert table.schema["ts"].time_zone is not None
+        dataset = SilverDataset(
+            table=table,
+            schema=infer_schema(table),
+            statistics=compute_statistics(table),
+            preview=generate_preview(table),
+            validation=ValidationResult(ok=True),
+            source_bronze="datago.apt_trade",
+        )
+
+        result = persist_silver_dataset(dataset, output_root=tmp_path, run_id="run1")
+
+        preview = cast(
+            dict[str, JsonValue], json.loads(result.preview_path.read_text(encoding="utf-8"))
+        )
+        rows = cast(list[dict[str, JsonValue]], preview["rows"])
+        # 두 입력 모두 UTC로 정규화되어 동일 시각 + offset을 보존한다(KST 17:00 == UTC 08:00).
+        assert rows[0]["ts"] == "2025-01-01T12:30:00+00:00"
+        assert rows[1]["ts"] == "2025-01-02T08:00:00+00:00"
