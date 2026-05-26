@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from .loader import load_spec, parse_spec
 from .models import BuildSpec, ExportTarget, JsonPrimitive, JsonValue, SourceRef
+from .template import load_template, render_template
 
 __all__ = [
     "BuildSpec",
@@ -21,5 +22,7 @@ __all__ = [
     "JsonValue",
     "SourceRef",
     "load_spec",
+    "load_template",
     "parse_spec",
+    "render_template",
 ]
