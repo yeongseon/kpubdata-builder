@@ -1,0 +1,66 @@
+name: Publish dataset
+
+# DATA_FRESHNESS.md의 업데이트 전략을 실행하는 재사용 가능한 퍼블리시 워크플로.
+#
+# - workflow_call: 데이터셋별 스케줄 워크플로가 config/mode를 넘겨 호출한다.
+# - workflow_dispatch: 운영자가 수동(백필 포함)으로 실행한다.
+#
+# Atomic publish 원칙(로컬 빌드 → 검증 → 단일 HF commit)은 scripts/publish_to_hf.py가
+# 담당한다. 시크릿(API key)이 없으면 라이브 실행을 건너뛰어 no-op으로 성공 처리한다.
+# 데이터셋별 cron 스케줄은 시크릿/구성이 준비된 뒤 별도 스케줄 워크플로에서
+# 본 워크플로를 호출해 활성화한다(DATA_FRESHNESS.md의 스케줄 표 참고).
+
+on:
+  workflow_call:
+    inputs:
+      config:
+        description: 퍼블리시 config YAML 경로
+        required: true
+        type: string
+      mode:
+        description: "퍼블리시 모드 플래그 (--local-only | --dry-run | 빈 문자열=라이브)"
+        required: false
+        type: string
+        default: "--local-only"
+    secrets:
+      KPUBDATA_DATAGO_API_KEY:
+        required: false
+      HF_TOKEN:
+        required: false
+  workflow_dispatch:
+    inputs:
+      config:
+        description: 퍼블리시 config YAML 경로
+        required: true
+        type: string
+      mode:
+        description: "퍼블리시 모드 플래그 (--local-only | --dry-run | 빈 문자열=라이브)"
+        required: false
+        type: string
+        default: "--local-only"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies
+        run: uv sync --extra dev --extra publish
+
+      - name: Publish dataset (atomic, guarded by secrets)
+        env:
+          KPUBDATA_DATAGO_API_KEY: ${{ secrets.KPUBDATA_DATAGO_API_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          CONFIG: ${{ inputs.config }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          if [ -z "${KPUBDATA_DATAGO_API_KEY}" ]; then
+            echo "::notice::KPUBDATA_DATAGO_API_KEY 미설정 — 라이브 실행을 건너뜁니다(no-op)."
+            exit 0
+          fi
+          uv run python scripts/publish_to_hf.py "${CONFIG}" ${MODE}
