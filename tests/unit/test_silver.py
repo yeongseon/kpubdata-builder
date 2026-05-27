@@ -160,9 +160,9 @@ class TestPersistSilverDataset:
         assert rows[1]["ts"] == "2025-01-02T08:00:00"
 
     def test_serializes_timezone_aware_datetime_values_as_iso_strings(self, tmp_path: Path) -> None:
-        # timezone-aware datetime 컬럼이 UTC offset을 보존한 ISO 문자열로 직렬화되는지
-        # 검증한다. cast map은 naive Datetime만 만들므로 aware 테이블을 직접 구성한다
-        # (#97 datetime regression).
+        # timezone-aware datetime 컬럼은 UTC로 정규화된 뒤 +00:00 offset을 포함한 ISO
+        # 문자열로 직렬화된다(서로 다른 입력 tz가 동일 UTC 시각으로 수렴). cast map은
+        # naive Datetime만 만들므로 aware 테이블을 직접 구성한다 (#97 datetime regression).
         kst = timezone(timedelta(hours=9))
         table = pl.DataFrame(
             {
@@ -188,6 +188,19 @@ class TestPersistSilverDataset:
             dict[str, JsonValue], json.loads(result.preview_path.read_text(encoding="utf-8"))
         )
         rows = cast(list[dict[str, JsonValue]], preview["rows"])
-        # 두 입력 모두 UTC로 정규화되어 동일 시각 + offset을 보존한다(KST 17:00 == UTC 08:00).
+        # 두 입력이 UTC로 정규화되어 +00:00 offset을 포함한다(KST 17:00 == UTC 08:00).
         assert rows[0]["ts"] == "2025-01-01T12:30:00+00:00"
         assert rows[1]["ts"] == "2025-01-02T08:00:00+00:00"
+
+    def test_serializes_datetime_with_microseconds(self, tmp_path: Path) -> None:
+        # microseconds를 가진 datetime이 잘리지 않고 ISO 소수 초까지 직렬화되는지 검증한다.
+        bronze = _bronze(({"ts": "2025-01-01T12:30:00.123456"},))
+        dataset = build_silver_dataset(bronze, casts={"ts": "datetime"})
+
+        result = persist_silver_dataset(dataset, output_root=tmp_path, run_id="run1")
+
+        preview = cast(
+            dict[str, JsonValue], json.loads(result.preview_path.read_text(encoding="utf-8"))
+        )
+        rows = cast(list[dict[str, JsonValue]], preview["rows"])
+        assert rows[0]["ts"] == "2025-01-01T12:30:00.123456"
