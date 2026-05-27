@@ -8,10 +8,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import cast
+
+import pytest
 
 from kpubdata_builder import ArtifactDataset
 from kpubdata_builder.exporters import JsonlExporter
-from kpubdata_builder.spec import ExportTarget
+from kpubdata_builder.spec import ExportTarget, JsonValue
 
 
 def test_each_record_is_one_json_line(tmp_path: Path) -> None:
@@ -82,3 +85,14 @@ def test_returns_metadata_pointing_to_created_file(tmp_path: Path) -> None:
     assert result.output_path.is_file()
     assert result.file_size == result.output_path.stat().st_size
     assert result.format == "jsonl"
+
+
+def test_non_serializable_value_surfaces_type_error(tmp_path: Path) -> None:
+    # JsonValue 밖의 직렬화 불가 값(예: set)은 json.dumps에서 TypeError로 표면화된다.
+    # write 실패의 OSError와 달리 ExportError로 감싸지 않는 경계를 명시적으로 고정한다.
+    bad_record = cast(dict[str, JsonValue], {"bad": {1, 2}})
+    artifact = ArtifactDataset(records=(bad_record,))
+    target = ExportTarget(kind="jsonl", output_path="out/data.jsonl")
+
+    with pytest.raises(TypeError):
+        JsonlExporter().export(artifact, target, tmp_path)
