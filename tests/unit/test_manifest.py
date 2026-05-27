@@ -140,3 +140,41 @@ def test_write_manifest_alias_matches_manifest_writer(tmp_path: Path) -> None:
     write_manifest(manifest, via_alias)
 
     assert via_writer.read_bytes() == via_alias.read_bytes()
+
+
+def test_manifest_writer_is_byte_identical_on_repeat(tmp_path: Path) -> None:
+    # 같은 manifest를 두 번 기록하면 바이트 단위로 동일해야 한다(결정성 직접 검증).
+    manifest = BuildManifest(
+        build_id="build-1",
+        started_at=datetime(2026, 5, 26, 1, 0, 0, tzinfo=timezone.utc),
+        finished_at=datetime(2026, 5, 26, 1, 0, 5, tzinfo=timezone.utc),
+        inputs=("b_src", "a_src"),
+        outputs=("out/b.jsonl", "out/a.jsonl"),
+        row_counts={"b_src": 2, "a_src": 1},
+    )
+    first = tmp_path / "first.json"
+    second = tmp_path / "second.json"
+
+    manifest_writer(manifest, first)
+    manifest_writer(manifest, second)
+
+    assert first.read_bytes() == second.read_bytes()
+
+
+def test_manifest_writer_preserves_non_ascii(tmp_path: Path) -> None:
+    # ensure_ascii=False이므로 한글이 \uXXXX로 escape되지 않고 그대로 보존되어야 한다.
+    manifest = BuildManifest(
+        build_id="build-1",
+        started_at=datetime(2026, 5, 26, 1, 0, 0, tzinfo=timezone.utc),
+        finished_at=datetime(2026, 5, 26, 1, 0, 0, tzinfo=timezone.utc),
+        inputs=("datago.대기오염정보",),
+        warnings=("스키마 변동 감지",),
+    )
+    output_path = tmp_path / "manifest.json"
+
+    manifest_writer(manifest, output_path)
+
+    raw = output_path.read_text(encoding="utf-8")
+    assert "대기오염정보" in raw
+    assert "스키마 변동 감지" in raw
+    assert "\\u" not in raw
