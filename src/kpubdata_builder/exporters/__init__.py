@@ -1,10 +1,11 @@
-"""내장 내보내기 구현을 위한 내보내기 도구 레지스트리.
+"""내장 내보내기 구현과 플러그인 레지스트리.
 
-이 모듈은 기본 exporter 구현을 import 시점에 등록하여 kind 문자열만으로
-구현 객체를 찾을 수 있게 한다.
+내장 exporter를 import 시점에 레지스트리에 등록하고, 제3자 exporter 등록·발견을
+위한 플러그인 API(registry.py)를 함께 노출한다.
 
 주요 구성:
     - EXPORTER_REGISTRY: kind -> exporter 인스턴스 매핑
+    - register_exporter / get_exporter / load_entry_point_exporters: 플러그인 API
 """
 
 from __future__ import annotations
@@ -15,23 +16,33 @@ from .huggingface import HuggingFaceExporter
 from .jsonl import JsonlExporter
 from .markdown import MarkdownExporter
 from .parquet import ParquetExporter
+from .registry import (
+    EXPORTER_ENTRY_POINT_GROUP,
+    EXPORTER_REGISTRY,
+    get_exporter,
+    load_entry_point_exporters,
+    register_exporter,
+)
 
-EXPORTER_REGISTRY: dict[str, BaseExporter] = {
-    "csv": CsvExporter(),
-    "huggingface": HuggingFaceExporter(),
-    "jsonl": JsonlExporter(),
-    "markdown": MarkdownExporter(),
-    "parquet": ParquetExporter(),
-}
+# 내장 exporter 등록 (이미 등록된 경우 재import 시 덮어쓴다).
+register_exporter(CsvExporter(), override=True)
+register_exporter(HuggingFaceExporter(), override=True)
+register_exporter(JsonlExporter(), override=True)
+register_exporter(MarkdownExporter(), override=True)
+register_exporter(ParquetExporter(), override=True)
 
 __all__ = [
+    "EXPORTER_ENTRY_POINT_GROUP",
+    "EXPORTER_REGISTRY",
     "BaseExporter",
     "CsvExporter",
-    "EXPORTER_REGISTRY",
     "ExportResult",
     "HuggingFaceExporter",
     "JsonlExporter",
     "MarkdownExporter",
     "ParquetExporter",
     "ensure_output_dir",
+    "get_exporter",
+    "load_entry_point_exporters",
+    "register_exporter",
 ]
