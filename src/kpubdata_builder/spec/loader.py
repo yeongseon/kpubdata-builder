@@ -16,7 +16,7 @@ from typing import cast
 import yaml
 
 from ..errors import SpecLoadError
-from .models import BuildSpec, ExportTarget, JsonValue, SourceRef
+from .models import BuildSpec, ExportTarget, JsonValue, SourceRef, SplitSpec
 
 
 def parse_spec(data: dict[str, object]) -> BuildSpec:
@@ -40,6 +40,7 @@ def parse_spec(data: dict[str, object]) -> BuildSpec:
         publish = _parse_bool(data.get("publish", False), field_name="publish")
         sources = _parse_sources(_require_present(data, "sources"))
         exports = _parse_exports(_require_present(data, "exports"))
+        splits = _parse_splits(data.get("splits"))
     except (KeyError, TypeError, ValueError) as exc:
         raise SpecLoadError(f"Failed to parse build spec: {exc}") from exc
 
@@ -52,6 +53,7 @@ def parse_spec(data: dict[str, object]) -> BuildSpec:
         transforms=transforms,
         metadata=metadata,
         publish=publish,
+        splits=splits,
     )
 
 
@@ -199,6 +201,35 @@ def _parse_exports(value: object) -> tuple[ExportTarget, ...]:
         )
         parsed_exports.append(ExportTarget(kind=kind, output_path=output_path, options=options))
     return tuple(parsed_exports)
+
+
+def _parse_splits(value: object) -> SplitSpec | None:
+    """splits 매핑을 SplitSpec으로 변환한다(없으면 None)."""
+    if value is None:
+        return None
+    mapping = _ensure_mapping(value, field_name="splits")
+    mode = _require_string(mapping, "mode", prefix="splits")
+
+    seed_obj = mapping.get("seed", 0)
+    if not isinstance(seed_obj, int) or isinstance(seed_obj, bool):
+        raise TypeError("splits.seed must be an integer")
+
+    ratios: dict[str, float] = {}
+    ratios_obj = mapping.get("ratios", {})
+    if not isinstance(ratios_obj, dict):
+        raise TypeError("splits.ratios must be a mapping")
+    for name, fraction in cast(dict[object, object], ratios_obj).items():
+        if not isinstance(name, str):
+            raise TypeError("splits.ratios keys must be strings")
+        if isinstance(fraction, bool) or not isinstance(fraction, (int, float)):
+            raise TypeError("splits.ratios values must be numbers")
+        ratios[name] = float(fraction)
+
+    key_obj = mapping.get("key", "")
+    if not isinstance(key_obj, str):
+        raise TypeError("splits.key must be a string")
+
+    return SplitSpec(mode=mode, ratios=ratios, key=key_obj, seed=seed_obj)
 
 
 def _ensure_mapping(value: object, *, field_name: str) -> dict[str, object]:

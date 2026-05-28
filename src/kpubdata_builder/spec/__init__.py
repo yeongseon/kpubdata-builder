@@ -12,7 +12,7 @@ models와 loader의 공개 심볼을 re-export 한다. validate_spec은 exporter
 from __future__ import annotations
 
 from .loader import load_spec, parse_spec
-from .models import BuildSpec, ExportTarget, JsonPrimitive, JsonValue, SourceRef
+from .models import BuildSpec, ExportTarget, JsonPrimitive, JsonValue, SourceRef, SplitSpec
 from .template import load_template, render_template
 
 __all__ = [
@@ -21,6 +21,7 @@ __all__ = [
     "JsonPrimitive",
     "JsonValue",
     "SourceRef",
+    "SplitSpec",
     "load_spec",
     "load_template",
     "parse_spec",

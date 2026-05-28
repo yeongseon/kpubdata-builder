@@ -16,6 +16,7 @@ from .build import build_gold_package
 from .card import CardField, DatasetCard, build_dataset_card, render_dataset_card
 from .models import ExportPlan, GoldPackage
 from .persist import GoldPersistResult, persist_gold_package
+from .split import apply_splits
 
 __all__ = [
     "CardField",
@@ -23,6 +24,7 @@ __all__ = [
     "ExportPlan",
     "GoldPackage",
     "GoldPersistResult",
+    "apply_splits",
     "build_dataset_card",
     "build_gold_package",
     "persist_gold_package",
