@@ -1,0 +1,66 @@
+# 한국관광공사 위치기반 관광정보 — HuggingFace Dataset Publishing Config
+# Dataset: kpubdata/tour-location-based
+# Source: data.go.kr TourAPI KorService2
+
+source:
+  provider: datago
+  dataset: tour_kor_location
+  source_url: "https://www.data.go.kr/data/15101578/openapi.do"
+  list_all: true
+  fetch_params:
+    - mapX: "126.981611"
+      mapY: "37.568477"
+      radius: "10000"
+
+transform:
+  column_mapping:
+    title: title
+    addr1: address
+    addr2: address_detail
+    dist: distance
+    contentid: content_id
+    contenttypeid: content_type_id
+    mapx: longitude
+    mapy: latitude
+    tel: phone
+    firstimage: image_url
+
+  dtypes:
+    longitude: float
+    latitude: float
+    distance: float
+
+  derived: []
+  filters: []
+
+output:
+  staging_dir: "./staging/tour-location-based"
+  parquet_filename: "data/train.parquet"
+  hf_repo: "kpubdata/tour-location-based"
+
+card:
+  title: "Korea Tourism Location-Based Information (위치기반 관광정보)"
+  description: |
+    Location-based tourism information from the Korea Tourism Organization
+    (한국관광공사) via TourAPI. Returns nearby attractions from a given
+    coordinate within a specified radius.
+  license: cc-by-4.0
+  language:
+    - ko
+  tags:
+    - tourism
+    - korea
+    - location
+    - geospatial
+    - public-data
+  features:
+    - name: title
+      description: Name of the attraction/place (관광지명)
+    - name: address
+      description: Address (주소)
+    - name: distance
+      description: Distance from search point in meters (거리)
+    - name: longitude
+      description: Longitude (경도)
+    - name: latitude
+      description: Latitude (위도)

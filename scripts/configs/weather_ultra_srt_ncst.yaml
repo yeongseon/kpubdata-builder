@@ -1,0 +1,68 @@
+# 기상청 초단기실황 — HuggingFace Dataset Publishing Config
+# Dataset: kpubdata/weather-ultra-short-term
+# Source: data.go.kr 기상청 초단기실황 조회서비스
+
+source:
+  provider: datago
+  dataset: ultra_srt_ncst
+  source_url: "https://www.data.go.kr/data/15084084/openapi.do"
+  list_all: true
+  fetch_params:
+    - base_date: "20260101"
+      base_time: "0600"
+      nx: "55"
+      ny: "127"
+
+transform:
+  column_mapping:
+    baseDate: base_date
+    baseTime: base_time
+    category: category
+    obsrValue: observed_value
+    nx: grid_x
+    ny: grid_y
+
+  dtypes:
+    grid_x: int
+    grid_y: int
+
+  derived: []
+  filters: []
+
+output:
+  staging_dir: "./staging/weather-ultra-short-term"
+  parquet_filename: "data/train.parquet"
+  hf_repo: "kpubdata/weather-ultra-short-term"
+
+card:
+  title: "Korea Ultra Short-Term Weather Observation (초단기실황)"
+  description: |
+    Ultra short-term actual weather observation data from the Korea
+    Meteorological Administration (기상청). Real-time grid-based
+    weather measurements.
+
+    Data sourced via the official data.go.kr API.
+  license: cc-by-4.0
+  language:
+    - ko
+  tags:
+    - weather
+    - observation
+    - korea
+    - time-series
+    - public-data
+  task_categories:
+    - tabular-regression
+  features:
+    - name: base_date
+      description: Observation date (관측일자, YYYYMMDD)
+    - name: base_time
+      description: Observation time (관측시각, HHMM)
+    - name: category
+      description: "Weather category code (T1H=기온, RN1=1시간 강수량, etc.)"
+    - name: observed_value
+      description: Observed value (관측값)
+    - name: grid_x
+      description: Grid X coordinate (격자 X)
+    - name: grid_y
+      description: Grid Y coordinate (격자 Y)
