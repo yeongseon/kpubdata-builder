@@ -1,0 +1,99 @@
+"""CSV 내보내기 도구 구현.
+
+이 모듈은 ArtifactDataset의 레코드를 RFC 4180 스타일의 CSV 파일로 직렬화하는
+exporter를 제공한다. 컬럼은 artifact.schema가 있으면 그 순서를, 없으면 레코드에서
+처음 등장한 순서를 따른다. 콤마/따옴표/개행이 포함된 값은 stdlib csv가 자동으로
+인용 처리한다.
+"""
+
+from __future__ import annotations
+
+import csv
+import io
+import json
+from pathlib import Path
+
+from ..artifact import ArtifactDataset
+from ..errors import ExportError
+from ..spec import ExportTarget, JsonValue
+from .base import BaseExporter, ExportResult, ensure_output_dir
+
+
+def _resolve_columns(artifact: ArtifactDataset) -> list[str]:
+    """CSV 헤더로 사용할 컬럼 순서를 결정한다.
+
+    schema가 선언되어 있으면 그 키 순서를, 없으면 레코드에서 처음 등장한
+    순서를 사용한다. 결과는 입력에 대해 결정적이다.
+    """
+    if artifact.schema:
+        return list(artifact.schema.keys())
+    columns: dict[str, None] = {}
+    for record in artifact.records:
+        for key in record:
+            columns.setdefault(key, None)
+    return list(columns.keys())
+
+
+def _format_cell(value: JsonValue) -> str:
+    """단일 셀 값을 CSV 문자열로 변환한다.
+
+    None은 빈 문자열, bool은 소문자 JSON 표기, 중첩 list/dict는 결정적 JSON
+    문자열로 직렬화한다. 그 외 스칼라는 str()로 변환한다.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (str, int, float)):
+        return str(value)
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+class CsvExporter(BaseExporter):
+    """레코드를 CSV로 기록하는 내보내기 도구.
+
+    예시:
+        >>> CsvExporter().name
+        'csv'
+    """
+
+    @property
+    def name(self) -> str:
+        """내보내기 도구 이름을 반환한다."""
+        return "csv"
+
+    def export(
+        self, artifact: ArtifactDataset, target: ExportTarget, output_dir: Path
+    ) -> ExportResult:
+        """표준 레코드를 CSV 파일로 내보낸다.
+
+        매개변수:
+            artifact: CSV로 직렬화할 레코드 묶음.
+            target: 출력 경로와 옵션을 담은 내보내기 대상.
+            output_dir: 빌드 기준 출력 디렉터리.
+
+        반환값:
+            ExportResult: 생성된 CSV 파일 메타데이터.
+
+        예외:
+            ExportError: 파일 쓰기에 실패한 경우.
+        """
+        destination = ensure_output_dir(output_dir, target.output_path)
+        columns = _resolve_columns(artifact)
+
+        buffer = io.StringIO()
+        if columns:
+            writer = csv.writer(buffer, lineterminator="\n")
+            writer.writerow(columns)
+            for record in artifact.records:
+                writer.writerow([_format_cell(record.get(column)) for column in columns])
+        content = buffer.getvalue()
+
+        try:
+            _ = destination.write_text(content, encoding="utf-8")
+        except OSError as exc:
+            raise ExportError(f"Failed to export CSV artifact to {destination}: {exc}") from exc
+
+        return ExportResult(
+            output_path=destination, file_size=destination.stat().st_size, format=self.name
+        )

@@ -101,13 +101,13 @@ def test_validate_spec_rejects_unsupported_export_kind() -> None:
         title="Sample Dataset",
         description="Sample description",
         sources=_SRC,
-        exports=(ExportTarget(kind="csv", output_path="out/data.csv"),),
+        exports=(ExportTarget(kind="xml", output_path="out/data.xml"),),
     )
 
     with pytest.raises(ValidationError) as exc_info:
         validate_spec(spec)
 
-    assert any("csv" in p and "not supported" in p for p in exc_info.value.problems)
+    assert any("xml" in p and "not supported" in p for p in exc_info.value.problems)
 
 
 def test_validate_spec_rejects_empty_output_path() -> None:
