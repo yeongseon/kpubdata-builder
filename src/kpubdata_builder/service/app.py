@@ -102,7 +102,14 @@ class BuilderService:
         return ServiceResponse(200, {"dataset_id": spec_or_error.dataset_id, "previews": previews})
 
     def build(self, spec_yaml: str, *, run_id: str | None = None) -> ServiceResponse:
-        """파이프라인을 실행하고 결과를 반환한다."""
+        """파이프라인을 실행하고 결과를 반환한다.
+
+        응답 코드 정책:
+            - 모든 소스 성공: 200
+            - 하나라도 소스 fetch/stage가 실패: 502 (upstream 소스 의존 실패).
+              매니페스트는 partial 정책으로 남기 때문에 body에 outcomes와 manifest가
+              실린다.
+        """
         spec_or_error = self._load_validated(spec_yaml)
         if isinstance(spec_or_error, ServiceResponse):
             return spec_or_error
@@ -122,8 +129,9 @@ class BuilderService:
             }
             for outcome in result.outcomes
         ]
+        status_code = 200 if result.status == "ok" else 502
         return ServiceResponse(
-            200,
+            status_code,
             {
                 "status": result.status,
                 "run_id": result.context.run_id,
@@ -186,8 +194,15 @@ def dispatch(
         spec = _spec_from_body(body)
         if isinstance(spec, ServiceResponse):
             return spec
-        limit_value = body.get("limit") if body else None
-        limit = limit_value if isinstance(limit_value, int) else DEFAULT_PREVIEW_LIMIT
+        # limit이 명시되면 양의 정수여야 한다 — 잘못된 값을 조용히 기본값으로 떨어뜨리지 않는다.
+        if body is not None and "limit" in body:
+            limit_value = body["limit"]
+            # bool은 int의 하위 타입이지만 limit 의미가 없으므로 거부.
+            if not isinstance(limit_value, int) or isinstance(limit_value, bool) or limit_value < 1:
+                return ServiceResponse(400, {"error": "'limit' must be a positive integer"})
+            limit = limit_value
+        else:
+            limit = DEFAULT_PREVIEW_LIMIT
         return service.preview(spec, limit=limit)
 
     if method == "POST" and path == "/build":

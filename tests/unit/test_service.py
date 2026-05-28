@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
+import json
+import threading
+import urllib.error
+import urllib.request
 from collections.abc import Iterable
+from http.server import HTTPServer
 from pathlib import Path
+from typing import cast
+
+import pytest
 
 from kpubdata_builder.service import BuilderService, ServiceResponse, dispatch
+from kpubdata_builder.service.http import make_handler
 from kpubdata_builder.spec import JsonValue
 
 VALID_SPEC_YAML = (
@@ -145,3 +154,88 @@ class TestDispatch:
         dispatch(service, "POST", "/build", {"spec": VALID_SPEC_YAML, "run_id": "r3"})
         resp = dispatch(service, "GET", "/artifacts/r3", None)
         assert resp.status_code == 200
+
+    def test_preview_rejects_non_integer_limit(self, tmp_path: Path) -> None:
+        # 클라이언트가 limit을 잘못된 타입으로 보내면 조용히 기본값으로 떨어뜨리지 않고 400.
+        resp = dispatch(
+            _service(tmp_path), "POST", "/preview", {"spec": VALID_SPEC_YAML, "limit": "5"}
+        )
+        assert resp.status_code == 400
+        assert "limit" in str(resp.body.get("error", ""))
+
+    def test_preview_rejects_non_positive_limit(self, tmp_path: Path) -> None:
+        resp = dispatch(
+            _service(tmp_path), "POST", "/preview", {"spec": VALID_SPEC_YAML, "limit": 0}
+        )
+        assert resp.status_code == 400
+
+
+class TestBuildFailureResponseCode:
+    def test_failed_build_returns_502(self, tmp_path: Path) -> None:
+        # 소스 fetch가 실패하면 status=failed + 502 — 매니페스트는 partial 정책으로 남는다.
+        missing_source_yaml = VALID_SPEC_YAML.replace("air_quality", "missing")
+        resp = _service(tmp_path).build(missing_source_yaml, run_id="run1")
+
+        assert resp.status_code == 502
+        assert resp.body["status"] == "failed"
+        assert (tmp_path / "run1" / "manifest.json").exists()
+
+
+@pytest.fixture()
+def http_server(
+    tmp_path: Path,
+) -> Iterable[tuple[str, HTTPServer, threading.Thread]]:
+    """실제 HTTPServer를 임의 포트에 띄워서 어댑터 레벨 동작을 검증한다."""
+    service = _service(tmp_path)
+    server = HTTPServer(("127.0.0.1", 0), make_handler(service))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://{server.server_address[0]}:{server.server_address[1]}"
+    try:
+        yield base_url, server, thread
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=1.0)
+
+
+class TestHttpAdapter:
+    def test_malformed_json_body_returns_400(
+        self, http_server: tuple[str, HTTPServer, threading.Thread]
+    ) -> None:
+        base_url, _, _ = http_server
+        req = urllib.request.Request(
+            f"{base_url}/validate",
+            data=b"not-json{{",
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            urllib.request.urlopen(req, timeout=2.0)
+        assert exc_info.value.code == 400
+        body = cast(dict[str, object], json.loads(exc_info.value.read()))
+        assert "invalid JSON body" in str(body.get("error", ""))
+
+    def test_unknown_path_returns_404(
+        self, http_server: tuple[str, HTTPServer, threading.Thread]
+    ) -> None:
+        base_url, _, _ = http_server
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            urllib.request.urlopen(f"{base_url}/nope", timeout=2.0)
+        assert exc_info.value.code == 404
+
+    def test_valid_post_validate_round_trips(
+        self, http_server: tuple[str, HTTPServer, threading.Thread]
+    ) -> None:
+        # 어댑터가 정상 요청을 dispatch에 전달하고 JSON 응답을 직렬화하는지 확인.
+        base_url, _, _ = http_server
+        req = urllib.request.Request(
+            f"{base_url}/validate",
+            data=json.dumps({"spec": VALID_SPEC_YAML}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=2.0) as response:
+            assert response.status == 200
+            body = cast(dict[str, object], json.loads(response.read()))
+        assert body["status"] == "valid"
