@@ -11,12 +11,14 @@ from __future__ import annotations
 
 from .base import BaseExporter, ExportResult, ensure_output_dir
 from .csv import CsvExporter
+from .huggingface import HuggingFaceExporter
 from .jsonl import JsonlExporter
 from .markdown import MarkdownExporter
 from .parquet import ParquetExporter
 
 EXPORTER_REGISTRY: dict[str, BaseExporter] = {
     "csv": CsvExporter(),
+    "huggingface": HuggingFaceExporter(),
     "jsonl": JsonlExporter(),
     "markdown": MarkdownExporter(),
     "parquet": ParquetExporter(),
@@ -27,6 +29,7 @@ __all__ = [
     "CsvExporter",
     "EXPORTER_REGISTRY",
     "ExportResult",
+    "HuggingFaceExporter",
     "JsonlExporter",
     "MarkdownExporter",
     "ParquetExporter",
