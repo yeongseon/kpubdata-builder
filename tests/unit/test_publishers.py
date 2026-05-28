@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from kpubdata_builder.errors import PublishError
 from kpubdata_builder.publishers import (
     PUBLISHER_REGISTRY,
     BasePublisher,
@@ -51,3 +52,42 @@ def test_publish_result_is_immutable() -> None:
     result = PublishResult(publisher="local", reference="/tmp/x", artifact_count=1)
     with pytest.raises(AttributeError):
         result.publisher = "other"  # type: ignore[misc]
+
+
+class TestLocalPublisherFailurePolicy:
+    def test_rejects_duplicate_basenames(self, tmp_path: Path) -> None:
+        # 서로 다른 디렉터리의 동일 이름 파일 두 개는 flat copy에서 한쪽을 덮어쓰므로 거부.
+        d1 = tmp_path / "a"
+        d2 = tmp_path / "b"
+        d1.mkdir()
+        d2.mkdir()
+        f1 = d1 / "data.jsonl"
+        f2 = d2 / "data.jsonl"
+        _ = f1.write_text("{}\n", encoding="utf-8")
+        _ = f2.write_text("{}\n", encoding="utf-8")
+
+        with pytest.raises(PublishError, match="duplicate artifact basename"):
+            LocalPublisher().publish((f1, f2), destination=str(tmp_path / "registry"))
+
+    def test_rejects_directory_artifacts(self, tmp_path: Path) -> None:
+        # 디렉터리는 shutil.copy2가 다룰 수 없으므로 명시적으로 거부.
+        dir_artifact = tmp_path / "hf_layout"
+        dir_artifact.mkdir()
+
+        with pytest.raises(PublishError, match="directory artifacts"):
+            LocalPublisher().publish((dir_artifact,), destination=str(tmp_path / "registry"))
+
+    def test_wraps_copy_failures_in_publish_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # shutil.copy2가 OSError를 던지면 PublishError로 감싸 전파해야 한다.
+        artifact = tmp_path / "data.jsonl"
+        _ = artifact.write_text("{}\n", encoding="utf-8")
+
+        def _boom(src: object, dst: object) -> None:
+            raise PermissionError("read-only filesystem")
+
+        monkeypatch.setattr("kpubdata_builder.publishers.local.shutil.copy2", _boom)
+
+        with pytest.raises(PublishError, match="failed to copy"):
+            LocalPublisher().publish((artifact,), destination=str(tmp_path / "registry"))
