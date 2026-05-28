@@ -52,12 +52,17 @@ class ManifestError(BuildError):
     """매니페스트 직렬화 또는 디스크 기록이 실패했음을 나타낸다."""
 
 
+class PublishError(BuildError):
+    """산출물 게시(복사/업로드/등록)가 실패했음을 나타낸다."""
+
+
 __all__ = [
     "AssemblyError",
     "BuildError",
     "ExecutionError",
     "ExportError",
     "ManifestError",
+    "PublishError",
     "SpecLoadError",
     "ValidationError",
 ]
