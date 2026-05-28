@@ -124,26 +124,6 @@ def test_validate_fails_for_invalid_spec(
     assert "sources" in captured.err
 
 
-def test_preview_is_reserved(capsys: pytest.CaptureFixture[str]) -> None:
-    # 예약 명령 preview가 미구현 오류로 차단되는지 검증한다.
-    exit_code = main(["preview", "any.yaml"])
-    captured = capsys.readouterr()
-
-    assert exit_code == 1
-    assert "preview" in captured.err
-    assert "not implemented" in captured.err
-
-
-def test_preview_without_spec_is_reserved(capsys: pytest.CaptureFixture[str]) -> None:
-    # preview 인자 생략 시에도 예약 명령 오류 경로를 유지하는지 확인한다.
-    exit_code = main(["preview"])
-    captured = capsys.readouterr()
-
-    assert exit_code == 1
-    assert "preview" in captured.err
-    assert "not implemented" in captured.err
-
-
 def test_validate_fails_for_malformed_yaml(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

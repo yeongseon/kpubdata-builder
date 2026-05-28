@@ -1,7 +1,7 @@
 """kpubdata-builder용 명령줄 진입점.
 
-이 모듈은 argparse 기반 CLI를 구성하고, validate/build 명령과 향후 예약된
-preview 명령의 진입점을 제공한다.
+이 모듈은 argparse 기반 CLI를 구성하고, validate/preview/build 명령의 진입점을
+제공한다.
 
 주요 함수:
     - build_parser: 하위 명령을 포함한 ArgumentParser 구성
@@ -19,12 +19,11 @@ from typing import cast
 
 from . import __version__
 from .errors import SpecLoadError, ValidationError
-from .pipeline import run_build
+from .pipeline import preview_build, run_build
 from .spec import load_spec
 from .spec.validator import validate_spec
 from .stages.bronze.build import SourceClient
-
-_RESERVED_COMMANDS: frozenset[str] = frozenset({"preview"})
+from .tabular import DEFAULT_PREVIEW_LIMIT
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -61,9 +60,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     preview_cmd = subparsers.add_parser(
         "preview",
-        help="Preview a BuildSpec execution (reserved; not implemented yet).",
+        help="Preview a BuildSpec: schema and sample rows without writing artifacts.",
     )
-    preview_cmd.add_argument("spec", nargs="?", help="Path to the BuildSpec YAML file.")
+    preview_cmd.add_argument("spec", help="Path to the BuildSpec YAML file.")
+    preview_cmd.add_argument(
+        "--limit",
+        type=int,
+        default=DEFAULT_PREVIEW_LIMIT,
+        help=f"Maximum sample rows per source (default: {DEFAULT_PREVIEW_LIMIT}).",
+    )
 
     build_cmd = subparsers.add_parser(
         "build",
@@ -163,20 +168,58 @@ def _run_build(spec_path: str, *, output_dir: str, run_id: str | None) -> int:
     return 0
 
 
-def _run_reserved(command: str) -> int:
-    """예약된 미구현 명령에 대한 공통 오류 메시지를 출력한다.
+def _run_preview(spec_path: str, *, limit: int) -> int:
+    """BuildSpec을 로드·검증한 뒤 각 소스의 스키마와 샘플만 출력한다.
+
+    실제 아티팩트 파일은 만들지 않는다.
 
     매개변수:
-        command: 사용자가 요청한 하위 명령 이름.
+        spec_path: 미리볼 BuildSpec YAML 경로.
+        limit: 소스별 샘플 최대 행 수.
 
     반환값:
-        int: 항상 1.
+        int: 성공 시 0, 로드/검증 실패 시 1.
     """
-    print(
-        f"error: '{command}' is not implemented yet (preview command pending — see issue #3)",
-        file=sys.stderr,
-    )
-    return 1
+    try:
+        spec = load_spec(Path(spec_path))
+        validate_spec(spec)
+    except SpecLoadError as exc:
+        print(f"error: failed to load spec: {exc}", file=sys.stderr)
+        return 1
+    except ValidationError as exc:
+        print("error: spec validation failed:", file=sys.stderr)
+        for problem in exc.problems:
+            print(f"  - {problem}", file=sys.stderr)
+        return 1
+
+    try:
+        client = _create_client()
+        result = preview_build(spec, client=client, limit=limit)
+    except ValueError as exc:
+        # limit < 1 같은 사용자 입력 오류.
+        print(f"error: invalid preview input: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"preview: {spec.dataset_id}")
+    failed_sources: list[str] = []
+    for source in result.previews:
+        if source.status != "ok":
+            failed_sources.append(source.source_key)
+            continue
+        columns = ", ".join(f"{c.name} ({c.dtype})" for c in source.schema.columns)
+        print(f"  - {source.source_key}: {columns}")
+        print(f"    sample ({len(source.preview.rows)} of {source.preview.total_rows} rows):")
+        for row in source.preview.rows:
+            print(f"      {row}")
+
+    if failed_sources:
+        # 소스 fetch 실패는 stderr + exit 1 — CI/자동화가 성공으로 오판하지 않도록.
+        print("error: preview failed for one or more sources", file=sys.stderr)
+        for source in result.previews:
+            if source.status != "ok":
+                print(f"  - {source.source_key}: {source.error}", file=sys.stderr)
+        return 1
+    return 0
 
 
 def dispatch(args: argparse.Namespace) -> int:
@@ -196,10 +239,12 @@ def dispatch(args: argparse.Namespace) -> int:
     command = args.command
     if command == "validate":
         return _run_validate(args.spec)
+    if command == "preview":
+        return _run_preview(args.spec, limit=args.limit)
     if command == "build":
         return _run_build(args.spec, output_dir=args.output_dir, run_id=args.run_id)
-    if command in _RESERVED_COMMANDS:
-        return _run_reserved(command)
+    # 일반적인 CLI 경로로는 도달할 수 없지만(argparse가 알 수 없는 하위 명령을 거부함),
+    # 프로그래밍 방식 호출자를 위한 방어적 대체 경로로 유지한다.
     return 2
 
 
