@@ -1,7 +1,7 @@
 """kpubdata-builder용 명령줄 진입점.
 
-이 모듈은 argparse 기반 CLI를 구성하고, 현재 지원되는 validate 명령과
-향후 예약된 preview/build 명령의 진입점을 제공한다.
+이 모듈은 argparse 기반 CLI를 구성하고, validate/build 명령과 향후 예약된
+preview 명령의 진입점을 제공한다.
 
 주요 함수:
     - build_parser: 하위 명령을 포함한 ArgumentParser 구성
@@ -18,11 +18,11 @@ from pathlib import Path
 from typing import cast
 
 from . import __version__
-from .build import execute_build
-from .errors import BuildError, SpecLoadError, ValidationError
-from .executor import SourceClient
+from .errors import SpecLoadError, ValidationError
+from .pipeline import run_build
 from .spec import load_spec
 from .spec.validator import validate_spec
+from .stages.bronze.build import SourceClient
 
 _RESERVED_COMMANDS: frozenset[str] = frozenset({"preview"})
 
@@ -67,16 +67,32 @@ def build_parser() -> argparse.ArgumentParser:
 
     build_cmd = subparsers.add_parser(
         "build",
-        help="Execute a BuildSpec to produce artifacts.",
+        help="Execute a BuildSpec through the Medallion pipeline.",
     )
     build_cmd.add_argument("spec", help="Path to the BuildSpec YAML file.")
     build_cmd.add_argument(
         "--output-dir",
-        default="./dist",
-        help="Directory where artifacts and manifest are written (default: ./dist).",
+        default="build",
+        help="Run workspace root directory (default: build).",
+    )
+    build_cmd.add_argument(
+        "--run-id",
+        default=None,
+        help="Run identifier (default: generated timestamp).",
     )
 
     return parser
+
+
+def _create_client() -> SourceClient:
+    """kpubdata 클라이언트를 환경설정으로 생성한다.
+
+    테스트에서 monkeypatch로 대체할 수 있도록 별도 함수로 분리한다. 실제
+    네트워크 호출은 build 실행(run_build) 시점에만 발생한다.
+    """
+    from kpubdata import Client
+
+    return cast(SourceClient, Client.from_env())
 
 
 def _run_validate(spec_path: str) -> int:
@@ -106,21 +122,17 @@ def _run_validate(spec_path: str) -> int:
     return 0
 
 
-def _make_default_client() -> SourceClient:
-    """Create the default kpubdata client. Isolated for test injection.
+def _run_build(spec_path: str, *, output_dir: str, run_id: str | None) -> int:
+    """BuildSpec을 로드·검증한 뒤 Medallion 파이프라인을 실행한다.
 
-    kpubdata's concrete ``Client`` satisfies the ``SourceClient`` Protocol at
-    runtime (duck typing), but mypy cannot confirm structural compatibility
-    across the package boundary: ``Client.dataset`` returns kpubdata's concrete
-    ``Dataset`` rather than our minimal ``SourceDataset`` Protocol. This single,
-    explicit cast localizes that boundary instead of suppressing it line-by-line.
+    매개변수:
+        spec_path: 빌드할 BuildSpec YAML 경로.
+        output_dir: 실행 워크스페이스 루트.
+        run_id: 실행 식별자. None이면 타임스탬프로 생성.
+
+    반환값:
+        int: 모든 소스 성공 시 0, 로드/검증/빌드 실패 시 1.
     """
-    from kpubdata import Client
-
-    return cast(SourceClient, Client.from_env())
-
-
-def _run_build(spec_path: str, output_dir: str) -> int:
     try:
         spec = load_spec(Path(spec_path))
         validate_spec(spec)
@@ -133,18 +145,21 @@ def _run_build(spec_path: str, output_dir: str) -> int:
             print(f"  - {problem}", file=sys.stderr)
         return 1
 
-    try:
-        client = _make_default_client()
-        result = execute_build(spec, client, output_dir=Path(output_dir))
-    except BuildError as exc:
-        print(f"error: build failed: {exc}", file=sys.stderr)
-        return 1
+    client = _create_client()
+    result = run_build(spec, client=client, output_root=Path(output_dir), run_id=run_id)
 
-    print(f"built spec: {spec.dataset_id}")
-    print("artifacts:")
-    for path in result.artifact_paths:
-        print(f"  - {path}")
+    print(f"build: {spec.dataset_id} (run {result.context.run_id})")
+    for outcome in result.outcomes:
+        stages = ", ".join(outcome.stages_completed) or "-"
+        print(f"  - {outcome.source_key}: {outcome.status} [{stages}]")
     print(f"manifest: {result.manifest_path}")
+
+    if result.status != "ok":
+        print("error: build failed for one or more sources", file=sys.stderr)
+        for outcome in result.outcomes:
+            if outcome.status == "failed":
+                print(f"  - {outcome.source_key}: {outcome.error}", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -158,8 +173,7 @@ def _run_reserved(command: str) -> int:
         int: 항상 1.
     """
     print(
-        f"error: '{command}' is not implemented yet "
-        "(pipeline orchestrator pending — see issue #43)",
+        f"error: '{command}' is not implemented yet (preview command pending — see issue #3)",
         file=sys.stderr,
     )
     return 1
@@ -183,11 +197,9 @@ def dispatch(args: argparse.Namespace) -> int:
     if command == "validate":
         return _run_validate(args.spec)
     if command == "build":
-        return _run_build(args.spec, args.output_dir)
+        return _run_build(args.spec, output_dir=args.output_dir, run_id=args.run_id)
     if command in _RESERVED_COMMANDS:
         return _run_reserved(command)
-    # 일반적인 CLI 경로로는 도달할 수 없지만(argparse가 알 수 없는 하위 명령을 거부함),
-    # 프로그래밍 방식 호출자를 위한 방어적 대체 경로로 유지한다.
     return 2
 
 
