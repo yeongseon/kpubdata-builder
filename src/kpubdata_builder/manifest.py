@@ -11,6 +11,18 @@ from .errors import ManifestError
 
 
 @dataclass(frozen=True)
+class SourceProvenance:
+    """Provenance record for a single data source in a build."""
+
+    provider: str
+    dataset: str
+    fetched_at: str
+    params: dict[str, object] = field(default_factory=dict)
+    record_count: int = 0
+    data_checksum: str = ""
+
+
+@dataclass(frozen=True)
 class BuildManifest:
     """Execution summary artifact for build auditing."""
 
@@ -22,6 +34,18 @@ class BuildManifest:
     warnings: tuple[str, ...] = ()
     errors: tuple[str, ...] = ()
     row_counts: dict[str, int] = field(default_factory=dict)
+    provenance: tuple[SourceProvenance, ...] = ()
+
+
+def _serialize_provenance(prov: SourceProvenance) -> dict[str, object]:
+    return {
+        "provider": prov.provider,
+        "dataset": prov.dataset,
+        "fetched_at": prov.fetched_at,
+        "params": prov.params,
+        "record_count": prov.record_count,
+        "data_checksum": prov.data_checksum,
+    }
 
 
 def manifest_writer(manifest: BuildManifest, output_path: Path) -> None:
@@ -35,6 +59,7 @@ def manifest_writer(manifest: BuildManifest, output_path: Path) -> None:
         "warnings": list(manifest.warnings),
         "errors": list(manifest.errors),
         "row_counts": manifest.row_counts,
+        "provenance": [_serialize_provenance(p) for p in manifest.provenance],
     }
     serialized = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
     try:
@@ -49,4 +74,4 @@ def write_manifest(manifest: BuildManifest, output_path: Path) -> None:
     manifest_writer(manifest, output_path)
 
 
-__all__ = ["BuildManifest", "manifest_writer", "write_manifest"]
+__all__ = ["BuildManifest", "SourceProvenance", "manifest_writer", "write_manifest"]

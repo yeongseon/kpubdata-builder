@@ -129,6 +129,8 @@ def _provenance_to_dict(provenance: ProvenanceEvent) -> dict[str, JsonValue]:
         "source_key": provenance.source_key,
         "fetch_params": provenance.fetch_params,
         "fetched_at": _format_datetime(provenance.fetched_at),
+        "record_count": provenance.record_count,
+        "data_checksum": provenance.data_checksum,
     }
 
 

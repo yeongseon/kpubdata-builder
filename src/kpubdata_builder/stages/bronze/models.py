@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -19,6 +21,16 @@ def require_timezone_aware(value: datetime, *, field_name: str) -> None:
         raise ValueError(f"{field_name} must be timezone-aware")
 
 
+def compute_data_checksum(records: tuple[dict[str, JsonValue], ...]) -> str:
+    """Compute a deterministic SHA-256 checksum over sorted-key JSON of records."""
+    serialized = json.dumps(
+        [dict(sorted(r.items())) for r in records],
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
 @dataclass(frozen=True)
 class ProvenanceEvent:
     """Record where and when a Bronze source fetch happened."""
@@ -27,6 +39,8 @@ class ProvenanceEvent:
     fetch_params: dict[str, JsonValue] = field(default_factory=dict)
     fetched_at: datetime = field(default_factory=utc_now)
     operation: str = "fetch"
+    record_count: int = 0
+    data_checksum: str = ""
 
     def __post_init__(self) -> None:
         require_timezone_aware(self.fetched_at, field_name="fetched_at")

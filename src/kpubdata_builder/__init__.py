@@ -12,7 +12,7 @@ from .errors import (
     SpecLoadError,
     ValidationError,
 )
-from .manifest import BuildManifest, manifest_writer
+from .manifest import BuildManifest, SourceProvenance, manifest_writer
 from .spec import BuildSpec, ExportTarget, SourceRef
 from .validator import validate_spec
 
@@ -27,6 +27,7 @@ __all__ = [
     "ExportError",
     "ManifestError",
     "ExportTarget",
+    "SourceProvenance",
     "SourceRef",
     "SpecLoadError",
     "ValidationError",

@@ -12,6 +12,7 @@ from kpubdata_builder.stages.bronze import (
     BronzeArtifact,
     ProvenanceEvent,
     build_bronze_artifact,
+    compute_data_checksum,
     persist_bronze_artifact,
 )
 from kpubdata_builder.stages.bronze.build import DatasetResult, SourceDataset
@@ -96,11 +97,12 @@ def test_build_bronze_artifact_fetches_raw_records_without_transforming() -> Non
     assert artifact.raw_records == tuple(records)
     assert artifact.raw_records[0] is records[0]
     assert artifact.record_count == 2
-    assert artifact.provenance == ProvenanceEvent(
-        source_key="datago.apt_trade",
-        fetch_params={"lawd_cd": "11680", "deal_ymd": "202501"},
-        fetched_at=fetched_at,
-    )
+    assert artifact.provenance is not None
+    assert artifact.provenance.source_key == "datago.apt_trade"
+    assert artifact.provenance.fetch_params == {"lawd_cd": "11680", "deal_ymd": "202501"}
+    assert artifact.provenance.fetched_at == fetched_at
+    assert artifact.provenance.record_count == 2
+    assert artifact.provenance.data_checksum != ""
 
 
 def test_persist_bronze_artifact_writes_jsonl_and_metadata(tmp_path: Path) -> None:
@@ -117,6 +119,13 @@ def test_persist_bronze_artifact_writes_jsonl_and_metadata(tmp_path: Path) -> No
             source_key="datago.apt_trade",
             fetch_params={"lawd_cd": "11680"},
             fetched_at=fetched_at,
+            record_count=2,
+            data_checksum=compute_data_checksum(
+                (
+                    {"id": "1", "name": "강남구", "nested": {"b": 2, "a": 1}},
+                    {"id": "2", "name": "서초구", "amount": None},
+                )
+            ),
         ),
     )
 
@@ -142,12 +151,13 @@ def test_persist_bronze_artifact_writes_jsonl_and_metadata(tmp_path: Path) -> No
         "records": "raw_records.jsonl",
         "metadata": "metadata.json",
     }
-    assert metadata["provenance"] == {
-        "operation": "fetch",
-        "source_key": "datago.apt_trade",
-        "fetch_params": {"lawd_cd": "11680"},
-        "fetched_at": "2026-05-08T12:00:00+00:00",
-    }
+    prov = metadata["provenance"]
+    assert prov["operation"] == "fetch"
+    assert prov["source_key"] == "datago.apt_trade"
+    assert prov["fetch_params"] == {"lawd_cd": "11680"}
+    assert prov["fetched_at"] == "2026-05-08T12:00:00+00:00"
+    assert prov["record_count"] == 2
+    assert prov["data_checksum"] != ""
 
 
 def test_persist_bronze_artifact_separates_different_params(tmp_path: Path) -> None:
@@ -189,3 +199,23 @@ def test_persist_bronze_artifact_rejects_unsafe_run_id(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="must not be empty"):
         persist_bronze_artifact(artifact, output_root=tmp_path, run_id="")
+
+
+# --- compute_data_checksum ---
+
+
+def test_compute_data_checksum_deterministic() -> None:
+    records: tuple[dict[str, JsonValue], ...] = ({"a": 1, "b": 2}, {"c": 3})
+    assert compute_data_checksum(records) == compute_data_checksum(records)
+
+
+def test_compute_data_checksum_differs_for_different_data() -> None:
+    r1: tuple[dict[str, JsonValue], ...] = ({"a": 1},)
+    r2: tuple[dict[str, JsonValue], ...] = ({"a": 2},)
+    assert compute_data_checksum(r1) != compute_data_checksum(r2)
+
+
+def test_compute_data_checksum_empty() -> None:
+    checksum = compute_data_checksum(())
+    assert isinstance(checksum, str)
+    assert len(checksum) == 64

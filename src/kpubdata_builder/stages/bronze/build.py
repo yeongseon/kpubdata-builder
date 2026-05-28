@@ -7,7 +7,13 @@ from datetime import datetime
 from typing import Protocol
 
 from ...spec import JsonValue
-from .models import BronzeArtifact, ProvenanceEvent, require_timezone_aware, utc_now
+from .models import (
+    BronzeArtifact,
+    ProvenanceEvent,
+    compute_data_checksum,
+    require_timezone_aware,
+    utc_now,
+)
 
 
 class DatasetResult(Protocol):
@@ -51,6 +57,8 @@ def build_bronze_artifact(
         source_key=source_key,
         fetch_params=resolved_params,
         fetched_at=resolved_fetched_at,
+        record_count=len(raw_records),
+        data_checksum=compute_data_checksum(raw_records),
     )
 
     return BronzeArtifact(
