@@ -15,6 +15,7 @@ import argparse
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import cast
 
 from . import __version__
 from .build import execute_build
@@ -106,10 +107,17 @@ def _run_validate(spec_path: str) -> int:
 
 
 def _make_default_client() -> SourceClient:
-    """Create the default kpubdata client. Isolated for test injection."""
+    """Create the default kpubdata client. Isolated for test injection.
+
+    kpubdata's concrete ``Client`` satisfies the ``SourceClient`` Protocol at
+    runtime (duck typing), but mypy cannot confirm structural compatibility
+    across the package boundary: ``Client.dataset`` returns kpubdata's concrete
+    ``Dataset`` rather than our minimal ``SourceDataset`` Protocol. This single,
+    explicit cast localizes that boundary instead of suppressing it line-by-line.
+    """
     from kpubdata import Client
 
-    return Client.from_env()    # type: ignore[return-value]
+    return cast(SourceClient, Client.from_env())
 
 
 def _run_build(spec_path: str, output_dir: str) -> int:
