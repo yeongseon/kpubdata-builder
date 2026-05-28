@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+import pytest
+
 from kpubdata_builder.pipeline import PreviewResult, preview_build
 from kpubdata_builder.spec import BuildSpec, ExportTarget, JsonValue, SourceRef
 from kpubdata_builder.tabular import PreviewSlice, SchemaInfo
@@ -83,3 +85,23 @@ def test_preview_build_records_failure_for_missing_source() -> None:
     preview = result.previews[0]
     assert preview.status == "failed"
     assert preview.error is not None
+
+
+def test_preview_build_fetches_by_provider_dataset_and_reports_alias() -> None:
+    """alias가 있어도 fetch는 provider.dataset 키로, 표면 키는 alias로 (#98 review와 동일 회귀)."""
+    spec = _spec(SourceRef(provider="datago", dataset="apt_trade", alias="trades"))
+    client = _FakeClient({"datago.apt_trade": [{"id": "1"}]})
+
+    result = preview_build(spec, client=client, limit=1)
+
+    preview = result.previews[0]
+    assert preview.status == "ok"
+    assert preview.source_key == "trades"
+
+
+def test_preview_build_rejects_non_positive_limit() -> None:
+    spec = _spec(SourceRef(provider="datago", dataset="apt_trade"))
+    client = _FakeClient({"datago.apt_trade": [{"id": "1"}]})
+
+    with pytest.raises(ValueError, match="limit"):
+        preview_build(spec, client=client, limit=0)

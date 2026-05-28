@@ -192,19 +192,33 @@ def _run_preview(spec_path: str, *, limit: int) -> int:
             print(f"  - {problem}", file=sys.stderr)
         return 1
 
-    client = _create_client()
-    result = preview_build(spec, client=client, limit=limit)
+    try:
+        client = _create_client()
+        result = preview_build(spec, client=client, limit=limit)
+    except ValueError as exc:
+        # limit < 1 같은 사용자 입력 오류.
+        print(f"error: invalid preview input: {exc}", file=sys.stderr)
+        return 1
 
     print(f"preview: {spec.dataset_id}")
+    failed_sources: list[str] = []
     for source in result.previews:
         if source.status != "ok":
-            print(f"  - {source.source_key}: failed ({source.error})")
+            failed_sources.append(source.source_key)
             continue
         columns = ", ".join(f"{c.name} ({c.dtype})" for c in source.schema.columns)
         print(f"  - {source.source_key}: {columns}")
         print(f"    sample ({len(source.preview.rows)} of {source.preview.total_rows} rows):")
         for row in source.preview.rows:
             print(f"      {row}")
+
+    if failed_sources:
+        # 소스 fetch 실패는 stderr + exit 1 — CI/자동화가 성공으로 오판하지 않도록.
+        print("error: preview failed for one or more sources", file=sys.stderr)
+        for source in result.previews:
+            if source.status != "ok":
+                print(f"  - {source.source_key}: {source.error}", file=sys.stderr)
+        return 1
     return 0
 
 

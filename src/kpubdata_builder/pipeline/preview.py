@@ -50,9 +50,14 @@ class PreviewResult:
     previews: tuple[SourcePreview, ...]
 
 
-def _source_key(source: SourceRef) -> str:
-    """소스 식별자를 alias 우선으로 결정한다."""
-    return source.alias if source.alias else f"{source.provider}.{source.dataset}"
+def _fetch_key(source: SourceRef) -> str:
+    """kpubdata Client.dataset()에 전달할 정규 fetch 키 (provider.dataset)."""
+    return f"{source.provider}.{source.dataset}"
+
+
+def _output_key(source: SourceRef) -> str:
+    """미리보기 결과 표면에 노출할 키 — alias가 있으면 alias."""
+    return source.alias if source.alias else _fetch_key(source)
 
 
 def _preview_source(
@@ -62,19 +67,23 @@ def _preview_source(
     limit: int,
 ) -> SourcePreview:
     """한 소스를 fetch → Silver(메모리)로 만들어 스키마/샘플만 추출한다."""
-    key = _source_key(source)
+    # fetch_key는 항상 provider.dataset (kpubdata.Client 계약). 표면 키는 alias 우선.
+    fetch_key = _fetch_key(source)
+    out_key = _output_key(source)
     try:
-        bronze = build_bronze_artifact(client, source_key=key, fetch_params=dict(source.params))
+        bronze = build_bronze_artifact(
+            client, source_key=fetch_key, fetch_params=dict(source.params)
+        )
         silver = build_silver_dataset(bronze, preview_limit=limit)
         return SourcePreview(
-            source_key=key,
+            source_key=out_key,
             status="ok",
             schema=silver.schema,
             preview=silver.preview,
         )
     except Exception as exc:  # 미리보기 실패를 결과로 변환
         return SourcePreview(
-            source_key=key,
+            source_key=out_key,
             status="failed",
             schema=SchemaInfo(),
             preview=PreviewSlice(rows=(), total_rows=0),
@@ -97,6 +106,11 @@ def preview_build(
 
     반환값:
         PreviewResult: 소스별 스키마/샘플.
+
+    예외:
+        ValueError: limit이 1보다 작은 경우.
     """
+    if limit < 1:
+        raise ValueError(f"limit must be >= 1, got {limit}")
     previews = tuple(_preview_source(source, client=client, limit=limit) for source in spec.sources)
     return PreviewResult(previews=previews)
