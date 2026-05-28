@@ -1,0 +1,366 @@
+openapi: 3.1.0
+info:
+  title: KPubData Builder Service API
+  version: "1.0.0"
+  description: >-
+    Builder 중심 서비스 계약. BuildSpec 검증, preview, build 실행, manifest/artifact
+    조회, publish 실행을 제공한다. CLI와 HTTP service mode가 동일한 도메인 계약을
+    공유한다. 본 문서는 API_CONTRACT.md의 기계 판독용(OpenAPI 3.1) 단일 소스이며,
+    Studio 같은 소비자가 타입 클라이언트를 생성하는 기준이 된다.
+servers:
+  - url: http://localhost:8000
+    description: 로컬 builder 개발 서버
+
+paths:
+  /datasets:
+    get:
+      operationId: listDatasets
+      summary: 사용 가능한 dataset/source 메타데이터 조회 (동기식)
+      responses:
+        "200":
+          description: dataset 카탈로그
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DatasetCatalog"
+
+  /spec/validate:
+    post:
+      operationId: validateSpec
+      summary: BuildSpec 검증 (동기식)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SpecRequest"
+      responses:
+        "200":
+          description: 검증 결과
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidateResponse"
+        "422":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /preview:
+    post:
+      operationId: previewBuild
+      summary: 샘플 실행 및 export preview (동기식)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PreviewRequest"
+      responses:
+        "200":
+          description: preview 결과
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PreviewResponse"
+        "422":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /builds:
+    post:
+      operationId: createBuild
+      summary: 새로운 build 실행 시작 (비동기식)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SpecRequest"
+      responses:
+        "202":
+          description: build 수락됨
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BuildAccepted"
+        "422":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /builds/{id}:
+    get:
+      operationId: getBuild
+      summary: build 상태 조회 (비동기식)
+      parameters:
+        - $ref: "#/components/parameters/BuildId"
+      responses:
+        "200":
+          description: build 상태
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BuildStatus"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /builds/{id}/manifest:
+    get:
+      operationId: getBuildManifest
+      summary: build manifest 조회 (manifested 이상 상태)
+      parameters:
+        - $ref: "#/components/parameters/BuildId"
+      responses:
+        "200":
+          description: manifest 본문
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ManifestResponse"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /builds/{id}/artifacts:
+    get:
+      operationId: listBuildArtifacts
+      summary: build artifact 목록 조회 (exported 이상 상태)
+      parameters:
+        - $ref: "#/components/parameters/BuildId"
+      responses:
+        "200":
+          description: artifact 목록
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactsResponse"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /publish:
+    post:
+      operationId: publishArtifacts
+      summary: 이미 생성된 build artifact 게시 (비동기식)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PublishRequest"
+      responses:
+        "202":
+          description: publish 수락됨
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublishAccepted"
+        "422":
+          $ref: "#/components/responses/ErrorResponse"
+
+components:
+  parameters:
+    BuildId:
+      name: id
+      in: path
+      required: true
+      description: build 실행 식별자
+      schema:
+        type: string
+
+  responses:
+    ErrorResponse:
+      description: 표준 오류 응답
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: 안정적인 기계 판독용 오류 코드
+            message:
+              type: string
+              description: 사람이 읽는 요약 메시지
+            details:
+              type: array
+              items:
+                type: object
+                properties:
+                  field:
+                    type: string
+                  reason:
+                    type: string
+
+    BuildState:
+      type: string
+      enum: [draft, validated, running, exported, manifested, published, failed]
+
+    BuildSpec:
+      type: object
+      description: 선언적 빌드 명세. 세부 스키마는 spec 모델을 따른다.
+      additionalProperties: true
+
+    SpecRequest:
+      type: object
+      required: [spec]
+      properties:
+        spec:
+          $ref: "#/components/schemas/BuildSpec"
+
+    PreviewRequest:
+      type: object
+      required: [spec]
+      properties:
+        spec:
+          $ref: "#/components/schemas/BuildSpec"
+        limit:
+          type: integer
+          minimum: 1
+          default: 5
+
+    DatasetCatalog:
+      type: object
+      required: [datasets]
+      properties:
+        datasets:
+          type: array
+          items:
+            type: object
+            required: [provider, dataset]
+            properties:
+              provider:
+                type: string
+              dataset:
+                type: string
+              supports_preview:
+                type: boolean
+              supported_exports:
+                type: array
+                items:
+                  type: string
+
+    ValidateResponse:
+      type: object
+      required: [valid]
+      properties:
+        valid:
+          type: boolean
+        issues:
+          type: array
+          items:
+            type: string
+
+    PreviewResponse:
+      type: object
+      required: [records, schema]
+      properties:
+        stage:
+          type: string
+        records:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        schema:
+          type: object
+          additionalProperties:
+            type: string
+        export_preview:
+          type: object
+          properties:
+            format:
+              type: string
+            artifact_path:
+              type: string
+
+    BuildAccepted:
+      type: object
+      required: [build_id, state]
+      properties:
+        build_id:
+          type: string
+        state:
+          $ref: "#/components/schemas/BuildState"
+        status_url:
+          type: string
+
+    BuildStatus:
+      type: object
+      required: [build_id, state]
+      properties:
+        build_id:
+          type: string
+        dataset:
+          type: string
+        state:
+          $ref: "#/components/schemas/BuildState"
+        started_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    Artifact:
+      type: object
+      required: [path, format]
+      properties:
+        path:
+          type: string
+        format:
+          type: string
+        size_bytes:
+          type: integer
+
+    ManifestResponse:
+      type: object
+      required: [build_id, manifest]
+      properties:
+        build_id:
+          type: string
+        state:
+          $ref: "#/components/schemas/BuildState"
+        manifest:
+          type: object
+          additionalProperties: true
+
+    ArtifactsResponse:
+      type: object
+      required: [build_id, artifacts]
+      properties:
+        build_id:
+          type: string
+        artifacts:
+          type: array
+          items:
+            $ref: "#/components/schemas/Artifact"
+
+    PublishRequest:
+      type: object
+      required: [build_id, target]
+      properties:
+        build_id:
+          type: string
+        target:
+          type: object
+          required: [kind]
+          properties:
+            kind:
+              type: string
+            repository:
+              type: string
+
+    PublishAccepted:
+      type: object
+      required: [publish_id, build_id, state]
+      properties:
+        publish_id:
+          type: string
+        build_id:
+          type: string
+        state:
+          type: string
