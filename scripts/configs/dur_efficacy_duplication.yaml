@@ -1,0 +1,60 @@
+# DUR 효능군중복 — HuggingFace Dataset Publishing Config
+# Dataset: kpubdata/dur-efficacy-duplication
+# Source: data.go.kr DURPrdlstInfoService03
+
+source:
+  provider: datago
+  dataset: dur_efficacy_duplication
+  source_url: "https://www.data.go.kr/data/15075057/openapi.do"
+  list_all: true
+  fetch_params:
+    - {}
+
+transform:
+  column_mapping:
+    ITEM_SEQ: item_seq
+    ITEM_NAME: item_name
+    ENTP_NAME: company_name
+    CHART: formulation
+    CLASS_NO: class_code
+    CLASS_NAME: class_name
+    INGR_CODE: ingredient_code
+    INGR_ENG_NAME: ingredient_eng_name
+    INGR_KOR_NAME: ingredient_kor_name
+    REMARK: remark
+    ITEM_PERMIT_DATE: item_permit_date
+    CHANGE_DATE: change_date
+
+  dtypes: {}
+  derived: []
+  filters: []
+
+output:
+  staging_dir: "./staging/dur-efficacy-duplication"
+  parquet_filename: "data/train.parquet"
+  hf_repo: "kpubdata/dur-efficacy-duplication"
+
+card:
+  title: "DUR Efficacy Group Duplication (효능군중복 의약품)"
+  description: |
+    Drug Utilization Review (DUR) data for therapeutic duplication
+    (same efficacy group) warnings, from Korea's MFDS (식약처).
+  license: cc-by-4.0
+  language:
+    - ko
+  tags:
+    - healthcare
+    - pharmacy
+    - drug-safety
+    - korea
+    - dur
+    - public-data
+  features:
+    - name: item_seq
+      description: Drug item sequence number (품목기준코드)
+    - name: item_name
+      description: Drug name (품목명)
+    - name: ingredient_kor_name
+      description: Active ingredient Korean name (성분명 한글)
+    - name: ingredient_eng_name
+      description: Active ingredient English name (성분명 영문)

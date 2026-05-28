@@ -1,0 +1,56 @@
+# DUR 용량주의 — HuggingFace Dataset Publishing Config
+# Dataset: kpubdata/dur-dosage-caution
+# Source: data.go.kr DURPrdlstInfoService03
+
+source:
+  provider: datago
+  dataset: dur_dosage_caution
+  source_url: "https://www.data.go.kr/data/15075057/openapi.do"
+  list_all: true
+  fetch_params:
+    - {}
+
+transform:
+  column_mapping:
+    ITEM_SEQ: item_seq
+    ITEM_NAME: item_name
+    ENTP_NAME: company_name
+    CHART: formulation
+    CLASS_NO: class_code
+    CLASS_NAME: class_name
+    PROHBT_CONTENT: caution_content
+    REMARK: remark
+    ITEM_PERMIT_DATE: item_permit_date
+    CHANGE_DATE: change_date
+
+  dtypes: {}
+  derived: []
+  filters: []
+
+output:
+  staging_dir: "./staging/dur-dosage-caution"
+  parquet_filename: "data/train.parquet"
+  hf_repo: "kpubdata/dur-dosage-caution"
+
+card:
+  title: "DUR Dosage Caution (용량주의 의약품)"
+  description: |
+    Drug Utilization Review (DUR) data for medications requiring
+    dosage caution, from Korea's MFDS (식약처).
+  license: cc-by-4.0
+  language:
+    - ko
+  tags:
+    - healthcare
+    - pharmacy
+    - drug-safety
+    - korea
+    - dur
+    - public-data
+  features:
+    - name: item_seq
+      description: Drug item sequence number (품목기준코드)
+    - name: item_name
+      description: Drug name (품목명)
+    - name: caution_content
+      description: Dosage caution details (용량주의 내용)

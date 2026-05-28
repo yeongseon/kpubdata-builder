@@ -1,0 +1,71 @@
+# DUR 병용금기 품목정보 — HuggingFace Dataset Publishing Config
+# Dataset: kpubdata/dur-usjnt-taboo
+# Source: data.go.kr DURPrdlstInfoService03
+
+source:
+  provider: datago
+  dataset: dur_usjnt_taboo
+  source_url: "https://www.data.go.kr/data/15075057/openapi.do"
+  list_all: true
+  fetch_params:
+    - {}
+
+transform:
+  column_mapping:
+    ITEM_SEQ: item_seq
+    ITEM_NAME: item_name
+    ENTP_NAME: company_name
+    CHART: formulation
+    CLASS_NO: class_code
+    CLASS_NAME: class_name
+    MIXTURE_ITEM_SEQ: mixture_item_seq
+    MIXTURE_ITEM_NAME: mixture_item_name
+    MIXTURE_ENTP_NAME: mixture_company_name
+    MIXTURE_CHART: mixture_formulation
+    MIXTURE_CLASS_NO: mixture_class_code
+    MIXTURE_CLASS_NAME: mixture_class_name
+    PROHBT_CONTENT: prohibition_content
+    REMARK: remark
+    ITEM_PERMIT_DATE: item_permit_date
+    CHANGE_DATE: change_date
+
+  dtypes: {}
+  derived: []
+  filters: []
+
+output:
+  staging_dir: "./staging/dur-usjnt-taboo"
+  parquet_filename: "data/train.parquet"
+  hf_repo: "kpubdata/dur-usjnt-taboo"
+
+card:
+  title: "DUR Drug Combination Contraindication (병용금기 품목정보)"
+  description: |
+    Drug Utilization Review (DUR) contraindicated drug combination data
+    from Korea's Ministry of Food and Drug Safety (식약처).
+
+    Contains pairs of drugs that should not be used together,
+    including the reason for contraindication.
+  license: cc-by-4.0
+  language:
+    - ko
+  tags:
+    - healthcare
+    - pharmacy
+    - drug-safety
+    - korea
+    - dur
+    - public-data
+  task_categories:
+    - tabular-classification
+  features:
+    - name: item_seq
+      description: Drug item sequence number (품목기준코드)
+    - name: item_name
+      description: Drug name (품목명)
+    - name: company_name
+      description: Manufacturer name (업체명)
+    - name: mixture_item_name
+      description: Contraindicated drug name (병용금기 품목명)
+    - name: prohibition_content
+      description: Reason for contraindication (금기 사유)
