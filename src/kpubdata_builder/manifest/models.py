@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from .provenance import SourceProvenance
 from .schema_summary import SchemaSummary
 
 
@@ -29,6 +30,7 @@ class BuildManifest:
         errors: 실패 또는 부분 실패 메시지 목록.
         row_counts: 단계별 또는 산출물별 레코드 수 요약.
         schema_summaries: 소스(산출물) 키별 스키마 요약. row_counts와 동일한 키를 사용한다.
+        provenance: 소스별 상세 출처(fetch 시각/파라미터/레코드 수/체크섬) 목록.
     """
 
     build_id: str
@@ -40,6 +42,7 @@ class BuildManifest:
     errors: tuple[str, ...] = ()
     row_counts: dict[str, int] = field(default_factory=dict)
     schema_summaries: dict[str, SchemaSummary] = field(default_factory=dict)
+    provenance: tuple[SourceProvenance, ...] = ()
 
 
 __all__ = ["BuildManifest"]
