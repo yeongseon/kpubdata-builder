@@ -12,7 +12,13 @@ from .errors import (
     SpecLoadError,
     ValidationError,
 )
-from .manifest import BuildManifest, manifest_writer
+from .manifest import (
+    BuildManifest,
+    FieldSummary,
+    SchemaSummary,
+    extract_schema_summary,
+    manifest_writer,
+)
 from .spec import BuildSpec, ExportTarget, SourceRef
 from .validator import validate_spec
 
@@ -23,6 +29,9 @@ __all__ = [
     "BuildError",
     "BuildManifest",
     "BuildSpec",
+    "FieldSummary",
+    "SchemaSummary",
+    "extract_schema_summary",
     "ExecutionError",
     "ExportError",
     "ManifestError",
