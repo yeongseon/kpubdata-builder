@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from datetime import timezone
 from pathlib import Path
 
@@ -36,6 +37,9 @@ def manifest_writer(manifest: BuildManifest, output_path: Path) -> None:
         "warnings": list(manifest.warnings),
         "errors": list(manifest.errors),
         "row_counts": manifest.row_counts,
+        "schema_summaries": {
+            key: asdict(summary) for key, summary in manifest.schema_summaries.items()
+        },
     }
     serialized = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
     try:
