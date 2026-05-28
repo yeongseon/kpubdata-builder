@@ -25,6 +25,7 @@ from ..stages.bronze.build import SourceClient, build_bronze_artifact
 from ..stages.bronze.models import BronzeArtifact, utc_now
 from ..stages.bronze.persist import persist_bronze_artifact
 from ..stages.gold.build import build_gold_package
+from ..stages.gold.card import build_dataset_card, render_dataset_card
 from ..stages.gold.persist import persist_gold_package
 from ..stages.silver.build import build_silver_dataset
 from ..stages.silver.persist import persist_silver_dataset
@@ -134,6 +135,21 @@ def _run_source_pipeline(
         )
         completed.append("gold")
         _record_output_paths(outputs, gold_paths.table_path, gold_paths.package_path)
+
+        card = build_dataset_card(
+            title=context.spec.title,
+            description=context.spec.description,
+            sources=(fetch_key,),
+            fields=(
+                (column.name, column.dtype, column.nullable) for column in silver.schema.columns
+            ),
+            sample_rows=silver.preview.rows,
+            license=context.spec.metadata.get("license", ""),
+            version=context.spec.metadata.get("version", ""),
+        )
+        card_path = gold_paths.gold_dir / "README.md"
+        _ = card_path.write_text(render_dataset_card(card), encoding="utf-8")
+        _record_output_paths(outputs, card_path)
 
         row_counts[output_key] = silver.statistics.row_count
         return SourceBuildOutcome(
