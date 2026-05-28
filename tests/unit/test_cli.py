@@ -163,3 +163,28 @@ def test_validate_fails_for_malformed_yaml(
 
     assert exit_code == 1
     assert "failed to load spec" in captured.err
+
+
+# --- publish command ---
+
+
+def test_publish_local_copies_files(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    src = tmp_path / "artifacts"
+    src.mkdir()
+    (src / "data.parquet").write_text("fake data")
+
+    dest = tmp_path / "published"
+    exit_code = main(["publish", str(src), "--target", "local", "--destination", str(dest)])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "published to local" in captured.out
+    assert (dest / "data.parquet").exists()
+
+
+def test_publish_missing_source(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    exit_code = main(["publish", str(tmp_path / "missing"), "--target", "local"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "does not exist" in captured.err

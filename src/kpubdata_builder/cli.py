@@ -46,6 +46,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     build_cmd.add_argument("spec", nargs="?", help="Path to the BuildSpec YAML file.")
 
+    publish_cmd = subparsers.add_parser(
+        "publish",
+        help="Publish build artifacts to a destination (local or HuggingFace).",
+    )
+    publish_cmd.add_argument("source", help="Path to the build output directory to publish.")
+    publish_cmd.add_argument(
+        "--target",
+        choices=["local", "huggingface"],
+        default="local",
+        help="Publish target (default: local).",
+    )
+    publish_cmd.add_argument(
+        "--destination",
+        default="./published",
+        help="Destination path (for local) or HF repo ID (for huggingface).",
+    )
+
     return parser
 
 
@@ -74,10 +91,48 @@ def _run_reserved(command: str) -> int:
     return 1
 
 
+def _run_publish(source: str, target: str, destination: str) -> int:
+    source_path = Path(source)
+    if not source_path.exists():
+        print(f"error: source path does not exist: {source}", file=sys.stderr)
+        return 1
+
+    artifact_paths = tuple(source_path.iterdir()) if source_path.is_dir() else (source_path,)
+    if not artifact_paths:
+        print("error: no artifacts found to publish", file=sys.stderr)
+        return 1
+
+    from .publishers.base import BasePublisher
+
+    publisher: BasePublisher
+    if target == "local":
+        from .publishers.local import LocalPublisher
+
+        publisher = LocalPublisher(destination=Path(destination))
+    elif target == "huggingface":
+        from .publishers.huggingface import HuggingFacePublisher
+
+        publisher = HuggingFacePublisher(repo_id=destination)
+    else:
+        print(f"error: unsupported publish target: {target}", file=sys.stderr)
+        return 1
+
+    try:
+        publisher.publish(artifact_paths)
+    except RuntimeError as exc:
+        print(f"error: publish failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"published to {target}: {destination}")
+    return 0
+
+
 def dispatch(args: argparse.Namespace) -> int:
     command = args.command
     if command == "validate":
         return _run_validate(args.spec)
+    if command == "publish":
+        return _run_publish(args.source, args.target, args.destination)
     if command in _RESERVED_COMMANDS:
         return _run_reserved(command)
     # Unreachable via normal CLI (argparse rejects unknown subcommands),
