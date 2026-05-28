@@ -26,7 +26,7 @@ from .manifest import BuildManifest, manifest_writer
 from .spec import BuildSpec, ExportTarget, SourceRef
 from .spec.validator import validate_spec
 
-__version__ = "0.1.0a0"  # 패키지 버전 문자열
+__version__ = "0.1.0"  # 패키지 버전 문자열
 
 __all__ = [
     "ArtifactDataset",

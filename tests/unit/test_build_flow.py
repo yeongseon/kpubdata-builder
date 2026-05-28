@@ -98,7 +98,7 @@ def test_execute_build_rejects_unsupported_export_kind(tmp_path: Path) -> None:
 def test_cli_build_command_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import kpubdata_builder.cli as cli
 
-    monkeypatch.setattr(cli, "_make_default_client", lambda: FakeClient([{"id": "1"}]))
+    monkeypatch.setattr(cli, "_create_client", lambda: FakeClient([{"id": "1"}]))
 
     spec_path = tmp_path / "spec.yaml"
     spec_path.write_text(
@@ -113,7 +113,12 @@ def test_cli_build_command_end_to_end(tmp_path: Path, monkeypatch: pytest.Monkey
         "    output_path: data.jsonl\n",
         encoding="utf-8",
     )
-    code = cli.main(["build", str(spec_path), "--output-dir", str(tmp_path)])
+    output_dir = tmp_path / "out"
+    code = cli.main(["build", str(spec_path), "--output-dir", str(output_dir)])
     assert code == 0
-    assert (tmp_path / "data.jsonl").exists()
-    assert (tmp_path / "manifest.json").exists()
+    # 새 파이프라인은 output_dir/<run_id>/ 아래에 manifest를 기록한다.
+    run_dirs = list(output_dir.iterdir())
+    assert len(run_dirs) == 1
+    run_dir = run_dirs[0]
+    assert (run_dir / "manifest.json").exists()
+    assert (run_dir / "gold").is_dir()
