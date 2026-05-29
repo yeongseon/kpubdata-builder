@@ -1,0 +1,62 @@
+# 한국관광공사 키워드 검색 — HuggingFace Dataset Publishing Config
+# Dataset: kpubdata/tour-keyword-search
+# Source: data.go.kr TourAPI KorService2
+
+source:
+  provider: datago
+  dataset: tour_kor_keyword
+  source_url: "https://www.data.go.kr/data/15101578/openapi.do"
+  list_all: true
+  fetch_params:
+    - keyword: "서울"
+
+transform:
+  column_mapping:
+    title: title
+    addr1: address
+    addr2: address_detail
+    areacode: area_code
+    sigungucode: sigungu_code
+    contentid: content_id
+    contenttypeid: content_type_id
+    mapx: longitude
+    mapy: latitude
+    tel: phone
+    firstimage: image_url
+
+  dtypes:
+    longitude: float
+    latitude: float
+
+  derived: []
+  filters: []
+
+output:
+  staging_dir: "./staging/tour-keyword-search"
+  parquet_filename: "data/train.parquet"
+  hf_repo: "kpubdata/tour-keyword-search"
+
+card:
+  title: "Korea Tourism Keyword Search (키워드 검색 관광정보)"
+  description: |
+    Keyword-based tourism search results from the Korea Tourism Organization
+    (한국관광공사) via TourAPI.
+  license: cc-by-4.0
+  language:
+    - ko
+  tags:
+    - tourism
+    - korea
+    - search
+    - public-data
+  features:
+    - name: title
+      description: Name of the attraction/place (관광지명)
+    - name: address
+      description: Address (주소)
+    - name: longitude
+      description: Longitude (경도)
+    - name: latitude
+      description: Latitude (위도)
+    - name: content_type_id
+      description: Content type code (콘텐츠 유형)

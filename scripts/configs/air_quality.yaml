@@ -1,0 +1,100 @@
+# 대기오염정보 — HuggingFace Dataset Publishing Config
+# Dataset: kpubdata/air-quality
+# Source: data.go.kr 대기오염정보 조회서비스
+
+source:
+  provider: datago
+  dataset: air_quality
+  source_url: "https://www.data.go.kr/data/15073861/openapi.do"
+  list_all: true
+  fetch_params:
+    - stationName: "종로구"
+      dataTerm: "MONTH"
+    - stationName: "강남구"
+      dataTerm: "MONTH"
+    - stationName: "서초구"
+      dataTerm: "MONTH"
+    - stationName: "마포구"
+      dataTerm: "MONTH"
+    - stationName: "영등포구"
+      dataTerm: "MONTH"
+
+transform:
+  column_mapping:
+    stationName: station_name
+    dataTime: data_time
+    so2Value: so2
+    coValue: co
+    o3Value: o3
+    no2Value: no2
+    pm10Value: pm10
+    pm25Value: pm25
+    khaiValue: khai_index
+    khaiGrade: khai_grade
+    so2Grade: so2_grade
+    coGrade: co_grade
+    o3Grade: o3_grade
+    no2Grade: no2_grade
+    pm10Grade: pm10_grade
+    pm25Grade: pm25_grade
+
+  dtypes:
+    so2: float
+    co: float
+    o3: float
+    no2: float
+    pm10: float
+    pm25: float
+    khai_index: float
+
+  derived: []
+  filters: []
+
+output:
+  staging_dir: "./staging/air-quality"
+  parquet_filename: "data/train.parquet"
+  hf_repo: "kpubdata/air-quality"
+
+card:
+  title: "Korea Air Quality Monitoring Data (대기오염정보)"
+  description: |
+    Air quality monitoring data from Korea's AirKorea system.
+    Includes concentrations of SO2, CO, O3, NO2, PM10, PM2.5
+    and the Korean Air Quality Index (KHAI).
+
+    Useful for environmental analysis, time-series forecasting,
+    and public health research.
+  license: cc-by-4.0
+  language:
+    - ko
+  tags:
+    - environment
+    - air-quality
+    - korea
+    - time-series
+    - public-data
+  task_categories:
+    - tabular-regression
+    - time-series-forecasting
+  features:
+    - name: station_name
+      description: Monitoring station name (측정소명)
+    - name: data_time
+      description: Measurement datetime (측정일시)
+    - name: pm10
+      description: "PM10 concentration (μg/m³)"
+    - name: pm25
+      description: "PM2.5 concentration (μg/m³)"
+    - name: o3
+      description: "O3 concentration (ppm)"
+    - name: no2
+      description: "NO2 concentration (ppm)"
+    - name: co
+      description: "CO concentration (ppm)"
+    - name: so2
+      description: "SO2 concentration (ppm)"
+    - name: khai_index
+      description: "Korean Air Quality Index (통합대기환경지수)"
+  attribution: |
+    데이터 출처: 한국환경공단 대기오염정보 조회서비스
+    (Korea Environment Corporation — Air Quality Information Service)

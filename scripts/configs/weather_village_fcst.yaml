@@ -1,0 +1,74 @@
+# 기상청 단기예보 — HuggingFace Dataset Publishing Config
+# Dataset: kpubdata/weather-village-forecast
+# Source: data.go.kr 기상청 단기예보 조회서비스
+
+source:
+  provider: datago
+  dataset: village_fcst
+  source_url: "https://www.data.go.kr/data/15084084/openapi.do"
+  list_all: true
+  fetch_params:
+    - base_date: "20260101"
+      base_time: "0500"
+      nx: "55"
+      ny: "127"
+
+transform:
+  column_mapping:
+    baseDate: base_date
+    baseTime: base_time
+    category: category
+    fcstDate: forecast_date
+    fcstTime: forecast_time
+    fcstValue: forecast_value
+    nx: grid_x
+    ny: grid_y
+
+  dtypes:
+    grid_x: int
+    grid_y: int
+
+  derived: []
+  filters: []
+
+output:
+  staging_dir: "./staging/weather-village-forecast"
+  parquet_filename: "data/train.parquet"
+  hf_repo: "kpubdata/weather-village-forecast"
+
+card:
+  title: "Korea Short-Term Weather Forecast (단기예보)"
+  description: |
+    Short-term weather forecast data from the Korea Meteorological
+    Administration (기상청). Grid-based forecasts with multiple
+    weather categories (temperature, precipitation, humidity, etc.).
+
+    Data sourced via the official data.go.kr API.
+  license: cc-by-4.0
+  language:
+    - ko
+  tags:
+    - weather
+    - forecast
+    - korea
+    - time-series
+    - public-data
+  task_categories:
+    - tabular-regression
+  features:
+    - name: base_date
+      description: Base date of forecast (발표일자, YYYYMMDD)
+    - name: base_time
+      description: Base time of forecast (발표시각, HHMM)
+    - name: category
+      description: "Weather category code (TMP=기온, POP=강수확률, etc.)"
+    - name: forecast_date
+      description: Forecast target date (예보일자)
+    - name: forecast_time
+      description: Forecast target time (예보시각)
+    - name: forecast_value
+      description: Forecast value (예보값)
+    - name: grid_x
+      description: Grid X coordinate (격자 X)
+    - name: grid_y
+      description: Grid Y coordinate (격자 Y)
