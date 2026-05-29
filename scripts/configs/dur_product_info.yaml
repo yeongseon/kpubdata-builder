@@ -1,0 +1,58 @@
+# DUR 품목정보 — HuggingFace Dataset Publishing Config
+# Dataset: kpubdata/dur-product-info
+# Source: data.go.kr DURPrdlstInfoService03
+
+source:
+  provider: datago
+  dataset: dur_product_info
+  source_url: "https://www.data.go.kr/data/15075057/openapi.do"
+  list_all: true
+  fetch_params:
+    - {}
+
+transform:
+  column_mapping:
+    ITEM_SEQ: item_seq
+    ITEM_NAME: item_name
+    ENTP_NAME: company_name
+    CHART: formulation
+    CLASS_NO: class_code
+    CLASS_NAME: class_name
+    ETC_OTC_CODE: etc_otc_code
+    ITEM_PERMIT_DATE: item_permit_date
+    CHANGE_DATE: change_date
+
+  dtypes: {}
+  derived: []
+  filters: []
+
+output:
+  staging_dir: "./staging/dur-product-info"
+  parquet_filename: "data/train.parquet"
+  hf_repo: "kpubdata/dur-product-info"
+
+card:
+  title: "DUR Drug Product Information (DUR 품목정보)"
+  description: |
+    Drug Utilization Review (DUR) product master data from Korea's
+    Ministry of Food and Drug Safety (식약처). Contains basic product
+    information for drugs registered in the DUR system.
+  license: cc-by-4.0
+  language:
+    - ko
+  tags:
+    - healthcare
+    - pharmacy
+    - drug-safety
+    - korea
+    - dur
+    - public-data
+  features:
+    - name: item_seq
+      description: Drug item sequence number (품목기준코드)
+    - name: item_name
+      description: Drug name (품목명)
+    - name: company_name
+      description: Manufacturer name (업체명)
+    - name: class_name
+      description: Pharmacological class name (약효분류명)
