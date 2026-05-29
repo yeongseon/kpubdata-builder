@@ -1,0 +1,67 @@
+# 관광숙박업 (Tourist Accommodation) — Auto-generated localdata config
+source:
+  provider: localdata
+  dataset: tourist_accommodation
+  list_all: true
+  fetch_params:
+  - {}
+transform:
+  column_mapping:
+    opnSfTeamCode: district_code
+    mgtNo: management_number
+    opnSvcNm: service_name
+    bplcNm: business_name
+    siteWhlAddr: full_address
+    rdnWhlAddr: road_address
+    siteTel: phone
+    trdStateGbn: status_code
+    trdStateNm: status_name
+    dtlStateGbn: detail_status_code
+    dtlStateNm: detail_status_name
+    dcbYmd: closure_date
+    apvPermYmd: approval_date
+    x: longitude
+    y: latitude
+  dtypes:
+    longitude: float
+    latitude: float
+  derived: []
+  filters: []
+output:
+  staging_dir: ./staging/localdata-tourist-accommodation
+  parquet_filename: data/train.parquet
+  hf_repo: kpubdata/localdata-tourist-accommodation
+card:
+  title: Korea Tourist Accommodation Business Licenses (관광숙박업)
+  description: 'Business license data for tourist accommodation (관광숙박업) establishments
+    in Korea.
+
+
+    Data sourced from Korea''s Local Government Data (지방행정인허가 데이터)
+
+    via the localdata.go.kr API.
+
+    '
+  license: cc-by-4.0
+  language:
+  - ko
+  tags:
+  - korea
+  - business-license
+  - localdata
+  - public-data
+  features:
+  - name: business_name
+    description: Business/establishment name (사업장명)
+  - name: full_address
+    description: Full address (소재지전체주소)
+  - name: road_address
+    description: Road name address (도로명전체주소)
+  - name: status_name
+    description: Business status (영업상태명)
+  - name: approval_date
+    description: License approval date (인허가일자)
+  - name: longitude
+    description: Longitude (X좌표)
+  - name: latitude
+    description: Latitude (Y좌표)
