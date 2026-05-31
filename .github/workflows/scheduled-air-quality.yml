@@ -1,0 +1,21 @@
+# 대기오염정보 — frequent append-only
+name: "Scheduled: Air Quality"
+
+on:
+  schedule:
+    - cron: "15 */2 * * *"  # every 2 hours at :15
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run"
+        type: boolean
+        default: false
+
+jobs:
+  air-quality:
+    uses: ./.github/workflows/publish-dataset.yml
+    with:
+      config: scripts/configs/air_quality.yaml
+      strategy: append_only
+      dry_run: ${{ inputs.dry_run || false }}
+    secrets: inherit

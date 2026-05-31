@@ -1,0 +1,45 @@
+# 한국관광공사 — weekly full refresh (Monday 02:00 UTC)
+name: "Scheduled: Tourism"
+
+on:
+  schedule:
+    - cron: "0 2 * * 1"  # UTC 02:00 every Monday
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run"
+        type: boolean
+        default: false
+
+jobs:
+  tour-area:
+    uses: ./.github/workflows/publish-dataset.yml
+    with:
+      config: scripts/configs/tour_kor_area.yaml
+      strategy: full_refresh
+      dry_run: ${{ inputs.dry_run || false }}
+    secrets: inherit
+
+  tour-location:
+    uses: ./.github/workflows/publish-dataset.yml
+    with:
+      config: scripts/configs/tour_kor_location.yaml
+      strategy: full_refresh
+      dry_run: ${{ inputs.dry_run || false }}
+    secrets: inherit
+
+  tour-keyword:
+    uses: ./.github/workflows/publish-dataset.yml
+    with:
+      config: scripts/configs/tour_kor_keyword.yaml
+      strategy: full_refresh
+      dry_run: ${{ inputs.dry_run || false }}
+    secrets: inherit
+
+  tour-festival:
+    uses: ./.github/workflows/publish-dataset.yml
+    with:
+      config: scripts/configs/tour_kor_festival.yaml
+      strategy: incremental
+      dry_run: ${{ inputs.dry_run || false }}
+    secrets: inherit

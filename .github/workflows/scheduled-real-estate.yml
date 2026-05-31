@@ -1,0 +1,29 @@
+# 부동산 실거래가 — monthly incremental update (1st~10th of month)
+name: "Scheduled: Real Estate"
+
+on:
+  schedule:
+    - cron: "30 0 1-10 * *"  # UTC 00:30, 1st-10th of each month
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run"
+        type: boolean
+        default: false
+
+jobs:
+  apt-trade:
+    uses: ./.github/workflows/publish-dataset.yml
+    with:
+      config: scripts/configs/seoul_apartment_trades.yaml
+      strategy: incremental
+      dry_run: ${{ inputs.dry_run || false }}
+    secrets: inherit
+
+  apt-rent:
+    uses: ./.github/workflows/publish-dataset.yml
+    with:
+      config: scripts/configs/seoul_apartment_rent.yaml
+      strategy: incremental
+      dry_run: ${{ inputs.dry_run || false }}
+    secrets: inherit

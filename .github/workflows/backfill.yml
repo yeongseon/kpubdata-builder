@@ -1,0 +1,23 @@
+# Manual backfill workflow — trigger via workflow_dispatch
+name: "Backfill Dataset"
+
+on:
+  workflow_dispatch:
+    inputs:
+      config:
+        description: "Path to dataset config YAML"
+        required: true
+        type: string
+      dry_run:
+        description: "Dry run (skip HF upload)"
+        type: boolean
+        default: true
+
+jobs:
+  backfill:
+    uses: ./.github/workflows/publish-dataset.yml
+    with:
+      config: ${{ inputs.config }}
+      strategy: full_refresh
+      dry_run: ${{ inputs.dry_run }}
+    secrets: inherit

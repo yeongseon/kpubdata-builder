@@ -1,0 +1,85 @@
+# DUR 의약품 — weekly full refresh (Saturday 01:00 UTC)
+name: "Scheduled: DUR Medication"
+
+on:
+  schedule:
+    - cron: "0 1 * * 6"  # UTC 01:00 every Saturday
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run"
+        type: boolean
+        default: false
+
+jobs:
+  dur-usjnt-taboo:
+    uses: ./.github/workflows/publish-dataset.yml
+    with:
+      config: scripts/configs/dur_usjnt_taboo.yaml
+      strategy: full_refresh
+      dry_run: ${{ inputs.dry_run || false }}
+    secrets: inherit
+
+  dur-pregnancy-taboo:
+    uses: ./.github/workflows/publish-dataset.yml
+    with:
+      config: scripts/configs/dur_pregnancy_taboo.yaml
+      strategy: full_refresh
+      dry_run: ${{ inputs.dry_run || false }}
+    secrets: inherit
+
+  dur-age-taboo:
+    uses: ./.github/workflows/publish-dataset.yml
+    with:
+      config: scripts/configs/dur_age_taboo.yaml
+      strategy: full_refresh
+      dry_run: ${{ inputs.dry_run || false }}
+    secrets: inherit
+
+  dur-older-adult-caution:
+    uses: ./.github/workflows/publish-dataset.yml
+    with:
+      config: scripts/configs/dur_older_adult_caution.yaml
+      strategy: full_refresh
+      dry_run: ${{ inputs.dry_run || false }}
+    secrets: inherit
+
+  dur-dosage-caution:
+    uses: ./.github/workflows/publish-dataset.yml
+    with:
+      config: scripts/configs/dur_dosage_caution.yaml
+      strategy: full_refresh
+      dry_run: ${{ inputs.dry_run || false }}
+    secrets: inherit
+
+  dur-medication-period-caution:
+    uses: ./.github/workflows/publish-dataset.yml
+    with:
+      config: scripts/configs/dur_medication_period_caution.yaml
+      strategy: full_refresh
+      dry_run: ${{ inputs.dry_run || false }}
+    secrets: inherit
+
+  dur-efficacy-duplication:
+    uses: ./.github/workflows/publish-dataset.yml
+    with:
+      config: scripts/configs/dur_efficacy_duplication.yaml
+      strategy: full_refresh
+      dry_run: ${{ inputs.dry_run || false }}
+    secrets: inherit
+
+  dur-product-info:
+    uses: ./.github/workflows/publish-dataset.yml
+    with:
+      config: scripts/configs/dur_product_info.yaml
+      strategy: full_refresh
+      dry_run: ${{ inputs.dry_run || false }}
+    secrets: inherit
+
+  dur-er-tablet-split-caution:
+    uses: ./.github/workflows/publish-dataset.yml
+    with:
+      config: scripts/configs/dur_er_tablet_split_caution.yaml
+      strategy: full_refresh
+      dry_run: ${{ inputs.dry_run || false }}
+    secrets: inherit

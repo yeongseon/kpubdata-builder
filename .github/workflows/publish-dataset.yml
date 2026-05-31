@@ -1,0 +1,64 @@
+# Reusable workflow: publish a single dataset to HuggingFace
+# Usage: called by per-dataset scheduled workflows
+name: Publish Dataset
+
+on:
+  workflow_call:
+    inputs:
+      config:
+        description: "Path to dataset config YAML"
+        required: true
+        type: string
+      strategy:
+        description: "Update strategy: full_refresh | incremental | append_only"
+        required: false
+        type: string
+        default: "full_refresh"
+      dry_run:
+        description: "Dry run mode (skip HF upload)"
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      KPUBDATA_DATAGO_API_KEY:
+        required: true
+      HF_TOKEN:
+        required: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Fetch and publish dataset
+        env:
+          KPUBDATA_DATAGO_API_KEY: ${{ secrets.KPUBDATA_DATAGO_API_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          ARGS="--config ${{ inputs.config }}"
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+          uv run python scripts/publish_to_hf.py $ARGS
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "### Dataset Publish Result" >> $GITHUB_STEP_SUMMARY
+          echo "- Config: \`${{ inputs.config }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Strategy: ${{ inputs.strategy }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Dry run: ${{ inputs.dry_run }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Status: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
