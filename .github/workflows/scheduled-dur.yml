@@ -1,0 +1,62 @@
+# DUR 의약품 — weekly full refresh (Saturday)
+name: "Scheduled: DUR Medication"
+
+on:
+  schedule:
+    - cron: "0 1 * * 6"
+  workflow_dispatch:
+
+jobs:
+  dur-usjnt-taboo:
+    uses: ./.github/workflows/publish-dataset.yml
+    with:
+      config: scripts/configs/dur_usjnt_taboo.yaml
+    secrets: inherit
+
+  dur-pregnancy-taboo:
+    uses: ./.github/workflows/publish-dataset.yml
+    with:
+      config: scripts/configs/dur_pregnancy_taboo.yaml
+    secrets: inherit
+
+  dur-age-taboo:
+    uses: ./.github/workflows/publish-dataset.yml
+    with:
+      config: scripts/configs/dur_age_taboo.yaml
+    secrets: inherit
+
+  dur-older-adult-caution:
+    uses: ./.github/workflows/publish-dataset.yml
+    with:
+      config: scripts/configs/dur_older_adult_caution.yaml
+    secrets: inherit
+
+  dur-dosage-caution:
+    uses: ./.github/workflows/publish-dataset.yml
+    with:
+      config: scripts/configs/dur_dosage_caution.yaml
+    secrets: inherit
+
+  dur-medication-period-caution:
+    uses: ./.github/workflows/publish-dataset.yml
+    with:
+      config: scripts/configs/dur_medication_period_caution.yaml
+    secrets: inherit
+
+  dur-efficacy-duplication:
+    uses: ./.github/workflows/publish-dataset.yml
+    with:
+      config: scripts/configs/dur_efficacy_duplication.yaml
+    secrets: inherit
+
+  dur-product-info:
+    uses: ./.github/workflows/publish-dataset.yml
+    with:
+      config: scripts/configs/dur_product_info.yaml
+    secrets: inherit
+
+  dur-er-tablet-split-caution:
+    uses: ./.github/workflows/publish-dataset.yml
+    with:
+      config: scripts/configs/dur_er_tablet_split_caution.yaml
+    secrets: inherit

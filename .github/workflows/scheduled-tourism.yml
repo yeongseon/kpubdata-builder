@@ -1,0 +1,32 @@
+# 관광공사 — weekly (Monday)
+name: "Scheduled: Tourism"
+
+on:
+  schedule:
+    - cron: "0 2 * * 1"
+  workflow_dispatch:
+
+jobs:
+  tour-area:
+    uses: ./.github/workflows/publish-dataset.yml
+    with:
+      config: scripts/configs/tour_kor_area.yaml
+    secrets: inherit
+
+  tour-location:
+    uses: ./.github/workflows/publish-dataset.yml
+    with:
+      config: scripts/configs/tour_kor_location.yaml
+    secrets: inherit
+
+  tour-keyword:
+    uses: ./.github/workflows/publish-dataset.yml
+    with:
+      config: scripts/configs/tour_kor_keyword.yaml
+    secrets: inherit
+
+  tour-festival:
+    uses: ./.github/workflows/publish-dataset.yml
+    with:
+      config: scripts/configs/tour_kor_festival.yaml
+    secrets: inherit

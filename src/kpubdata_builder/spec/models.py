@@ -104,12 +104,22 @@ class BuildSpec:
     def from_yaml(cls, path: str | Path) -> BuildSpec:
         """YAML 파일에서 BuildSpec을 로드한다.
 
+        .. deprecated::
+            Use ``load_spec(path)`` directly to keep model and I/O separate.
+
         매개변수:
             path: YAML 파일 경로.
 
         반환값:
             BuildSpec: 파싱 완료된 불변 명세 객체.
         """
+        import warnings
+
+        warnings.warn(
+            "BuildSpec.from_yaml() is deprecated, use load_spec() instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         # models <-> loader 순환 import를 피하기 위한 지연 import.
         from .loader import load_spec
 
