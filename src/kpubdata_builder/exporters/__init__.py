@@ -14,6 +14,7 @@ from .base import BaseExporter, ExportResult, ensure_output_dir
 from .csv import CsvExporter
 from .huggingface import HuggingFaceExporter
 from .jsonl import JsonlExporter
+from .kaggle import KaggleExporter
 from .markdown import MarkdownExporter
 from .parquet import ParquetExporter
 from .registry import (
@@ -29,6 +30,7 @@ register_exporter(CsvExporter(), override=True)
 register_exporter(HuggingFaceExporter(), override=True)
 register_exporter(JsonlExporter(), override=True)
 register_exporter(MarkdownExporter(), override=True)
+register_exporter(KaggleExporter(), override=True)
 register_exporter(ParquetExporter(), override=True)
 
 __all__ = [
@@ -39,6 +41,7 @@ __all__ = [
     "ExportResult",
     "HuggingFaceExporter",
     "JsonlExporter",
+    "KaggleExporter",
     "MarkdownExporter",
     "ParquetExporter",
     "ensure_output_dir",
