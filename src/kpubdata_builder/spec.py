@@ -120,12 +120,36 @@ def _parse_string_dict(value: object, *, field_name: str) -> dict[str, str]:
     return dict(value)
 
 
+def _validate_json_value(value: object, *, field_name: str) -> JsonValue:
+    """Recursively validate that a value conforms to the JsonValue type."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, list):
+        return [
+            _validate_json_value(item, field_name=f"{field_name}[{i}]")
+            for i, item in enumerate(value)
+        ]
+    if isinstance(value, dict):
+        result: dict[str, JsonValue] = {}
+        for k, v in value.items():
+            if not isinstance(k, str):
+                raise TypeError(f"{field_name} keys must be strings, got {type(k).__name__}")
+            result[k] = _validate_json_value(v, field_name=f"{field_name}.{k}")
+        return result
+    raise TypeError(
+        f"{field_name} contains non-JSON value of type {type(value).__name__}: {value!r}"
+    )
+
+
 def _parse_json_mapping(value: object, *, field_name: str) -> dict[str, JsonValue]:
     if not isinstance(value, dict):
         raise TypeError(f"{field_name} must be a mapping")
     if not all(isinstance(key, str) for key in value):
         raise TypeError(f"{field_name} keys must be strings")
-    return {key: item for key, item in value.items()}
+    return {
+        key: _validate_json_value(item, field_name=f"{field_name}.{key}")
+        for key, item in value.items()
+    }
 
 
 def _parse_sources(value: object) -> tuple[SourceRef, ...]:
