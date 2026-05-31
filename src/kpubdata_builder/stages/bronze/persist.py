@@ -78,11 +78,10 @@ def persist_bronze_artifact(
 
     bronze_dir.mkdir(parents=True, exist_ok=True)
 
-    records_content = "".join(
-        f"{json.dumps(record, ensure_ascii=False, sort_keys=True)}\n"
-        for record in artifact.raw_records
-    )
-    records_path.write_text(records_content, encoding="utf-8")
+    with records_path.open("w", encoding="utf-8") as f:
+        for record in artifact.raw_records:
+            f.write(json.dumps(record, ensure_ascii=False, sort_keys=True))
+            f.write("\n")
 
     metadata = _metadata_for_artifact(
         artifact,
