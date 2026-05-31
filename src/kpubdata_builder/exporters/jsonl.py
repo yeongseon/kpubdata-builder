@@ -45,14 +45,11 @@ class JsonlExporter(BaseExporter):
             ExportError: 파일 쓰기에 실패한 경우.
         """
         destination = ensure_output_dir(output_dir, target.output_path)
-        content = "\n".join(
-            json.dumps(record, ensure_ascii=False, sort_keys=True) for record in artifact.records
-        )
         try:
-            if content:
-                _ = destination.write_text(f"{content}\n", encoding="utf-8")
-            else:
-                _ = destination.write_text("", encoding="utf-8")
+            with destination.open("w", encoding="utf-8") as f:
+                for record in artifact.records:
+                    f.write(json.dumps(record, ensure_ascii=False, sort_keys=True))
+                    f.write("\n")
         except OSError as exc:
             raise ExportError(f"Failed to export JSONL artifact to {destination}: {exc}") from exc
 
