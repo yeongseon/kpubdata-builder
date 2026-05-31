@@ -49,6 +49,18 @@ class BuildSpec:
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> BuildSpec:
+        """Convenience factory that delegates to load_spec.
+
+        .. deprecated::
+            Use ``load_spec(path)`` directly to keep model and I/O separate.
+        """
+        import warnings
+
+        warnings.warn(
+            "BuildSpec.from_yaml() is deprecated, use load_spec() instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         return load_spec(Path(path))
 
 

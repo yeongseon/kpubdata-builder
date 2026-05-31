@@ -88,10 +88,11 @@ kpubdata-builder validate spec.yaml
 코드에서 직접 빌드 과정을 제어할 수도 있습니다:
 
 ```python
-from kpubdata_builder import Assembler, BuildSpec
+from kpubdata_builder import Assembler
+from kpubdata_builder.spec import load_spec
 
 # YAML 기획서 불러오기
-spec = BuildSpec.from_yaml("spec.yaml")
+spec = load_spec("spec.yaml")
 
 # 빌드 실행
 assembler = Assembler(spec)
