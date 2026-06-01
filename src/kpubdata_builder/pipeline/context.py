@@ -70,6 +70,8 @@ class BuildContext:
             ValueError: run_id에 안전하지 않은 문자가 포함된 경우.
         """
         started = started_at or _utc_now()
+        if started.tzinfo is None or started.utcoffset() is None:
+            raise ValueError("started_at must be timezone-aware")
         resolved_run_id = run_id or started.strftime("%Y%m%dT%H%M%S%fZ")
         _validate_run_id(resolved_run_id)
         return cls(

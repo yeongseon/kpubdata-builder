@@ -24,8 +24,11 @@ def _allocate_counts(total: int, ratios: dict[str, float], names: list[str]) -> 
     exact = {name: total * ratios[name] / ratio_sum for name in names}
     counts = {name: int(exact[name]) for name in names}
     remainder = total - sum(counts.values())
-    # 소수부가 큰 순서(동률이면 이름 순)로 잔여를 배분해 결정성을 보장한다.
-    by_fraction = sorted(names, key=lambda name: (exact[name] - counts[name], name), reverse=True)
+    # 소수부가 큰 순서(동률이면 이름 정순)로 잔여를 배분해 결정성을 보장한다.
+    by_fraction = sorted(
+        names,
+        key=lambda name: (-(exact[name] - counts[name]), name),
+    )
     for name in by_fraction[:remainder]:
         counts[name] += 1
     return counts
@@ -50,11 +53,20 @@ def _ratio_split(
     return result
 
 
+_MISSING_KEY_SENTINEL = "__missing__"
+
+
 def _key_split(records: Sequence[Record], key: str) -> dict[str, tuple[Record, ...]]:
-    """컬럼 값에 따라 레코드를 그룹으로 분할한다(값 → 분할 이름)."""
+    """컬럼 값에 따라 레코드를 그룹으로 분할한다(값 → 분할 이름).
+
+    키가 없는 레코드는 "__missing__" 버킷으로, 빈 문자열은 "" 버킷으로 분리한다.
+    """
     grouped: dict[str, list[Record]] = {}
     for record in records:
-        bucket = str(record.get(key, ""))
+        if key not in record:
+            bucket = _MISSING_KEY_SENTINEL
+        else:
+            bucket = str(record[key]) if record[key] is not None else _MISSING_KEY_SENTINEL
         grouped.setdefault(bucket, []).append(record)
     return {name: tuple(rows) for name, rows in grouped.items()}
 

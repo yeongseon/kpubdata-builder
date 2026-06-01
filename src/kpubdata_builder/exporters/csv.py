@@ -22,12 +22,13 @@ from .base import BaseExporter, ExportResult, ensure_output_dir
 def _resolve_columns(artifact: ArtifactDataset) -> list[str]:
     """CSV 헤더로 사용할 컬럼 순서를 결정한다.
 
-    schema가 선언되어 있으면 그 키 순서를, 없으면 레코드에서 처음 등장한
-    순서를 사용한다. 결과는 입력에 대해 결정적이다.
+    schema가 선언되어 있으면 그 키 순서를 우선하고, 레코드에만 존재하는
+    추가 필드도 뒤에 포함한다. 결과는 입력에 대해 결정적이다.
     """
-    if artifact.schema:
-        return list(artifact.schema.keys())
     columns: dict[str, None] = {}
+    if artifact.schema:
+        for key in artifact.schema:
+            columns.setdefault(key, None)
     for record in artifact.records:
         for key in record:
             columns.setdefault(key, None)
