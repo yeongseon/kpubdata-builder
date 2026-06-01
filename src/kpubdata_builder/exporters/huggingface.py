@@ -136,4 +136,6 @@ class HuggingFaceExporter(BaseExporter):
             raise ExportError(f"Failed to export Hugging Face layout to {hf_dir}: {exc}") from exc
 
         total_size = sum(path.stat().st_size for path in (data_path, readme_path, infos_path))
+        # HF exporter returns the layout directory (not a single file) since it
+        # produces multiple files. Consumers should use output_path as a directory.
         return ExportResult(output_path=hf_dir, file_size=total_size, format=self.name)

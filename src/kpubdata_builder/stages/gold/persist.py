@@ -81,16 +81,30 @@ def persist_gold_package(
     gold_dir = output_root / run_id / "gold" / package.dataset_name
     ensure_within(output_root, gold_dir, label="gold directory")
 
-    gold_dir.mkdir(parents=True, exist_ok=True)
+    import shutil
+    import tempfile
+
+    gold_dir.parent.mkdir(parents=True, exist_ok=True)
 
     table_path = gold_dir / "table.parquet"
     package_path = gold_dir / "package.json"
 
-    package.table.write_parquet(table_path)
-    package_path.write_text(
-        json.dumps(_package_metadata(package), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    # Atomic write: write to temp dir then rename
+    tmp_dir = Path(tempfile.mkdtemp(dir=gold_dir.parent, prefix=".gold_tmp_"))
+    try:
+        package.table.write_parquet(tmp_dir / "table.parquet")
+        (tmp_dir / "package.json").write_text(
+            json.dumps(_package_metadata(package), ensure_ascii=False, indent=2, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+
+        if gold_dir.exists():
+            shutil.rmtree(gold_dir)
+        tmp_dir.rename(gold_dir)
+    except BaseException:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        raise
 
     return GoldPersistResult(
         gold_dir=gold_dir,

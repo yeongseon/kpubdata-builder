@@ -27,7 +27,16 @@ def _build_frame(artifact: ArtifactDataset) -> pl.DataFrame:
     if artifact.records:
         return records_to_dataframe(list(artifact.records))
     if artifact.schema:
-        return pl.DataFrame(schema={name: pl.Utf8 for name in artifact.schema})
+        _TYPE_MAP: dict[str, type[pl.DataType]] = {
+            "str": pl.Utf8,
+            "int": pl.Int64,
+            "float": pl.Float64,
+            "bool": pl.Boolean,
+        }
+        schema = {
+            name: _TYPE_MAP.get(dtype, pl.Utf8) for name, dtype in artifact.schema.items()
+        }
+        return pl.DataFrame(schema=schema)
     return pl.DataFrame()
 
 
