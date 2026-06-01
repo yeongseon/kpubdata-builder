@@ -59,11 +59,15 @@ def _title_section(artifact: ArtifactDataset) -> list[str]:
 
 
 def _column_names(artifact: ArtifactDataset) -> list[str]:
-    """스키마의 컬럼명을 반환하고, 없으면 첫 레코드의 키로 대체한다."""
+    """스키마의 컬럼명을 반환하고, 없으면 모든 레코드의 키를 합산한다."""
     if artifact.schema:
         return list(artifact.schema.keys())
     if artifact.records:
-        return list(artifact.records[0].keys())
+        columns: dict[str, None] = {}
+        for record in artifact.records:
+            for key in record:
+                columns.setdefault(key, None)
+        return list(columns.keys())
     return []
 
 

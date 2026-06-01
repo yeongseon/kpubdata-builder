@@ -64,21 +64,33 @@ def render_template(path: str | Path, params: dict[str, str]) -> str:
     meta = template_meta if isinstance(template_meta, dict) else {}
     effective = _effective_params(meta, params)
 
-    body_yaml = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
-
+    # Substitute in the data structure directly to avoid YAML structure corruption.
+    # Then re-dump so the output is valid YAML regardless of substitution values.
     missing: list[str] = []
 
-    def _replace(match: re.Match[str]) -> str:
-        name = match.group(1)
-        if name not in effective:
-            missing.append(name)
-            return match.group(0)
-        return effective[name]
+    def _substitute_in_value(value: object) -> object:
+        if isinstance(value, str):
+            def _replace(match: re.Match[str]) -> str:
+                name = match.group(1)
+                if name not in effective:
+                    missing.append(name)
+                    return match.group(0)
+                return effective[name]
 
-    rendered = _PLACEHOLDER.sub(_replace, body_yaml)
+            return _PLACEHOLDER.sub(_replace, value)
+        if isinstance(value, list):
+            return [_substitute_in_value(item) for item in value]
+        if isinstance(value, dict):
+            return {k: _substitute_in_value(v) for k, v in value.items()}
+        return value
+
+    substituted = _substitute_in_value(data)
+
     if missing:
         unique = ", ".join(sorted(set(missing)))
         raise SpecLoadError(f"Missing template parameter(s): {unique}")
+
+    rendered = yaml.safe_dump(substituted, allow_unicode=True, sort_keys=False)
     return rendered
 
 
