@@ -70,6 +70,7 @@ def render_template(path: str | Path, params: dict[str, str]) -> str:
 
     def _substitute_in_value(value: object) -> object:
         if isinstance(value, str):
+
             def _replace(match: re.Match[str]) -> str:
                 name = match.group(1)
                 if name not in effective:

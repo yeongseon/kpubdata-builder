@@ -43,10 +43,7 @@ def upload_to_hf(staging_dir: Path, hf_repo: str, *, dry_run: bool = False) -> N
 
     data_dir = staging_dir / "data"
     if data_dir.exists():
-        dest_data = upload_dir / "data"
-        dest_data.mkdir()
-        for parquet_file in data_dir.glob("*.parquet"):
-            shutil.copy2(parquet_file, dest_data / parquet_file.name)
+        shutil.copytree(data_dir, upload_dir / "data", dirs_exist_ok=True)
 
     api = HfApi()
     api.create_repo(repo_id=hf_repo, repo_type="dataset", exist_ok=True)
@@ -88,8 +85,7 @@ def upload_to_kaggle(staging_dir: Path, config: dict[str, Any], *, dry_run: bool
 
     data_dir = staging_dir / "data"
     if data_dir.exists():
-        for parquet_file in data_dir.glob("*.parquet"):
-            shutil.copy2(parquet_file, upload_dir / parquet_file.name)
+        shutil.copytree(data_dir, upload_dir / "data", dirs_exist_ok=True)
 
     description = card.get("description", "").strip()
     attribution = card.get("attribution", "").strip()
