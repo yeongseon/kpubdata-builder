@@ -54,19 +54,23 @@ def _ratio_split(
 
 
 _MISSING_KEY_SENTINEL = "__missing__"
+_NULL_VALUE_SENTINEL = "__null__"
 
 
 def _key_split(records: Sequence[Record], key: str) -> dict[str, tuple[Record, ...]]:
     """컬럼 값에 따라 레코드를 그룹으로 분할한다(값 → 분할 이름).
 
-    키가 없는 레코드는 "__missing__" 버킷으로, 빈 문자열은 "" 버킷으로 분리한다.
+    키가 없는 레코드는 "__missing__" 버킷, None 값은 "__null__" 버킷,
+    빈 문자열은 "" 버킷으로 각각 분리한다.
     """
     grouped: dict[str, list[Record]] = {}
     for record in records:
         if key not in record:
             bucket = _MISSING_KEY_SENTINEL
+        elif record[key] is None:
+            bucket = _NULL_VALUE_SENTINEL
         else:
-            bucket = str(record[key]) if record[key] is not None else _MISSING_KEY_SENTINEL
+            bucket = str(record[key])
         grouped.setdefault(bucket, []).append(record)
     return {name: tuple(rows) for name, rows in grouped.items()}
 
