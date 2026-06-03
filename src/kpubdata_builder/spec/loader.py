@@ -133,17 +133,40 @@ def _parse_string_dict(value: object, *, field_name: str) -> dict[str, str]:
     return parsed
 
 
+def _validate_json_value(value: object, *, field_name: str) -> JsonValue:
+    """값이 JSON 프리미티브/컨테이너인지 재귀적으로 검증한다."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, list):
+        return [
+            _validate_json_value(item, field_name=f"{field_name}[{i}]")
+            for i, item in enumerate(value)
+        ]
+    if isinstance(value, dict):
+        result: dict[str, JsonValue] = {}
+        for k, v in cast(dict[object, object], value).items():
+            if not isinstance(k, str):
+                raise TypeError(
+                    f"{field_name} keys must be strings, got {type(k).__name__}"
+                )
+            result[k] = _validate_json_value(v, field_name=f"{field_name}.{k}")
+        return result
+    raise TypeError(
+        f"{field_name} contains non-JSON value of type {type(value).__name__}: {value!r}"
+    )
+
+
 def _parse_json_mapping(value: object, *, field_name: str) -> dict[str, JsonValue]:
     """JSON 호환 값만 담는 매핑 필드를 검증한다."""
     if not isinstance(value, dict):
         raise TypeError(f"{field_name} must be a mapping")
 
-    raw_mapping = cast(dict[object, JsonValue], value)
+    raw_mapping = cast(dict[object, object], value)
     parsed: dict[str, JsonValue] = {}
     for key, item in raw_mapping.items():
         if not isinstance(key, str):
             raise TypeError(f"{field_name} keys must be strings")
-        parsed[key] = item
+        parsed[key] = _validate_json_value(item, field_name=f"{field_name}.{key}")
     return parsed
 
 

@@ -38,6 +38,9 @@ class ExecutionResult:
 def source_executor(spec: BuildSpec) -> ExecutionResult:
     """선언된 소스를 실행하고 최소한의 조립 산출물 스텁을 반환한다.
 
+    .. deprecated::
+        Use the Medallion pipeline (pipeline/orchestrator) instead.
+
     현재 구현은 실제 네트워크 호출 대신 BuildSpec 검증과 provenance 구성에
     집중한다. 따라서 후속 단계가 기대하는 최소 ArtifactDataset을 안정적으로
     만들어 주는 것이 목적이다.
@@ -52,6 +55,14 @@ def source_executor(spec: BuildSpec) -> ExecutionResult:
         ValidationError: 명세 검증 실패 시.
         ExecutionError: provenance 구성 중 예기치 않은 오류가 발생한 경우.
     """
+    import warnings
+
+    warnings.warn(
+        "source_executor() is deprecated. Use the Medallion pipeline instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
     try:
         validate_spec(spec)
     except ValidationError:

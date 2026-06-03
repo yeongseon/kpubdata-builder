@@ -1,0 +1,22 @@
+# 기상청 — every 3 hours append-only
+name: "Scheduled: Weather"
+
+on:
+  schedule:
+    - cron: "20 */3 * * *"
+  workflow_dispatch:
+
+jobs:
+  village-forecast:
+    uses: ./.github/workflows/publish-dataset.yml
+    with:
+      mode: ""
+      config: scripts/configs/weather_village_fcst.yaml
+    secrets: inherit
+
+  ultra-short-term:
+    uses: ./.github/workflows/publish-dataset.yml
+    with:
+      mode: ""
+      config: scripts/configs/weather_ultra_srt_ncst.yaml
+    secrets: inherit

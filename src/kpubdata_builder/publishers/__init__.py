@@ -14,15 +14,18 @@ kind 문자열로 찾을 수 있게 한다. HuggingFace/GitHub 등 원격 대상
 from __future__ import annotations
 
 from .base import BasePublisher, PublishResult
+from .huggingface import HuggingFacePublisher
 from .local import LocalPublisher
 
 PUBLISHER_REGISTRY: dict[str, BasePublisher] = {
     "local": LocalPublisher(),
+    "huggingface": HuggingFacePublisher(),
 }
 
 __all__ = [
     "PUBLISHER_REGISTRY",
     "BasePublisher",
+    "HuggingFacePublisher",
     "LocalPublisher",
     "PublishResult",
 ]
