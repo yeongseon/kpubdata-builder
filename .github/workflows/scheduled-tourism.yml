@@ -10,23 +10,27 @@ jobs:
   tour-area:
     uses: ./.github/workflows/publish-dataset.yml
     with:
+      mode: ""
       config: scripts/configs/tour_kor_area.yaml
     secrets: inherit
 
   tour-location:
     uses: ./.github/workflows/publish-dataset.yml
     with:
+      mode: ""
       config: scripts/configs/tour_kor_location.yaml
     secrets: inherit
 
   tour-keyword:
     uses: ./.github/workflows/publish-dataset.yml
     with:
+      mode: ""
       config: scripts/configs/tour_kor_keyword.yaml
     secrets: inherit
 
   tour-festival:
     uses: ./.github/workflows/publish-dataset.yml
     with:
+      mode: ""
       config: scripts/configs/tour_kor_festival.yaml
     secrets: inherit

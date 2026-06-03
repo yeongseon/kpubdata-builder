@@ -10,5 +10,6 @@ jobs:
   air-quality:
     uses: ./.github/workflows/publish-dataset.yml
     with:
+      mode: ""
       config: scripts/configs/air_quality.yaml
     secrets: inherit

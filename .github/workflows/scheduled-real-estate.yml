@@ -10,11 +10,13 @@ jobs:
   apt-trade:
     uses: ./.github/workflows/publish-dataset.yml
     with:
+      mode: ""
       config: scripts/configs/seoul_apartment_trades.yaml
     secrets: inherit
 
   apt-rent:
     uses: ./.github/workflows/publish-dataset.yml
     with:
+      mode: ""
       config: scripts/configs/seoul_apartment_rent.yaml
     secrets: inherit
