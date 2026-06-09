@@ -24,6 +24,18 @@ def test_checksum_is_reproducible_and_order_independent() -> None:
     assert a != compute_records_checksum([{"id": "2", "amount": 1000}])
 
 
+def test_checksum_is_record_order_independent() -> None:
+    """행(레코드) 순서가 달라도 같은 데이터면 동일 체크섬이어야 한다 (#165)."""
+    records = [{"id": "1", "amount": 1000}, {"id": "2", "amount": 2000}]
+    reversed_records = list(reversed(records))
+
+    assert compute_records_checksum(records) == compute_records_checksum(reversed_records)
+    # 데이터 자체가 달라지면 여전히 달라야 한다.
+    assert compute_records_checksum(records) != compute_records_checksum(
+        [{"id": "1", "amount": 1000}, {"id": "3", "amount": 2000}]
+    )
+
+
 def test_save_and_load_round_trip(tmp_path: Path) -> None:
     snapshot = BuildSnapshot(
         dataset_id="seoul_apt_trade",

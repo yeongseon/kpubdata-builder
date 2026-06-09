@@ -51,7 +51,9 @@ class BuildSnapshot:
 def compute_records_checksum(records: Sequence[Mapping[str, JsonValue]]) -> str:
     """레코드의 재현 가능한 SHA-256 체크섬을 계산한다.
 
-    정렬 키 기반 JSON 직렬화로 키 순서 차이를 제거한다.
+    각 레코드를 정렬 키 기반으로 개별 직렬화한 뒤 직렬화된 문자열을 정렬해
+    레코드 키 순서뿐 아니라 레코드(행) 순서 차이도 제거한다. 동일한 데이터
+    집합은 API 반환 순서와 무관하게 같은 체크섬을 갖는다 (#165).
 
     매개변수:
         records: 체크섬을 계산할 레코드 시퀀스.
@@ -59,12 +61,11 @@ def compute_records_checksum(records: Sequence[Mapping[str, JsonValue]]) -> str:
     반환값:
         str: "sha256:" 접두사가 붙은 16진 해시.
     """
-    payload = json.dumps(
-        [dict(record) for record in records],
-        ensure_ascii=False,
-        sort_keys=True,
-        default=str,
+    serialized_records = sorted(
+        json.dumps(dict(record), ensure_ascii=False, sort_keys=True, default=str)
+        for record in records
     )
+    payload = "[" + ",".join(serialized_records) + "]"
     return f"sha256:{hashlib.sha256(payload.encode('utf-8')).hexdigest()}"
 
 
