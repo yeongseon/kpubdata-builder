@@ -50,7 +50,7 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Install dependencies
-        run: uv sync --extra dev --extra publish
+        run: uv sync --extra dev --extra publish --no-sources
 
       - name: Publish dataset (atomic, guarded by secrets)
         env:
