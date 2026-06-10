@@ -12,6 +12,7 @@ from kpubdata_builder.errors import PublishError
 from kpubdata_builder.publishers import (
     PUBLISHER_REGISTRY,
     BasePublisher,
+    KagglePublisher,
     LocalPublisher,
     PublishResult,
 )
@@ -188,3 +189,111 @@ class TestHuggingFacePublisher:
         assert len(calls["folders"]) == 1
         assert calls["files"] == []
         assert result.artifact_count == 1
+
+
+class _FakeKaggleApi:
+    """Kaggle API 더블: 호출을 기록하고 dataset 존재 여부를 흉내낸다."""
+
+    def __init__(self, existing: tuple[str, ...] = (), raise_on_create: bool = False) -> None:
+        self._existing = existing
+        self._raise_on_create = raise_on_create
+        self.calls: list[str] = []
+
+    def authenticate(self) -> None:
+        self.calls.append("authenticate")
+
+    def dataset_list(self, *, mine: bool, search: str) -> list[str]:
+        del mine, search
+        return list(self._existing)
+
+    def dataset_create_version(self, *args: object, **kwargs: object) -> None:
+        del args, kwargs
+        if self._raise_on_create:
+            raise RuntimeError("kaggle boom")
+        self.calls.append("dataset_create_version")
+
+    def dataset_create_new(self, *args: object, **kwargs: object) -> None:
+        del args, kwargs
+        if self._raise_on_create:
+            raise RuntimeError("kaggle boom")
+        self.calls.append("dataset_create_new")
+
+
+def _inject_fake_kaggle(monkeypatch: pytest.MonkeyPatch, api: _FakeKaggleApi) -> None:
+    """`kaggle.api.kaggle_api_extended.KaggleApi`를 가짜 모듈로 주입한다."""
+    extended = types.ModuleType("kaggle.api.kaggle_api_extended")
+    extended.KaggleApi = lambda: api  # type: ignore[attr-defined]
+    api_pkg = types.ModuleType("kaggle.api")
+    kaggle_pkg = types.ModuleType("kaggle")
+    monkeypatch.setitem(sys.modules, "kaggle", kaggle_pkg)
+    monkeypatch.setitem(sys.modules, "kaggle.api", api_pkg)
+    monkeypatch.setitem(sys.modules, "kaggle.api.kaggle_api_extended", extended)
+
+
+class TestKagglePublisher:
+    def test_registered_in_publisher_registry(self) -> None:
+        assert "kaggle" in PUBLISHER_REGISTRY
+        assert isinstance(PUBLISHER_REGISTRY["kaggle"], KagglePublisher)
+
+    def test_publish_new_dataset_calls_create_new(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        api = _FakeKaggleApi(existing=())
+        _inject_fake_kaggle(monkeypatch, api)
+        artifact_dir = tmp_path / "dataset"
+        artifact_dir.mkdir()
+
+        result = KagglePublisher().publish((artifact_dir,), destination="kpub/new")
+
+        assert "dataset_create_new" in api.calls
+        assert "dataset_create_version" not in api.calls
+        assert result.artifact_count == 1
+
+    def test_publish_existing_dataset_calls_create_version(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        api = _FakeKaggleApi(existing=("kpub/existing",))
+        _inject_fake_kaggle(monkeypatch, api)
+        artifact_dir = tmp_path / "dataset"
+        artifact_dir.mkdir()
+
+        result = KagglePublisher().publish((artifact_dir,), destination="kpub/existing")
+
+        assert "dataset_create_version" in api.calls
+        assert "dataset_create_new" not in api.calls
+        assert result.artifact_count == 1
+
+    def test_rejects_non_directory_artifact(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        api = _FakeKaggleApi()
+        _inject_fake_kaggle(monkeypatch, api)
+        artifact = tmp_path / "data.csv"
+        _ = artifact.write_text("id\n1\n", encoding="utf-8")
+
+        with pytest.raises(PublishError, match="expects a directory"):
+            KagglePublisher().publish((artifact,), destination="kpub/x")
+
+    def test_missing_kaggle_package_raises_runtime_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # kaggle 모듈을 import 시 ImportError가 나도록 막아 RuntimeError를 유도한다.
+        for name in list(sys.modules):
+            if name == "kaggle" or name.startswith("kaggle."):
+                monkeypatch.setitem(sys.modules, name, None)
+        artifact_dir = tmp_path / "dataset"
+        artifact_dir.mkdir()
+
+        with pytest.raises(RuntimeError, match="kaggle is required"):
+            KagglePublisher().publish((artifact_dir,), destination="kpub/x")
+
+    def test_wraps_api_failure_in_publish_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        api = _FakeKaggleApi(existing=(), raise_on_create=True)
+        _inject_fake_kaggle(monkeypatch, api)
+        artifact_dir = tmp_path / "dataset"
+        artifact_dir.mkdir()
+
+        with pytest.raises(PublishError, match="Failed to publish Kaggle dataset"):
+            KagglePublisher().publish((artifact_dir,), destination="kpub/new")

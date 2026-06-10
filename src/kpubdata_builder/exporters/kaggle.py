@@ -11,11 +11,13 @@ import csv
 import io
 import json
 from pathlib import Path
+from typing import Any
 
 from ..artifact import ArtifactDataset
 from ..errors import ExportError
 from ..spec import ExportTarget
 from .base import BaseExporter, ExportResult, ensure_output_dir
+from .csv import _format_cell, _resolve_columns
 
 
 class KaggleExporter(BaseExporter):
@@ -29,17 +31,15 @@ class KaggleExporter(BaseExporter):
         self, artifact: ArtifactDataset, target: ExportTarget, output_dir: Path
     ) -> ExportResult:
         destination = ensure_output_dir(output_dir, target.output_path)
+        columns = _resolve_columns(artifact)
 
-        if not artifact.records:
-            content = ""
-        else:
-            fieldnames = list(artifact.records[0].keys())
-            buf = io.StringIO()
-            writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
-            writer.writeheader()
+        buffer = io.StringIO()
+        if columns:
+            writer = csv.writer(buffer, lineterminator="\n")
+            writer.writerow(columns)
             for record in artifact.records:
-                writer.writerow(record)
-            content = buf.getvalue()
+                writer.writerow([_format_cell(record.get(column)) for column in columns])
+        content = buffer.getvalue()
 
         try:
             _ = destination.write_text(content, encoding="utf-8")
@@ -47,13 +47,30 @@ class KaggleExporter(BaseExporter):
             raise ExportError(f"Failed to export Kaggle artifact to {destination}: {exc}") from exc
 
         metadata_path = destination.parent / "dataset-metadata.json"
-        dataset_id = artifact.metadata.get("dataset_id", "unknown/dataset")
-        metadata = {
-            "title": artifact.metadata.get("title", "Dataset"),
-            "id": dataset_id,
-            "licenses": [{"name": "CC-BY-4.0"}],
-            "resources": [{"path": destination.name, "description": "Main dataset file"}],
-        }
+        resource = {"path": destination.name, "description": "Main dataset file"}
+        metadata: dict[str, Any]
+
+        if metadata_path.exists():
+            try:
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise ExportError(
+                    f"Failed to read existing Kaggle metadata at {metadata_path}: {exc}"
+                ) from exc
+            resources = metadata.setdefault("resources", [])
+            if not any(
+                isinstance(entry, dict) and entry.get("path") == resource["path"]
+                for entry in resources
+            ):
+                resources.append(resource)
+        else:
+            metadata = {
+                "title": artifact.metadata.get("title", "Dataset"),
+                "id": artifact.metadata.get("dataset_id", "unknown/dataset"),
+                "licenses": [{"name": artifact.metadata.get("license", "CC-BY-4.0")}],
+                "resources": [resource],
+            }
+
         try:
             metadata_path.write_text(
                 json.dumps(metadata, ensure_ascii=False, indent=2) + "\n",

@@ -15,17 +15,20 @@ from __future__ import annotations
 
 from .base import BasePublisher, PublishResult
 from .huggingface import HuggingFacePublisher
+from .kaggle import KagglePublisher
 from .local import LocalPublisher
 
 PUBLISHER_REGISTRY: dict[str, BasePublisher] = {
     "local": LocalPublisher(),
     "huggingface": HuggingFacePublisher(),
+    "kaggle": KagglePublisher(),
 }
 
 __all__ = [
     "PUBLISHER_REGISTRY",
     "BasePublisher",
     "HuggingFacePublisher",
+    "KagglePublisher",
     "LocalPublisher",
     "PublishResult",
 ]
