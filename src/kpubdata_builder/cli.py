@@ -1,7 +1,7 @@
 """kpubdata-builder용 명령줄 진입점.
 
-이 모듈은 argparse 기반 CLI를 구성하고, validate/preview/build 명령의 진입점을
-제공한다.
+이 모듈은 argparse 기반 CLI를 구성하고, validate/preview/build/publish 명령의
+진입점을 제공한다.
 
 주요 함수:
     - build_parser: 하위 명령을 포함한 ArgumentParser 구성
@@ -18,8 +18,9 @@ from pathlib import Path
 from typing import cast
 
 from . import __version__
-from .errors import SpecLoadError, ValidationError
+from .errors import PublishError, SpecLoadError, ValidationError
 from .pipeline import preview_build, run_build
+from .publishers import PUBLISHER_REGISTRY
 from .spec import load_spec
 from .spec.validator import validate_spec
 from .stages.bronze.build import SourceClient
@@ -84,6 +85,28 @@ def build_parser() -> argparse.ArgumentParser:
         "--run-id",
         default=None,
         help="Run identifier (default: generated timestamp).",
+    )
+
+    publish_cmd = subparsers.add_parser(
+        "publish",
+        help="Publish build artifacts to a local or remote destination.",
+    )
+    publish_cmd.add_argument("spec", help="Path to the BuildSpec YAML file.")
+    publish_cmd.add_argument(
+        "--target",
+        choices=sorted(PUBLISHER_REGISTRY.keys()),
+        default="local",
+        help="Publish target (default: local).",
+    )
+    publish_cmd.add_argument(
+        "--destination",
+        required=True,
+        help="Local directory path (local) or HF repo id (huggingface).",
+    )
+    publish_cmd.add_argument(
+        "--artifacts-dir",
+        required=True,
+        help="Directory whose files will be published.",
     )
 
     return parser
@@ -222,6 +245,55 @@ def _run_preview(spec_path: str, *, limit: int) -> int:
     return 0
 
 
+def _run_publish(
+    spec_path: str, *, target: str, destination: str, artifacts_dir: str
+) -> int:
+    """BuildSpec을 로드·검증한 뒤 지정한 target에 산출물을 게시한다.
+
+    매개변수:
+        spec_path: 게시 기준 BuildSpec YAML 경로.
+        target: 게시 대상 식별자 (PUBLISHER_REGISTRY 키).
+        destination: 로컬 디렉터리 경로 또는 원격 repo id.
+        artifacts_dir: 게시할 파일이 있는 디렉터리.
+
+    반환값:
+        int: 성공 시 0, 로드/검증/게시 실패 시 1.
+    """
+    try:
+        spec = load_spec(Path(spec_path))
+        validate_spec(spec)
+    except SpecLoadError as exc:
+        print(f"error: failed to load spec: {exc}", file=sys.stderr)
+        return 1
+    except ValidationError as exc:
+        print("error: spec validation failed:", file=sys.stderr)
+        for problem in exc.problems:
+            print(f"  - {problem}", file=sys.stderr)
+        return 1
+
+    artifacts_path = Path(artifacts_dir)
+    if not artifacts_path.is_dir():
+        print(f"error: no artifacts found in {artifacts_dir}", file=sys.stderr)
+        return 1
+
+    paths = sorted(p for p in artifacts_path.rglob("*") if p.is_file())
+    if not paths:
+        print(f"error: no artifacts found in {artifacts_dir}", file=sys.stderr)
+        return 1
+
+    publisher = PUBLISHER_REGISTRY[target]
+    try:
+        result = publisher.publish(tuple(paths), destination=destination)
+    except (PublishError, RuntimeError) as exc:
+        print(f"error: publish failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"publish: {spec.dataset_id} -> {target}")
+    print(f"  target: {result.reference}")
+    print(f"  artifacts: {result.artifact_count}")
+    return 0
+
+
 def dispatch(args: argparse.Namespace) -> int:
     """파싱된 argparse 결과를 실제 명령 실행 함수로 전달한다.
 
@@ -243,6 +315,13 @@ def dispatch(args: argparse.Namespace) -> int:
         return _run_preview(args.spec, limit=args.limit)
     if command == "build":
         return _run_build(args.spec, output_dir=args.output_dir, run_id=args.run_id)
+    if command == "publish":
+        return _run_publish(
+            args.spec,
+            target=args.target,
+            destination=args.destination,
+            artifacts_dir=args.artifacts_dir,
+        )
     # 일반적인 CLI 경로로는 도달할 수 없지만(argparse가 알 수 없는 하위 명령을 거부함),
     # 프로그래밍 방식 호출자를 위한 방어적 대체 경로로 유지한다.
     return 2

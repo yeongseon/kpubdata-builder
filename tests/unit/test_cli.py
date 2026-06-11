@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
 from kpubdata_builder import __version__
 from kpubdata_builder.cli import build_parser, main
+from kpubdata_builder.publishers.base import PublishResult
 
 VALID_SPEC_YAML = (
     """
@@ -136,3 +138,207 @@ def test_validate_fails_for_malformed_yaml(
 
     assert exit_code == 1
     assert "failed to load spec" in captured.err
+
+
+# ---------------------------------------------------------------------------
+# publish 명령 테스트
+# ---------------------------------------------------------------------------
+
+
+def test_publish_local_end_to_end(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # --target local end-to-end: 파일이 destination 으로 복사되고 요약이 출력된다.
+    spec_path = tmp_path / "spec.yaml"
+    _ = spec_path.write_text(VALID_SPEC_YAML, encoding="utf-8")
+
+    artifacts_dir = tmp_path / "artifacts"
+    artifacts_dir.mkdir()
+    (artifacts_dir / "a.parquet").write_bytes(b"parquet1")
+    (artifacts_dir / "b.parquet").write_bytes(b"parquet2")
+
+    dest_dir = tmp_path / "dest"
+
+    exit_code = main(
+        [
+            "publish",
+            str(spec_path),
+            "--target",
+            "local",
+            "--destination",
+            str(dest_dir),
+            "--artifacts-dir",
+            str(artifacts_dir),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert (dest_dir / "a.parquet").exists()
+    assert (dest_dir / "b.parquet").exists()
+    assert "publish: dataset.sample -> local" in captured.out
+    assert "artifacts: 2" in captured.out
+    assert captured.err == ""
+
+
+def test_publish_missing_artifacts_dir_returns_one(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # artifacts-dir 가 존재하지 않으면 exit 1 과 오류 메시지를 반환해야 한다.
+    spec_path = tmp_path / "spec.yaml"
+    _ = spec_path.write_text(VALID_SPEC_YAML, encoding="utf-8")
+
+    missing_dir = tmp_path / "no-such-dir"
+
+    exit_code = main(
+        [
+            "publish",
+            str(spec_path),
+            "--destination",
+            str(tmp_path / "dest"),
+            "--artifacts-dir",
+            str(missing_dir),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "no artifacts found" in captured.err
+
+
+def test_publish_empty_artifacts_dir_returns_one(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # artifacts-dir 가 비어 있으면 exit 1 과 오류 메시지를 반환해야 한다.
+    spec_path = tmp_path / "spec.yaml"
+    _ = spec_path.write_text(VALID_SPEC_YAML, encoding="utf-8")
+
+    artifacts_dir = tmp_path / "empty"
+    artifacts_dir.mkdir()
+
+    exit_code = main(
+        [
+            "publish",
+            str(spec_path),
+            "--destination",
+            str(tmp_path / "dest"),
+            "--artifacts-dir",
+            str(artifacts_dir),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "no artifacts found" in captured.err
+
+
+def test_publish_unknown_target_rejected_by_argparse(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # --target zzz は argparse が拒否して exit code 2 を返す.
+    spec_path = tmp_path / "spec.yaml"
+    _ = spec_path.write_text(VALID_SPEC_YAML, encoding="utf-8")
+
+    artifacts_dir = tmp_path / "artifacts"
+    artifacts_dir.mkdir()
+    (artifacts_dir / "f.txt").write_text("x", encoding="utf-8")
+
+    exit_code = main(
+        [
+            "publish",
+            str(spec_path),
+            "--target",
+            "zzz",
+            "--destination",
+            str(tmp_path / "dest"),
+            "--artifacts-dir",
+            str(artifacts_dir),
+        ]
+    )
+
+    assert exit_code == 2
+
+
+def test_publish_huggingface_stub(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # HuggingFace publisher 를 stub 으로 교체하여 publish 가 올바른 인자로
+    # 호출되고 exit 0 을 반환하는지 검증한다.
+    spec_path = tmp_path / "spec.yaml"
+    _ = spec_path.write_text(VALID_SPEC_YAML, encoding="utf-8")
+
+    artifacts_dir = tmp_path / "artifacts"
+    artifacts_dir.mkdir()
+    artifact_file = artifacts_dir / "data.parquet"
+    artifact_file.write_bytes(b"data")
+
+    fake_result = PublishResult(
+        publisher="huggingface",
+        reference="https://huggingface.co/datasets/org/dataset",
+        artifact_count=1,
+    )
+    stub = MagicMock()
+    stub.publish.return_value = fake_result
+
+    import kpubdata_builder.cli as cli_module
+
+    monkeypatch.setitem(cli_module.PUBLISHER_REGISTRY, "huggingface", stub)
+
+    exit_code = main(
+        [
+            "publish",
+            str(spec_path),
+            "--target",
+            "huggingface",
+            "--destination",
+            "org/dataset",
+            "--artifacts-dir",
+            str(artifacts_dir),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    stub.publish.assert_called_once_with(
+        (artifact_file,),
+        destination="org/dataset",
+    )
+    assert "publish: dataset.sample -> huggingface" in captured.out
+    assert "artifacts: 1" in captured.out
+
+
+def test_publish_publish_error_returns_one(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # publisher が PublishError を送出した場合は exit 1 と stderr エラーを返す.
+    # LocalPublisher の basename 衝突パスを使ってトリガーする.
+    spec_path = tmp_path / "spec.yaml"
+    _ = spec_path.write_text(VALID_SPEC_YAML, encoding="utf-8")
+
+    artifacts_dir = tmp_path / "artifacts"
+    sub_a = artifacts_dir / "a"
+    sub_b = artifacts_dir / "b"
+    sub_a.mkdir(parents=True)
+    sub_b.mkdir(parents=True)
+    # 서로 다른 하위 디렉터리에 같은 basename 파일 → LocalPublisher가 PublishError 발생
+    (sub_a / "data.parquet").write_bytes(b"1")
+    (sub_b / "data.parquet").write_bytes(b"2")
+
+    dest_dir = tmp_path / "dest"
+
+    exit_code = main(
+        [
+            "publish",
+            str(spec_path),
+            "--target",
+            "local",
+            "--destination",
+            str(dest_dir),
+            "--artifacts-dir",
+            str(artifacts_dir),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "publish failed" in captured.err
