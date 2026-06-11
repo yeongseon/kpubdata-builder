@@ -108,6 +108,11 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Directory whose files will be published.",
     )
+    publish_cmd.add_argument(
+        "--public",
+        action="store_true",
+        help="Create new datasets as public (kaggle only; default: private).",
+    )
 
     return parser
 
@@ -246,7 +251,12 @@ def _run_preview(spec_path: str, *, limit: int) -> int:
 
 
 def _run_publish(
-    spec_path: str, *, target: str, destination: str, artifacts_dir: str
+    spec_path: str,
+    *,
+    target: str,
+    destination: str,
+    artifacts_dir: str,
+    public: bool = False,
 ) -> int:
     """BuildSpec을 로드·검증한 뒤 지정한 target에 산출물을 게시한다.
 
@@ -255,6 +265,7 @@ def _run_publish(
         target: 게시 대상 식별자 (PUBLISHER_REGISTRY 키).
         destination: 로컬 디렉터리 경로 또는 원격 repo id.
         artifacts_dir: 게시할 파일이 있는 디렉터리.
+        public: kaggle 신규 데이터셋을 공개로 만들지 여부 (다른 target은 무시).
 
     반환값:
         int: 성공 시 0, 로드/검증/게시 실패 시 1.
@@ -276,14 +287,25 @@ def _run_publish(
         print(f"error: no artifacts found in {artifacts_dir}", file=sys.stderr)
         return 1
 
-    paths = sorted(p for p in artifacts_path.rglob("*") if p.is_file())
-    if not paths:
-        print(f"error: no artifacts found in {artifacts_dir}", file=sys.stderr)
-        return 1
-
     publisher = PUBLISHER_REGISTRY[target]
+
+    # 레이아웃 단위(Kaggle)는 디렉터리 자체를, 파일 단위(local/HF)는 개별 파일을
+    # 전달한다. 이렇게 publisher별 입력 계약 불일치를 해소한다 (#176).
+    paths: tuple[Path, ...]
+    if publisher.expects_directory:
+        paths = (artifacts_path,)
+    else:
+        paths = tuple(sorted(p for p in artifacts_path.rglob("*") if p.is_file()))
+        if not paths:
+            print(f"error: no artifacts found in {artifacts_dir}", file=sys.stderr)
+            return 1
+
+    publish_kwargs: dict[str, object] = {"destination": destination}
+    if target == "kaggle":
+        publish_kwargs["public"] = public
+
     try:
-        result = publisher.publish(tuple(paths), destination=destination)
+        result = publisher.publish(paths, **publish_kwargs)  # type: ignore[arg-type]
     except (PublishError, RuntimeError) as exc:
         print(f"error: publish failed: {exc}", file=sys.stderr)
         return 1
@@ -321,6 +343,7 @@ def dispatch(args: argparse.Namespace) -> int:
             target=args.target,
             destination=args.destination,
             artifacts_dir=args.artifacts_dir,
+            public=args.public,
         )
     # 일반적인 CLI 경로로는 도달할 수 없지만(argparse가 알 수 없는 하위 명령을 거부함),
     # 프로그래밍 방식 호출자를 위한 방어적 대체 경로로 유지한다.

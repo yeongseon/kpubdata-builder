@@ -73,9 +73,18 @@ def assemble_artifact(
         raise AssemblyError(f"No source records available for dataset {spec.dataset_id}")
 
     statistics = {"record_count": len(merged_records)}
+
+    # spec의 핵심 식별 필드를 artifact metadata에 채워, Kaggle 같은 메타데이터 의존
+    # exporter가 "Dataset"/"unknown/dataset" 기본값으로 export되지 않게 한다 (#179).
+    # 명시적 spec.metadata 값이 우선하도록 setdefault를 사용한다.
+    metadata = dict(spec.metadata)
+    metadata.setdefault("title", spec.title)
+    metadata.setdefault("dataset_id", spec.dataset_id)
+    metadata.setdefault("description", spec.description)
+
     artifact = ArtifactDataset(
         records=tuple(merged_records),
-        metadata=dict(spec.metadata),
+        metadata=metadata,
         provenance=tuple(present_sources),
         statistics=statistics,
     )

@@ -145,9 +145,7 @@ def test_validate_fails_for_malformed_yaml(
 # ---------------------------------------------------------------------------
 
 
-def test_publish_local_end_to_end(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_publish_local_end_to_end(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     # --target local end-to-end: 파일이 destination 으로 복사되고 요약이 출력된다.
     spec_path = tmp_path / "spec.yaml"
     _ = spec_path.write_text(VALID_SPEC_YAML, encoding="utf-8")
@@ -278,6 +276,8 @@ def test_publish_huggingface_stub(
         artifact_count=1,
     )
     stub = MagicMock()
+    # 실제 HuggingFacePublisher는 파일 단위 입력을 받으므로 stub도 동일하게 맞춘다.
+    stub.expects_directory = False
     stub.publish.return_value = fake_result
 
     import kpubdata_builder.cli as cli_module
@@ -342,3 +342,71 @@ def test_publish_publish_error_returns_one(
 
     assert exit_code == 1
     assert "publish failed" in captured.err
+
+
+def test_publish_kaggle_end_to_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # --target kaggle end-to-end: CLI가 dataset-metadata.json이 든 디렉터리 자체를
+    # KagglePublisher에 전달하고, fake API로 업로드가 호출되는지 검증한다 (#176, #181).
+    import json
+    import sys
+    import types
+
+    spec_path = tmp_path / "spec.yaml"
+    _ = spec_path.write_text(VALID_SPEC_YAML, encoding="utf-8")
+
+    artifacts_dir = tmp_path / "artifacts"
+    artifacts_dir.mkdir()
+    (artifacts_dir / "data.csv").write_text("id\n1\n", encoding="utf-8")
+    (artifacts_dir / "dataset-metadata.json").write_text(
+        json.dumps({"id": "kpub/sample", "title": "Sample", "resources": []}),
+        encoding="utf-8",
+    )
+
+    calls: list[str] = []
+
+    class _FakeApi:
+        def authenticate(self) -> None:
+            calls.append("authenticate")
+
+        def dataset_list(self, *, mine: bool, search: str) -> list[str]:
+            del mine, search
+            return []
+
+        def dataset_create_new(self, *args: object, **kwargs: object) -> None:
+            del args
+            calls.append(f"create_new:public={kwargs.get('public')}")
+
+        def dataset_create_version(self, *args: object, **kwargs: object) -> None:
+            del args, kwargs
+            calls.append("create_version")
+
+    extended = types.ModuleType("kaggle.api.kaggle_api_extended")
+    extended.KaggleApi = lambda: _FakeApi()  # type: ignore[attr-defined]
+    api_pkg = types.ModuleType("kaggle.api")
+    kaggle_pkg = types.ModuleType("kaggle")
+    monkeypatch.setitem(sys.modules, "kaggle", kaggle_pkg)
+    monkeypatch.setitem(sys.modules, "kaggle.api", api_pkg)
+    monkeypatch.setitem(sys.modules, "kaggle.api.kaggle_api_extended", extended)
+
+    exit_code = main(
+        [
+            "publish",
+            str(spec_path),
+            "--target",
+            "kaggle",
+            "--destination",
+            "kpub/sample",
+            "--artifacts-dir",
+            str(artifacts_dir),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0, captured.err
+    assert "authenticate" in calls
+    # public 플래그를 주지 않았으므로 비공개로 생성되어야 한다.
+    assert "create_new:public=False" in calls
+    assert "publish: dataset.sample -> kaggle" in captured.out
+    assert "artifacts: 1" in captured.out
