@@ -191,6 +191,37 @@ def test_run_build_preserves_partial_artifacts_when_later_stage_fails(
     assert str(tmp_path / "run1" / "gold" / "datago.apt_trade" / "table.parquet") not in outputs
 
 
+def test_run_build_fails_source_when_silver_validation_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 검증 실패한 Silver 데이터셋은 Gold로 흘러가지 않고 소스가 실패 처리되어야 한다 (#189).
+    import dataclasses
+
+    from kpubdata_builder.stages.silver import build_silver_dataset as real_build
+    from kpubdata_builder.stages.silver.models import ValidationResult
+
+    def _invalid_silver(*args: object, **kwargs: object) -> object:
+        dataset = real_build(*args, **kwargs)  # type: ignore[arg-type]
+        return dataclasses.replace(
+            dataset,
+            validation=ValidationResult(ok=False, problems=("synthetic validation failure",)),
+        )
+
+    monkeypatch.setattr(orchestrator, "build_silver_dataset", _invalid_silver)
+
+    spec = _spec(SourceRef(provider="datago", dataset="apt_trade"))
+    client = _FakeClient({"datago.apt_trade": [{"id": "1"}]})
+
+    result = run_build(spec, client=client, output_root=tmp_path, run_id="run1")
+
+    assert result.status == "failed"
+    outcome = result.outcomes[0]
+    assert outcome.status == "failed"
+    assert "synthetic validation failure" in (outcome.error or "")
+    # Gold 단계까지 가지 않는다.
+    assert "gold" not in outcome.stages_completed
+    assert not (tmp_path / "run1" / "gold" / "datago.apt_trade").exists()
+
 
 def test_run_build_writes_schema_summaries_to_manifest(tmp_path: Path) -> None:
     # 성공한 빌드의 manifest.json에 소스별 schema summary가 기록되는지 검증한다 (#11).

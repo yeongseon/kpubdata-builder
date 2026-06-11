@@ -5,6 +5,7 @@ from __future__ import annotations
 import polars as pl
 import pytest
 
+from kpubdata_builder.errors import TabularError
 from kpubdata_builder.spec import JsonValue
 from kpubdata_builder.tabular import (
     CastReport,
@@ -13,6 +14,23 @@ from kpubdata_builder.tabular import (
     validate_required_columns,
 )
 from kpubdata_builder.tabular.convert import records_to_dataframe
+
+
+def test_records_to_dataframe_rejects_heterogeneous_column() -> None:
+    # 한 컬럼에 문자열+숫자가 섞이면 조용히 강제 변환하지 않고 명확히 실패한다 (#187).
+    records: list[dict[str, JsonValue]] = [{"v": 1}, {"v": "two"}]
+
+    with pytest.raises(TabularError, match="heterogeneous column types"):
+        _ = records_to_dataframe(records)
+
+
+def test_records_to_dataframe_allows_numeric_mix_and_nulls() -> None:
+    # int/float 혼합과 null은 호환으로 보고 통과시킨다(거짓 양성 방지) (#187).
+    records: list[dict[str, JsonValue]] = [{"v": 1}, {"v": 2.5}, {"v": None}]
+
+    df = records_to_dataframe(records)
+
+    assert df.height == 3
 
 
 def test_records_to_dataframe_converts_raw_records_without_mutating_input() -> None:

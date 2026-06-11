@@ -169,6 +169,20 @@ class TestDispatch:
         )
         assert resp.status_code == 400
 
+    def test_build_rejects_non_string_run_id(self, tmp_path: Path) -> None:
+        # run_id가 문자열이 아니면 조용히 자동 생성 id로 떨어뜨리지 않고 400 (#185).
+        resp = dispatch(
+            _service(tmp_path), "POST", "/build", {"spec": VALID_SPEC_YAML, "run_id": 123}
+        )
+        assert resp.status_code == 400
+        assert "run_id" in str(resp.body.get("error", ""))
+
+    def test_build_rejects_blank_run_id(self, tmp_path: Path) -> None:
+        resp = dispatch(
+            _service(tmp_path), "POST", "/build", {"spec": VALID_SPEC_YAML, "run_id": "   "}
+        )
+        assert resp.status_code == 400
+
 
 class TestBuildFailureResponseCode:
     def test_failed_build_returns_502(self, tmp_path: Path) -> None:
@@ -223,6 +237,75 @@ class TestHttpAdapter:
         with pytest.raises(urllib.error.HTTPError) as exc_info:
             urllib.request.urlopen(f"{base_url}/nope", timeout=2.0)
         assert exc_info.value.code == 404
+
+    def test_non_object_json_body_returns_400(
+        self, http_server: tuple[str, HTTPServer, threading.Thread]
+    ) -> None:
+        # 유효하지만 객체가 아닌 JSON(스칼라)은 TypeError로 중단되지 않고 400 (#183).
+        base_url, _, _ = http_server
+        req = urllib.request.Request(
+            f"{base_url}/validate",
+            data=b"1",
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            urllib.request.urlopen(req, timeout=2.0)
+        assert exc_info.value.code == 400
+        body = cast(dict[str, object], json.loads(exc_info.value.read()))
+        assert "object" in str(body.get("error", ""))
+
+    def test_query_string_is_ignored_in_routing(
+        self, http_server: tuple[str, HTTPServer, threading.Thread]
+    ) -> None:
+        # 쿼리 스트링이 붙어도 경로 컴포넌트로만 라우팅된다 (#184).
+        base_url, _, _ = http_server
+        req = urllib.request.Request(
+            f"{base_url}/validate?x=1",
+            data=json.dumps({"spec": VALID_SPEC_YAML}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=2.0) as response:
+            assert response.status == 200
+
+    def test_query_string_does_not_corrupt_run_id(
+        self, http_server: tuple[str, HTTPServer, threading.Thread]
+    ) -> None:
+        # /artifacts/<run_id>?download=1 의 쿼리가 run_id로 새지 않아야 한다 (#184).
+        base_url, _, _ = http_server
+        build_req = urllib.request.Request(
+            f"{base_url}/build",
+            data=json.dumps({"spec": VALID_SPEC_YAML, "run_id": "run1"}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(build_req, timeout=2.0) as response:
+            assert response.status == 200
+        with urllib.request.urlopen(f"{base_url}/artifacts/run1?download=1", timeout=2.0) as resp:
+            assert resp.status == 200
+            body = cast(dict[str, object], json.loads(resp.read()))
+        assert body["run_id"] == "run1"
+
+    def test_oversized_body_returns_413(
+        self, http_server: tuple[str, HTTPServer, threading.Thread]
+    ) -> None:
+        # 선언된 Content-Length가 상한을 넘으면 body를 읽지 않고 413으로 거부 (#186).
+        import http.client
+
+        base_url, _, _ = http_server
+        host_port = base_url.removeprefix("http://")
+        host, port = host_port.split(":")
+        conn = http.client.HTTPConnection(host, int(port), timeout=2.0)
+        try:
+            conn.putrequest("POST", "/validate")
+            conn.putheader("Content-Type", "application/json")
+            conn.putheader("Content-Length", str(100 * 1024 * 1024))
+            conn.endheaders()  # body는 보내지 않는다 — 핸들러가 헤더만 보고 거부.
+            response = conn.getresponse()
+            assert response.status == 413
+        finally:
+            conn.close()
 
     def test_valid_post_validate_round_trips(
         self, http_server: tuple[str, HTTPServer, threading.Thread]

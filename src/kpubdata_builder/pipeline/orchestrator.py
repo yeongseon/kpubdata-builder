@@ -19,6 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..errors import DatasetValidationError
 from ..manifest import (
     BuildManifest,
     SchemaSummary,
@@ -134,6 +135,10 @@ def _run_source_pipeline(
         )
 
         silver = build_silver_dataset(bronze)
+        # 검증에 실패한 Silver 데이터셋이 Gold/패키징으로 흘러가지 않도록 소스를
+        # 실패 처리한다. 검증은 더 이상 권고용이 아니라 게이트다 (#189).
+        if not silver.validation.ok:
+            raise DatasetValidationError(list(silver.validation.problems))
         silver_paths = persist_silver_dataset(
             silver, output_root=context.output_root, run_id=context.run_id
         )

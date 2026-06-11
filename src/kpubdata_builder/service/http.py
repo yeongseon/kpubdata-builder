@@ -13,9 +13,14 @@ from __future__ import annotations
 import json
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import cast
+from urllib.parse import urlsplit
 
 from ..spec import JsonValue
 from .app import BuilderService, dispatch
+
+# 단일 요청이 메모리를 고갈시키거나 단일 스레드 서버를 멈추게 하지 않도록 body 크기를
+# 제한한다. spec YAML 요청에 충분하면서도 남용을 막는 보수적 상한 (#186).
+_MAX_BODY_BYTES = 10 * 1024 * 1024  # 10 MiB
 
 
 def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
@@ -23,16 +28,35 @@ def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
 
     class _Handler(BaseHTTPRequestHandler):
         def _dispatch(self, method: str) -> None:
-            length = int(self.headers.get("Content-Length", 0) or 0)
+            try:
+                length = int(self.headers.get("Content-Length", 0) or 0)
+            except ValueError:
+                self._write(400, {"error": "invalid Content-Length header"})
+                return
+            if length < 0:
+                self._write(400, {"error": "invalid Content-Length header"})
+                return
+            # 선언된 길이가 상한을 넘으면 body를 읽지 않고 413으로 거부한다 (#186).
+            if length > _MAX_BODY_BYTES:
+                self._write(413, {"error": "request body too large"})
+                return
             raw = self.rfile.read(length) if length else b""
             body: dict[str, JsonValue] | None = None
             if raw:
                 try:
-                    body = cast(dict[str, JsonValue], json.loads(raw))
+                    parsed = cast(object, json.loads(raw))
                 except json.JSONDecodeError:
                     self._write(400, {"error": "invalid JSON body"})
                     return
-            response = dispatch(service, method, self.path, body)
+                # HTTP 어댑터는 임의의 JSON 최상위 타입을 받을 수 있지만, 서비스는
+                # 매핑(객체)만 다룬다. 스칼라/배열 body는 TypeError 대신 400으로 거부 (#183).
+                if not isinstance(parsed, dict):
+                    self._write(400, {"error": "JSON body must be an object"})
+                    return
+                body = cast(dict[str, JsonValue], parsed)
+            # 쿼리 스트링이 경로/run_id로 새지 않도록 path 컴포넌트만으로 라우팅한다 (#184).
+            path = urlsplit(self.path).path
+            response = dispatch(service, method, path, body)
             self._write(response.status_code, response.body)
 
         def _write(self, status_code: int, body: dict[str, JsonValue]) -> None:

@@ -55,6 +55,32 @@ def test_load_missing_snapshot_returns_none(tmp_path: Path) -> None:
     assert load_snapshot("never_built", root=tmp_path) is None
 
 
+def test_load_corrupt_snapshot_returns_none(tmp_path: Path) -> None:
+    # 잘린/비정상 JSON은 증분 빌드를 깨뜨리지 않고 "없음"으로 안전 저하 (#194).
+    path = tmp_path / ".kpubdata-builder/snapshots/seoul_apt_trade/snapshot.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _ = path.write_text('{"dataset_id": "seoul_apt_trade", trunc', encoding="utf-8")
+
+    assert load_snapshot("seoul_apt_trade", root=tmp_path) is None
+
+
+def test_load_snapshot_missing_required_keys_returns_none(tmp_path: Path) -> None:
+    # 형태가 어긋난(필수 키 누락) 스냅샷도 KeyError 대신 None으로 저하 (#194).
+    path = tmp_path / ".kpubdata-builder/snapshots/seoul_apt_trade/snapshot.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _ = path.write_text('{"dataset_id": "seoul_apt_trade"}', encoding="utf-8")
+
+    assert load_snapshot("seoul_apt_trade", root=tmp_path) is None
+
+
+def test_load_snapshot_non_object_returns_none(tmp_path: Path) -> None:
+    path = tmp_path / ".kpubdata-builder/snapshots/seoul_apt_trade/snapshot.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _ = path.write_text("[1, 2, 3]", encoding="utf-8")
+
+    assert load_snapshot("seoul_apt_trade", root=tmp_path) is None
+
+
 def test_save_rejects_unsafe_dataset_id(tmp_path: Path) -> None:
     snapshot = BuildSnapshot(dataset_id="../escape", built_at="t", data_checksum="sha256:x")
 

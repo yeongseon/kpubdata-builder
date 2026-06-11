@@ -114,13 +114,31 @@ def load_snapshot(dataset_id: str, *, root: Path) -> BuildSnapshot | None:
     path = _snapshot_path(root, dataset_id)
     if not path.exists():
         return None
-    data = json.loads(path.read_text(encoding="utf-8"))
+    # 손상/잘린 스냅샷은 증분 빌드를 깨뜨리는 대신 "스냅샷 없음"으로 안전하게 저하시킨다.
+    # (None → has_data_changed가 True → 전체 재빌드) (#194).
+    try:
+        raw = path.read_text(encoding="utf-8")
+        data = json.loads(raw)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    required = ("dataset_id", "built_at", "data_checksum")
+    if any(key not in data for key in required):
+        return None
+    try:
+        record_count = int(data.get("record_count", 0))
+    except (TypeError, ValueError):
+        return None
+    source_params = data.get("source_params", {})
+    if not isinstance(source_params, dict):
+        return None
     return BuildSnapshot(
         dataset_id=str(data["dataset_id"]),
         built_at=str(data["built_at"]),
         data_checksum=str(data["data_checksum"]),
-        record_count=int(data.get("record_count", 0)),
-        source_params=dict(data.get("source_params", {})),
+        record_count=record_count,
+        source_params=dict(source_params),
     )
 
 
