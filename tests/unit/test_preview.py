@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import builtins
 from collections.abc import Iterable
+from pathlib import Path
 
 import pytest
 
+from kpubdata_builder.errors import ValidationError
 from kpubdata_builder.pipeline import PreviewResult, preview_build
 from kpubdata_builder.spec import BuildSpec, ExportTarget, JsonValue, SourceRef
 from kpubdata_builder.tabular import PreviewSlice, SchemaInfo
@@ -66,14 +69,47 @@ def test_preview_build_returns_schema_and_sample() -> None:
     assert len(preview.preview.rows) == 3
 
 
-def test_preview_build_writes_no_files(tmp_path) -> None:  # type: ignore[no-untyped-def]
+def test_preview_build_writes_no_files(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 이전 테스트는 preview_build에 전달되지도 않는 temp 디렉터리가 비었음을 확인해
+    # 사실상 항상 통과했다(#196). 실제 파일시스템 쓰기 경로를 가로채 preview_build가
+    # 어떤 쓰기도 하지 않음을 보장한다.
     spec = _spec(SourceRef(provider="datago", dataset="apt_trade"))
     client = _FakeClient({"datago.apt_trade": [{"id": "1"}]})
 
-    # preview_build은 output_root를 받지 않으므로 어떤 파일도 만들지 않는다.
-    preview_build(spec, client=client, limit=5)
+    real_open = builtins.open
 
-    assert list(tmp_path.iterdir()) == []
+    def _guard_open(file, mode="r", *args, **kwargs):  # type: ignore[no-untyped-def]
+        if any(flag in mode for flag in ("w", "a", "x", "+")):
+            raise AssertionError(f"unexpected file write during preview: {file!r} (mode={mode})")
+        return real_open(file, mode, *args, **kwargs)
+
+    def _boom(self: Path, *args: object, **kwargs: object) -> object:
+        raise AssertionError(f"unexpected filesystem write during preview: {self!r}")
+
+    monkeypatch.setattr(builtins, "open", _guard_open)
+    monkeypatch.setattr(Path, "write_text", _boom)
+    monkeypatch.setattr(Path, "write_bytes", _boom)
+    monkeypatch.setattr(Path, "mkdir", _boom)
+
+    # 쓰기 경로가 호출되면 AssertionError로 실패한다.
+    result = preview_build(spec, client=client, limit=5)
+
+    assert isinstance(result, PreviewResult)
+
+
+def test_preview_build_validates_spec(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 유효하지 않은 spec은 부분 실행/빈 결과 대신 빠르게 실패해야 한다 (#193).
+    spec = BuildSpec(
+        dataset_id="apt_trade",
+        title="Apartment Trades",
+        description="seoul apartment trades",
+        sources=(SourceRef(provider="datago", dataset="apt_trade"),),
+        exports=(ExportTarget(kind="unsupported_kind", output_path="data.x"),),
+    )
+    client = _FakeClient({"datago.apt_trade": [{"id": "1"}]})
+
+    with pytest.raises(ValidationError):
+        preview_build(spec, client=client, limit=5)
 
 
 def test_preview_build_records_failure_for_missing_source() -> None:

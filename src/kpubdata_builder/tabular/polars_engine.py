@@ -74,7 +74,13 @@ def generate_preview(df: pl.DataFrame, limit: int = DEFAULT_PREVIEW_LIMIT) -> Pr
 
     반환값:
         PreviewSlice: 상위 행과 전체 행 수.
+
+    예외:
+        ValueError: limit이 음수인 경우. 음수 limit은 df.head로 전달되면 "마지막
+            행을 제외한 전부"를 반환해 예상치 못한 큰 프리뷰를 만들기 때문이다 (#190).
     """
+    if limit < 0:
+        raise ValueError(f"preview limit must be >= 0, got {limit}")
     rows = tuple(dataframe_to_records(df.head(limit)))
     return PreviewSlice(rows=rows, total_rows=df.height)
 

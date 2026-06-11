@@ -209,8 +209,15 @@ def dispatch(
         spec = _spec_from_body(body)
         if isinstance(spec, ServiceResponse):
             return spec
-        run_id_value = body.get("run_id") if body else None
-        run_id = run_id_value if isinstance(run_id_value, str) else None
+        run_id: str | None = None
+        if body is not None and "run_id" in body:
+            run_id_value = body["run_id"]
+            # run_id가 명시되면 비어있지 않은 문자열이어야 한다. 잘못된 타입을 조용히
+            # 자동 생성 run id로 떨어뜨리면 클라이언트가 의도한 run id와 실제 기록 위치가
+            # 달라지므로 400으로 거부한다 (#185).
+            if not isinstance(run_id_value, str) or not run_id_value.strip():
+                return ServiceResponse(400, {"error": "'run_id' must be a non-empty string"})
+            run_id = run_id_value
         return service.build(spec, run_id=run_id)
 
     if method == "GET" and path.startswith("/artifacts/"):

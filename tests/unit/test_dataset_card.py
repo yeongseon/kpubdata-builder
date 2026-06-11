@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import date, datetime
+
 from kpubdata_builder.stages.gold import (
     DatasetCard,
     build_dataset_card,
@@ -79,3 +81,17 @@ def test_render_handles_empty_schema_and_sample() -> None:
     assert "_No sample rows available._" in text
     assert "N/A" in text  # license 기본값
     assert "unversioned" in text  # version 기본값
+
+
+def test_render_serializes_temporal_sample_values() -> None:
+    # 샘플 행에 date/datetime이 있어도 크래시 없이 ISO 문자열로 렌더링된다 (#195).
+    card = build_dataset_card(
+        title="temporal",
+        fields=[("d", "Date", False), ("ts", "Datetime", False)],
+        sample_rows=[{"d": date(2025, 1, 2), "ts": datetime(2025, 1, 2, 12, 30, 0)}],
+    )
+
+    text = render_dataset_card(card)
+
+    assert "2025-01-02" in text
+    assert "2025-01-02T12:30:00" in text

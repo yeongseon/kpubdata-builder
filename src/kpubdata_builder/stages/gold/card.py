@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import date, datetime
 
 from ...spec import JsonValue
 
@@ -93,14 +94,22 @@ def build_dataset_card(
     )
 
 
-def _cell(value: JsonValue) -> str:
-    """Markdown 표 셀로 안전한 문자열을 만든다(파이프/개행 이스케이프)."""
+def _cell(value: object) -> str:
+    """Markdown 표 셀로 안전한 문자열을 만든다(파이프/개행 이스케이프).
+
+    sample_rows는 선언상 JsonValue지만, Silver 프리뷰에서 온 행은 date/datetime
+    같은 시간적 Python 객체를 포함할 수 있으므로 object를 받아 폭넓게 처리한다.
+    """
     if value is None:
         text = ""
     elif isinstance(value, bool):
         text = "true" if value else "false"
     elif isinstance(value, (str, int, float)):
         text = str(value)
+    elif isinstance(value, (date, datetime)):
+        # 시간적 Python 객체는 직접 JSON 인코딩하면 실패하므로 Silver 직렬화기와
+        # 동일하게 ISO 8601 문자열로 변환한다 (#195).
+        text = value.isoformat()
     else:
         text = json.dumps(value, ensure_ascii=False, sort_keys=True)
     return text.replace("\\", "\\\\").replace("|", "\\|").replace("\n", " ")

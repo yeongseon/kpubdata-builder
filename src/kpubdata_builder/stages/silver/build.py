@@ -38,7 +38,12 @@ def build_silver_dataset(
 
     반환값:
         SilverDataset: 정제 테이블과 스키마/통계/미리보기/검증 정보.
+
+    예외:
+        ValueError: preview_limit이 음수인 경우 (#190).
     """
+    if preview_limit < 0:
+        raise ValueError(f"preview_limit must be >= 0, got {preview_limit}")
     table = normalize_table(bronze, casts=casts)
     validation = validate_table(table, required_columns=required_columns)
     schema = build_schema(table)

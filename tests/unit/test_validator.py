@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from kpubdata_builder import ValidationError
-from kpubdata_builder.spec import BuildSpec, ExportTarget, SourceRef
+from kpubdata_builder.spec import BuildSpec, ExportTarget, SourceRef, SplitSpec
 from kpubdata_builder.spec.validator import validate_spec
 
 
@@ -139,3 +139,53 @@ def test_validate_spec_rejects_empty_metadata_key() -> None:
         validate_spec(spec)
 
     assert any("metadata keys" in p for p in exc_info.value.problems)
+
+
+def test_validate_spec_rejects_empty_source_provider_and_dataset() -> None:
+    # 빈 provider/dataset은 검증을 통과해 fetch 단계에서 뒤늦게 실패하므로 거부 (#191).
+    spec = BuildSpec(
+        dataset_id="dataset.sample",
+        title="Sample Dataset",
+        description="Sample description",
+        sources=(SourceRef(provider="  ", dataset=""),),
+        exports=_EXP,
+    )
+
+    with pytest.raises(ValidationError) as exc_info:
+        validate_spec(spec)
+
+    problems = exc_info.value.problems
+    assert any("sources[0].provider" in p for p in problems)
+    assert any("sources[0].dataset" in p for p in problems)
+
+
+def test_validate_spec_rejects_blank_source_alias() -> None:
+    spec = BuildSpec(
+        dataset_id="dataset.sample",
+        title="Sample Dataset",
+        description="Sample description",
+        sources=(SourceRef(provider="datago", dataset="air_quality", alias="   "),),
+        exports=_EXP,
+    )
+
+    with pytest.raises(ValidationError) as exc_info:
+        validate_spec(spec)
+
+    assert any("sources[0].alias" in p for p in exc_info.value.problems)
+
+
+def test_validate_spec_rejects_nan_split_ratio() -> None:
+    # NaN 비율은 양수/합계 검사를 조용히 통과하므로 유한성 검사로 막는다 (#192).
+    spec = BuildSpec(
+        dataset_id="dataset.sample",
+        title="Sample Dataset",
+        description="Sample description",
+        sources=_SRC,
+        exports=_EXP,
+        splits=SplitSpec(mode="ratio", ratios={"train": float("nan"), "test": 0.5}),
+    )
+
+    with pytest.raises(ValidationError) as exc_info:
+        validate_spec(spec)
+
+    assert any("finite" in p for p in exc_info.value.problems)
