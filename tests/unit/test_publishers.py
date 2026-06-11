@@ -219,6 +219,24 @@ class _FakeKaggleApi:
         self.calls.append("dataset_create_new")
 
 
+def _make_kaggle_dir(tmp_path: Path, dataset_id: str) -> Path:
+    """dataset-metadata.json과 데이터 파일이 있는 Kaggle 업로드 디렉터리를 만든다.
+
+    실제 Kaggle API는 dataset-metadata.json을 필수로 요구하므로, happy path
+    테스트도 빈 디렉터리가 아닌 실제 계약을 갖춘 디렉터리를 사용해야 한다 (#181).
+    """
+    import json
+
+    artifact_dir = tmp_path / "dataset"
+    artifact_dir.mkdir()
+    _ = (artifact_dir / "data.csv").write_text("id\n1\n", encoding="utf-8")
+    _ = (artifact_dir / "dataset-metadata.json").write_text(
+        json.dumps({"id": dataset_id, "title": "x", "resources": []}),
+        encoding="utf-8",
+    )
+    return artifact_dir
+
+
 def _inject_fake_kaggle(monkeypatch: pytest.MonkeyPatch, api: _FakeKaggleApi) -> None:
     """`kaggle.api.kaggle_api_extended.KaggleApi`를 가짜 모듈로 주입한다."""
     extended = types.ModuleType("kaggle.api.kaggle_api_extended")
@@ -240,8 +258,7 @@ class TestKagglePublisher:
     ) -> None:
         api = _FakeKaggleApi(existing=())
         _inject_fake_kaggle(monkeypatch, api)
-        artifact_dir = tmp_path / "dataset"
-        artifact_dir.mkdir()
+        artifact_dir = _make_kaggle_dir(tmp_path, "kpub/new")
 
         result = KagglePublisher().publish((artifact_dir,), destination="kpub/new")
 
@@ -254,8 +271,7 @@ class TestKagglePublisher:
     ) -> None:
         api = _FakeKaggleApi(existing=("kpub/existing",))
         _inject_fake_kaggle(monkeypatch, api)
-        artifact_dir = tmp_path / "dataset"
-        artifact_dir.mkdir()
+        artifact_dir = _make_kaggle_dir(tmp_path, "kpub/existing")
 
         result = KagglePublisher().publish((artifact_dir,), destination="kpub/existing")
 
@@ -277,23 +293,109 @@ class TestKagglePublisher:
     def test_missing_kaggle_package_raises_runtime_error(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # kaggle 모듈을 import 시 ImportError가 나도록 막아 RuntimeError를 유도한다.
-        for name in list(sys.modules):
+        # kaggle import만 ImportError로 막는다. sys.modules monkeypatch는 kaggle이
+        # 설치된 환경에서 spurious하게 동작하므로, __import__를 직접 가로챈다 (#181).
+        import builtins
+
+        real_import = builtins.__import__
+
+        def _blocked_import(name: str, *args: object, **kwargs: object) -> object:
             if name == "kaggle" or name.startswith("kaggle."):
-                monkeypatch.setitem(sys.modules, name, None)
-        artifact_dir = tmp_path / "dataset"
-        artifact_dir.mkdir()
+                raise ImportError("No module named 'kaggle'")
+            return real_import(name, *args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(builtins, "__import__", _blocked_import)
+        artifact_dir = _make_kaggle_dir(tmp_path, "kpub/x")
 
         with pytest.raises(RuntimeError, match="kaggle is required"):
             KagglePublisher().publish((artifact_dir,), destination="kpub/x")
+
+    def test_rejects_metadata_id_mismatch(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # dataset-metadata.json의 id가 destination과 다르면 잘못된 대상 업로드를
+        # 막기 위해 PublishError를 던진다 (#177).
+        api = _FakeKaggleApi(existing=())
+        _inject_fake_kaggle(monkeypatch, api)
+        artifact_dir = _make_kaggle_dir(tmp_path, "kpub/declared")
+
+        with pytest.raises(PublishError, match="does not match destination"):
+            KagglePublisher().publish((artifact_dir,), destination="kpub/different")
+        assert "dataset_create_new" not in api.calls
+
+    def test_rejects_missing_metadata_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # dataset-metadata.json이 없는 디렉터리는 거부한다 (#181 happy path 회귀).
+        api = _FakeKaggleApi(existing=())
+        _inject_fake_kaggle(monkeypatch, api)
+        artifact_dir = tmp_path / "dataset"
+        artifact_dir.mkdir()
+
+        with pytest.raises(PublishError, match="requires dataset-metadata.json"):
+            KagglePublisher().publish((artifact_dir,), destination="kpub/x")
+
+    def test_authentication_failure_wrapped_in_publish_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # authenticate() 예외가 raw traceback 대신 PublishError로 변환되어야 한다 (#178).
+        class _AuthFailApi(_FakeKaggleApi):
+            def authenticate(self) -> None:
+                raise OSError("kaggle.json not found")
+
+        api = _AuthFailApi()
+        _inject_fake_kaggle(monkeypatch, api)
+        artifact_dir = _make_kaggle_dir(tmp_path, "kpub/x")
+
+        with pytest.raises(PublishError, match="Kaggle authentication failed"):
+            KagglePublisher().publish((artifact_dir,), destination="kpub/x")
+
+    def test_dataset_list_failure_wrapped_in_publish_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # dataset_list 실패를 삼켜 신규(공개) 데이터셋을 만들지 않고 전파한다 (#177).
+        class _ListFailApi(_FakeKaggleApi):
+            def dataset_list(self, *, mine: bool, search: str) -> list[str]:
+                del mine, search
+                raise ConnectionError("network down")
+
+        api = _ListFailApi()
+        _inject_fake_kaggle(monkeypatch, api)
+        artifact_dir = _make_kaggle_dir(tmp_path, "kpub/x")
+
+        with pytest.raises(PublishError, match="Failed to query existing Kaggle"):
+            KagglePublisher().publish((artifact_dir,), destination="kpub/x")
+        assert "dataset_create_new" not in api.calls
+
+    def test_new_dataset_defaults_to_private(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # public 인자를 주지 않으면 신규 데이터셋은 비공개로 생성되어야 한다 (#177).
+        class _RecordingApi(_FakeKaggleApi):
+            def __init__(self) -> None:
+                super().__init__(existing=())
+                self.public_arg: bool | None = None
+
+            def dataset_create_new(self, *args: object, **kwargs: object) -> None:
+                self.public_arg = bool(kwargs.get("public"))
+                self.calls.append("dataset_create_new")
+
+        api = _RecordingApi()
+        _inject_fake_kaggle(monkeypatch, api)
+        artifact_dir = _make_kaggle_dir(tmp_path, "kpub/new")
+
+        KagglePublisher().publish((artifact_dir,), destination="kpub/new")
+        assert api.public_arg is False
+
+        KagglePublisher().publish((artifact_dir,), destination="kpub/new", public=True)
+        assert api.public_arg is True
 
     def test_wraps_api_failure_in_publish_error(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         api = _FakeKaggleApi(existing=(), raise_on_create=True)
         _inject_fake_kaggle(monkeypatch, api)
-        artifact_dir = tmp_path / "dataset"
-        artifact_dir.mkdir()
+        artifact_dir = _make_kaggle_dir(tmp_path, "kpub/new")
 
         with pytest.raises(PublishError, match="Failed to publish Kaggle dataset"):
             KagglePublisher().publish((artifact_dir,), destination="kpub/new")

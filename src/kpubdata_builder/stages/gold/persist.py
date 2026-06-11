@@ -84,6 +84,8 @@ def persist_gold_package(
     import shutil
     import tempfile
 
+    from .._atomic import atomic_replace_dir
+
     gold_dir.parent.mkdir(parents=True, exist_ok=True)
 
     table_path = gold_dir / "table.parquet"
@@ -99,9 +101,8 @@ def persist_gold_package(
             encoding="utf-8",
         )
 
-        if gold_dir.exists():
-            shutil.rmtree(gold_dir)
-        tmp_dir.rename(gold_dir)
+        # Atomic swap: 기존 디렉터리가 있어도 데이터 유실 없이 교체한다 (#180).
+        atomic_replace_dir(tmp_dir, gold_dir)
     except BaseException:
         shutil.rmtree(tmp_dir, ignore_errors=True)
         raise

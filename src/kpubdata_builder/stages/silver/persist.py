@@ -90,6 +90,8 @@ def persist_silver_dataset(
     import shutil
     import tempfile
 
+    from .._atomic import atomic_replace_dir
+
     silver_dir.parent.mkdir(parents=True, exist_ok=True)
 
     table_path = silver_dir / "table.parquet"
@@ -107,9 +109,8 @@ def persist_silver_dataset(
         _write_json(tmp_dir / "preview.json", asdict(dataset.preview))
         _write_json(tmp_dir / "validation.json", asdict(dataset.validation))
 
-        if silver_dir.exists():
-            shutil.rmtree(silver_dir)
-        tmp_dir.rename(silver_dir)
+        # Atomic swap: 기존 디렉터리가 있어도 데이터 유실 없이 교체한다 (#180).
+        atomic_replace_dir(tmp_dir, silver_dir)
     except BaseException:
         shutil.rmtree(tmp_dir, ignore_errors=True)
         raise

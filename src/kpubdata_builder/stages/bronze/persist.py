@@ -78,6 +78,8 @@ def persist_bronze_artifact(
     import shutil
     import tempfile
 
+    from .._atomic import atomic_replace_dir
+
     parent = bronze_dir.parent
     parent.mkdir(parents=True, exist_ok=True)
     tmp_dir = Path(tempfile.mkdtemp(dir=parent, prefix=f".{artifact_id}_tmp_"))
@@ -101,10 +103,8 @@ def persist_bronze_artifact(
             encoding="utf-8",
         )
 
-        # Atomic rename (same filesystem)
-        if bronze_dir.exists():
-            shutil.rmtree(bronze_dir)
-        tmp_dir.rename(bronze_dir)
+        # Atomic swap: 기존 디렉터리가 있어도 데이터 유실 없이 교체한다 (#180).
+        atomic_replace_dir(tmp_dir, bronze_dir)
     except BaseException:
         shutil.rmtree(tmp_dir, ignore_errors=True)
         raise
