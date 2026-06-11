@@ -63,4 +63,17 @@ jobs:
             echo "::notice::KPUBDATA_DATAGO_API_KEY 미설정 — 라이브 실행을 건너뜁니다(no-op)."
             exit 0
           fi
+          # 라이브 퍼블리시(--local-only/--dry-run 이 아닌 모드)는 HF_TOKEN 이 필요하다.
+          # 빌드를 모두 수행한 뒤 업로드에서 뒤늦게 실패(late failure)하지 않도록
+          # 실행 전에 토큰 존재 여부를 먼저 확인한다 (#171).
+          case " ${MODE} " in
+            *" --local-only "*|*" --dry-run "*)
+              ;;
+            *)
+              if [ -z "${HF_TOKEN}" ]; then
+                echo "::notice::HF_TOKEN 미설정 — 라이브 퍼블리시를 건너뜁니다(no-op)."
+                exit 0
+              fi
+              ;;
+          esac
           uv run python scripts/publish_to_hf.py "${CONFIG}" ${MODE}

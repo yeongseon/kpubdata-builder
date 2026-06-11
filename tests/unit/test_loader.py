@@ -49,3 +49,29 @@ def test_load_spec_raises_for_missing_file(tmp_path: Path) -> None:
     # 존재하지 않는 파일 경로도 SpecLoadError로 처리되는지 확인한다.
     with pytest.raises(SpecLoadError):
         load_spec(tmp_path / "missing.yaml")
+
+
+def test_load_spec_rejects_circular_yaml_without_crash(tmp_path: Path) -> None:
+    # YAML anchor/alias로 만든 순환 구조는 RecursionError crash가 아니라
+    # SpecLoadError로 처리되어야 한다 (#169).
+    spec_path = tmp_path / "spec.yaml"
+    spec_path.write_text(
+        """
+dataset_id: dataset.sample
+title: Sample Dataset
+description: Sample description
+sources:
+  - provider: datago
+    dataset: air_quality
+    params: &p
+      self: *p
+exports:
+  - kind: jsonl
+    output_path: out/data.jsonl
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SpecLoadError, match="circular reference"):
+        load_spec(spec_path)

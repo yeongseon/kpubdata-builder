@@ -97,10 +97,15 @@ def _apply_filter(df: pl.DataFrame, expr_str: str) -> pl.DataFrame:
         logger.warning("Filter references unknown column '%s', skipping", col)
         return df
 
+    val: int | float | str
     try:
-        val: int | float = int(val_str)
+        val = int(val_str)
     except ValueError:
-        val = float(val_str)
+        try:
+            val = float(val_str)
+        except ValueError:
+            # Treat as string comparison (strip quotes if present)
+            val = val_str.strip("'\"")
 
     ops = {
         ">": pl.col(col) > val,

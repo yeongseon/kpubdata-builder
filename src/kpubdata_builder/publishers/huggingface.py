@@ -5,7 +5,22 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from ..errors import PublishError
 from .base import BasePublisher, PublishResult
+
+
+def _repo_path_for(path: Path, common_root: Path | None) -> str:
+    """파일 artifact를 레이아웃을 보존하는 repo 상대 경로로 매핑한다.
+
+    공통 상위 디렉터리(common_root) 기준 상대 경로를 사용해 중첩 구조를 유지하고,
+    근거가 없으면 basename으로 폴백한다.
+    """
+    if common_root is not None:
+        try:
+            return path.relative_to(common_root).as_posix()
+        except ValueError:
+            pass
+    return path.name
 
 
 class HuggingFacePublisher(BasePublisher):
@@ -40,6 +55,18 @@ class HuggingFacePublisher(BasePublisher):
         api = HfApi(token=token)
         count = 0
 
+        # 파일 artifact의 공통 상위 디렉터리를 기준으로 repo 내 경로를 정한다.
+        # bare filename으로 평탄화하면 중첩 디렉터리 레이아웃이 사라지고, 서로 다른
+        # 디렉터리의 동명 파일이 무경고로 덮어쓰기된다 (#170).
+        file_parents = [str(p.parent) for p in artifact_paths if not p.is_dir()]
+        common_root: Path | None
+        try:
+            common_root = Path(os.path.commonpath(file_parents)) if file_parents else None
+        except ValueError:
+            # 절대/상대 경로가 섞이는 등 공통 경로를 구할 수 없으면 basename으로 폴백.
+            common_root = None
+
+        seen_repo_paths: dict[str, Path] = {}
         for path in artifact_paths:
             if path.is_dir():
                 api.upload_folder(
@@ -49,9 +76,18 @@ class HuggingFacePublisher(BasePublisher):
                     commit_message="Update dataset via kpubdata-builder",
                 )
             else:
+                repo_path = _repo_path_for(path, common_root)
+                # 두 artifact가 같은 repo 경로로 매핑되면 한쪽이 묻히므로 명시적으로 실패.
+                prior = seen_repo_paths.get(repo_path)
+                if prior is not None and prior != path:
+                    raise PublishError(
+                        f"duplicate artifact target path {repo_path!r}: "
+                        f"{prior} and {path} would overwrite each other in {destination}"
+                    )
+                seen_repo_paths[repo_path] = path
                 api.upload_file(
                     path_or_fileobj=str(path),
-                    path_in_repo=path.name,
+                    path_in_repo=repo_path,
                     repo_id=destination,
                     repo_type="dataset",
                     commit_message="Update dataset via kpubdata-builder",

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import sys
 from pathlib import Path
 
 import yaml
@@ -26,10 +27,20 @@ def generate_params(district_codes: list[str], start_ym: str, end_ym: str) -> li
     return params
 
 
+def _validate_yyyymm(value: str, *, label: str) -> tuple[int, int]:
+    """Validate YYYYMM format and return (year, month)."""
+    if len(value) != 6 or not value.isdigit():
+        raise ValueError(f"{label} must be exactly 6 digits in YYYYMM format, got: {value!r}")
+    year, month = int(value[:4]), int(value[4:6])
+    if month < 1 or month > 12:
+        raise ValueError(f"{label} has invalid month {month:02d} (must be 01-12): {value!r}")
+    return year, month
+
+
 def _month_range(start: str, end: str) -> list[str]:
     """Generate YYYYMM strings from start to end inclusive."""
-    sy, sm = int(start[:4]), int(start[4:6])
-    ey, em = int(end[:4]), int(end[4:6])
+    sy, sm = _validate_yyyymm(start, label="start")
+    ey, em = _validate_yyyymm(end, label="end")
     months: list[str] = []
     y, m = sy, sm
     while (y, m) <= (ey, em):
@@ -63,6 +74,10 @@ def main() -> None:
     args = parser.parse_args()
 
     codes = load_district_codes(args.districts)
+    if not codes:
+        print(f"error: no district codes found in {args.districts}", file=sys.stderr)
+        sys.exit(1)
+
     params = generate_params(codes, args.start, args.end)
 
     template_path = Path(args.template)
@@ -72,9 +87,10 @@ def main() -> None:
     config["source"]["fetch_params"] = params
 
     total = len(params)
+    months_count = total // len(codes) if codes else 0
     header_comment = (
         f"# Auto-generated config: {len(codes)} districts × "
-        f"{total // len(codes)} months = {total} API calls\n"
+        f"{months_count} months = {total} API calls\n"
         f"# Generated from template: {args.template}\n\n"
     )
 

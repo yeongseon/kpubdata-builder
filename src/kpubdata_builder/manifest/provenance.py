@@ -56,12 +56,12 @@ def compute_data_checksum(records: Sequence[Mapping[str, JsonValue]]) -> str:
     반환값:
         str: "sha256:" 접두사가 붙은 16진 해시.
     """
-    payload = json.dumps(
-        [dict(record) for record in records],
-        ensure_ascii=False,
-        sort_keys=True,
-        default=str,
+    # Sort records by their serialized form to make checksum order-independent
+    serialized_records = sorted(
+        json.dumps(dict(record), ensure_ascii=False, sort_keys=True, default=str)
+        for record in records
     )
+    payload = "[" + ",".join(serialized_records) + "]"
     digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
     return f"sha256:{digest}"
 

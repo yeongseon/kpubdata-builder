@@ -25,13 +25,13 @@ LOCALDATA_DATASETS: list[tuple[str, str, str, str]] = [
     ("pharmacy", "localdata-pharmacy", "Pharmacy", "약국"),
     ("dental_clinic", "localdata-dental-clinic", "Dental Clinic", "치과의원"),
     # Accommodation & Tourism
-    (  # noqa: E501
+    (
         "tourist_accommodation",
         "localdata-tourist-accommodation",
         "Tourist Accommodation",
         "관광숙박업",
     ),
-    (  # noqa: E501
+    (
         "general_accommodation",
         "localdata-general-accommodation",
         "General Accommodation",
