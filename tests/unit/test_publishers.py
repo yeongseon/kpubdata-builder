@@ -190,6 +190,21 @@ class TestHuggingFacePublisher:
         assert calls["files"] == []
         assert result.artifact_count == 1
 
+    def test_unrelated_absolute_paths_fall_back_to_basename(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # 공통 루트가 "/"가 되는 무관한 절대경로는 호스트 경로를 누출하지 않고
+        # basename으로 폴백해야 한다 (#205).
+        calls = _install_fake_hf(monkeypatch)
+
+        result = HuggingFacePublisher().publish(
+            (Path("/tmp/a/f1.parquet"), Path("/var/b/f2.parquet")), destination="org/ds"
+        )
+
+        repo_paths = {c["path_in_repo"] for c in calls["files"]}
+        assert repo_paths == {"f1.parquet", "f2.parquet"}
+        assert result.artifact_count == 2
+
 
 class _FakeKaggleApi:
     """Kaggle API 더블: 호출을 기록하고 dataset 존재 여부를 흉내낸다."""

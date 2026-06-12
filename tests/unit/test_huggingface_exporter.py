@@ -102,6 +102,22 @@ def test_rejects_unsupported_format(tmp_path: Path) -> None:
         HuggingFaceExporter().export(_artifact(), target, tmp_path)
 
 
+def test_reexport_with_format_change_removes_stale_shards(tmp_path: Path) -> None:
+    # 같은 output_path로 포맷을 바꿔 재실행하면 이전 shard 파일이 남지 않아야 한다 (#203).
+    parquet_target = ExportTarget(kind="huggingface", output_path="hf/apt_trade")
+    jsonl_target = ExportTarget(
+        kind="huggingface", output_path="hf/apt_trade", options={"format": "jsonl"}
+    )
+
+    HuggingFaceExporter().export(_artifact(), parquet_target, tmp_path)
+    result = HuggingFaceExporter().export(_artifact(), jsonl_target, tmp_path)
+
+    data_dir = result.output_path / "data"
+    shards = sorted(p.name for p in data_dir.iterdir())
+    # parquet shard는 사라지고 jsonl shard만 남아야 한다.
+    assert shards == ["train-00000-of-00001.jsonl"]
+
+
 def test_registry_exposes_huggingface_exporter() -> None:
     # HF exporter가 kind "huggingface"로 레지스트리에 등록되어 있는지 확인한다.
     assert isinstance(EXPORTER_REGISTRY["huggingface"], HuggingFaceExporter)

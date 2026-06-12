@@ -183,6 +183,14 @@ class TestDispatch:
         )
         assert resp.status_code == 400
 
+    def test_build_rejects_unsafe_run_id_with_400(self, tmp_path: Path) -> None:
+        # 경로 안전하지 않은 run_id는 500/연결 끊김이 아니라 구조화된 400을 반환한다 (#200).
+        resp = dispatch(
+            _service(tmp_path), "POST", "/build", {"spec": VALID_SPEC_YAML, "run_id": "../bad"}
+        )
+        assert resp.status_code == 400
+        assert "run_id" in str(resp.body.get("error", ""))
+
 
 class TestBuildFailureResponseCode:
     def test_failed_build_returns_502(self, tmp_path: Path) -> None:
@@ -214,6 +222,21 @@ def http_server(
 
 
 class TestHttpAdapter:
+    def test_unsafe_run_id_returns_400_not_500(
+        self, http_server: tuple[str, HTTPServer, threading.Thread]
+    ) -> None:
+        # 경로 안전하지 않은 run_id가 어댑터에서 500/연결 끊김이 아니라 400이어야 한다 (#200).
+        base_url, _, _ = http_server
+        req = urllib.request.Request(
+            f"{base_url}/build",
+            data=json.dumps({"spec": VALID_SPEC_YAML, "run_id": "../bad"}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            urllib.request.urlopen(req, timeout=2.0)
+        assert exc_info.value.code == 400
+
     def test_malformed_json_body_returns_400(
         self, http_server: tuple[str, HTTPServer, threading.Thread]
     ) -> None:

@@ -100,16 +100,43 @@ def test_merges_resource_into_existing_metadata(tmp_path: Path) -> None:
     )
 
     metadata = _read_metadata(first.output_path.parent)
-    # 첫 writer의 title/id를 유지하고 새 resource만 추가한다.
-    assert metadata["title"] == "First"
-    assert metadata["id"] == "kpub/first"
+    # 권한적 필드(title/id/licenses)는 최신 export 값으로 갱신되고, resources는 누적된다 (#202).
+    assert metadata["title"] == "Second"
+    assert metadata["id"] == "kpub/second"
     paths = {entry["path"] for entry in metadata["resources"]}  # type: ignore[index, union-attr]
     assert paths == {"first.csv", "second.csv"}
 
 
-def test_wraps_io_failure_in_export_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_reexport_refreshes_stale_top_level_metadata(tmp_path: Path) -> None:
+    # 설정 변경 후 같은 파일로 재실행하면 stale id/title/licenses가 갱신되어야 한다 (#202).
+    target = ExportTarget(kind="kaggle", output_path="out/data.csv")
+
+    KaggleExporter().export(
+        ArtifactDataset(
+            records=({"id": "1"},),
+            schema={"id": "str"},
+            metadata={"title": "Old", "dataset_id": "kpub/old", "license": "CC-BY-4.0"},
+        ),
+        target,
+        tmp_path,
+    )
+    result = KaggleExporter().export(
+        ArtifactDataset(
+            records=({"id": "1"},),
+            schema={"id": "str"},
+            metadata={"title": "New", "dataset_id": "kpub/new", "license": "CC0-1.0"},
+        ),
+        target,
+        tmp_path,
+    )
+
+    metadata = _read_metadata(result.output_path.parent)
+    assert metadata["title"] == "New"
+    assert metadata["id"] == "kpub/new"
+    assert metadata["licenses"] == [{"name": "CC0-1.0"}]
+
+
+def test_wraps_io_failure_in_export_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # 파일 쓰기 실패가 ExportError로 래핑되는지 확인한다.
     artifact = ArtifactDataset(records=({"id": "1"},), schema={"id": "str"})
     target = ExportTarget(kind="kaggle", output_path="out/data.csv")
