@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import cast
 
@@ -143,6 +144,10 @@ def _validate_json_value(
     컨테이너 ``id()``를 추적해 순환을 감지하면 ``ValueError``로 명확히 실패한다
     (load_spec이 이를 SpecLoadError로 감싼다) (#169).
     """
+    if isinstance(value, float) and not math.isfinite(value):
+        # NaN/Infinity는 json.dumps가 비표준 토큰(NaN/Infinity)으로 직렬화하므로,
+        # 표준 JSON 계약을 깨지 않도록 비유한 float를 전역적으로 거부한다 (#201).
+        raise ValueError(f"{field_name} must be a finite number, got {value!r}")
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     if isinstance(value, (list, dict)):

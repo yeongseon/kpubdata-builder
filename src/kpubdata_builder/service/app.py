@@ -217,6 +217,13 @@ def dispatch(
             # 달라지므로 400으로 거부한다 (#185).
             if not isinstance(run_id_value, str) or not run_id_value.strip():
                 return ServiceResponse(400, {"error": "'run_id' must be a non-empty string"})
+            # 경로 안전하지 않은 run_id("../bad" 등)는 이후 BuildContext.create에서
+            # ValueError를 일으켜 HTTP 어댑터에서 500/연결 끊김이 되므로, 진입점에서
+            # 동일한 safe-segment 규칙으로 검증해 구조화된 400을 반환한다 (#200).
+            try:
+                validate_path_segment(run_id_value, field_name="run_id")
+            except ValueError as exc:
+                return ServiceResponse(400, {"error": str(exc)})
             run_id = run_id_value
         return service.build(spec, run_id=run_id)
 

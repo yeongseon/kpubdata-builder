@@ -57,19 +57,25 @@ class KaggleExporter(BaseExporter):
                 raise ExportError(
                     f"Failed to read existing Kaggle metadata at {metadata_path}: {exc}"
                 ) from exc
-            resources = metadata.setdefault("resources", [])
+            if not isinstance(metadata, dict):
+                metadata = {}
+            resources_obj = metadata.get("resources")
+            resources = resources_obj if isinstance(resources_obj, list) else []
             if not any(
                 isinstance(entry, dict) and entry.get("path") == resource["path"]
                 for entry in resources
             ):
                 resources.append(resource)
+            metadata["resources"] = resources
         else:
-            metadata = {
-                "title": artifact.metadata.get("title", "Dataset"),
-                "id": artifact.metadata.get("dataset_id", "unknown/dataset"),
-                "licenses": [{"name": artifact.metadata.get("license", "CC-BY-4.0")}],
-                "resources": [resource],
-            }
+            metadata = {"resources": [resource]}
+
+        # id/title/licenses는 권한적(authoritative) 필드이므로 매 export 시 현재 artifact
+        # 값으로 갱신한다. 기존 파일에서 stale 값이 그대로 남으면 publisher 검증 실패나
+        # 잘못된 Kaggle 데이터셋 업로드로 이어질 수 있다 (#202). 그 외 키는 보존한다.
+        metadata["title"] = artifact.metadata.get("title", "Dataset")
+        metadata["id"] = artifact.metadata.get("dataset_id", "unknown/dataset")
+        metadata["licenses"] = [{"name": artifact.metadata.get("license", "CC-BY-4.0")}]
 
         try:
             metadata_path.write_text(

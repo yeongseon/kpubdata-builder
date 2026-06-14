@@ -75,3 +75,28 @@ exports:
 
     with pytest.raises(SpecLoadError, match="circular reference"):
         load_spec(spec_path)
+
+
+def test_load_spec_rejects_non_finite_float_params(tmp_path: Path) -> None:
+    # YAML .nan은 json.dumps에서 비표준 NaN 토큰이 되므로 SpecLoadError로 거부한다 (#201).
+    spec_path = tmp_path / "spec.yaml"
+    spec_path.write_text(
+        """
+dataset_id: dataset.sample
+title: Sample Dataset
+description: Sample description
+sources:
+  - provider: datago
+    dataset: air_quality
+    params:
+      threshold: .nan
+exports:
+  - kind: jsonl
+    output_path: out/data.jsonl
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SpecLoadError, match="finite"):
+        load_spec(spec_path)

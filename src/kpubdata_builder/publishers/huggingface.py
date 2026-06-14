@@ -65,6 +65,17 @@ class HuggingFacePublisher(BasePublisher):
         except ValueError:
             # 절대/상대 경로가 섞이는 등 공통 경로를 구할 수 없으면 basename으로 폴백.
             common_root = None
+        # 공통 루트가 파일시스템 루트("/")이면 의미 있는 공통 상위가 없다는 뜻이다.
+        # 그대로 쓰면 무관한 절대경로가 tmp/..., var/... 같은 호스트 경로로 누출되므로
+        # "공통 루트 없음"으로 취급해 basename으로 폴백한다 (#205).
+        # is_absolute() 가드가 없으면 상대 경로의 commonpath인 Path(".")도 parent==self
+        # 조건에 걸려 basename으로 평탄화되는 회귀가 생긴다(상대 경로 레이아웃은 보존해야 함).
+        if (
+            common_root is not None
+            and common_root.is_absolute()
+            and common_root.parent == common_root
+        ):
+            common_root = None
 
         seen_repo_paths: dict[str, Path] = {}
         for path in artifact_paths:

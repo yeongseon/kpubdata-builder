@@ -51,14 +51,19 @@ def test_manifest_writer_wraps_io_failures(tmp_path: Path, monkeypatch: pytest.M
     )
     output_path = tmp_path / "manifest.json"
 
-    def raise_io_error(self: Path, data: str, *, encoding: str) -> int:
-        del self, data, encoding
+    # 매니페스트 쓰기는 이제 temp 파일 + os.replace로 원자적이다 (#204). atomic 교체
+    # 단계의 OSError가 ManifestError로 감싸지는지 검증한다.
+    def raise_io_error(src: object, dst: object) -> None:
+        del src, dst
         raise OSError("disk full")
 
-    monkeypatch.setattr(Path, "write_text", raise_io_error)
+    monkeypatch.setattr("os.replace", raise_io_error)
 
     with pytest.raises(ManifestError):
         manifest_writer(manifest, output_path)
+
+    # 실패 시 임시 파일을 남기지 않는다.
+    assert list(tmp_path.glob(".manifest_*.tmp")) == []
 
 
 # --- schema summary tests (#11) ---
