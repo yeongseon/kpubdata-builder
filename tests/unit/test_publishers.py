@@ -205,6 +205,19 @@ class TestHuggingFacePublisher:
         assert repo_paths == {"f1.parquet", "f2.parquet"}
         assert result.artifact_count == 2
 
+    def test_relative_paths_preserve_layout(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # 상대 경로 아티팩트의 commonpath는 Path(".")이며, 이는 parent==self이지만
+        # 절대경로가 아니므로 basename 폴백 대상이 아니다. 디렉터리 레이아웃을 보존해야 한다 (#205).
+        calls = _install_fake_hf(monkeypatch)
+
+        result = HuggingFacePublisher().publish(
+            (Path("a/f1.parquet"), Path("b/f2.parquet")), destination="org/ds"
+        )
+
+        repo_paths = {c["path_in_repo"] for c in calls["files"]}
+        assert repo_paths == {"a/f1.parquet", "b/f2.parquet"}
+        assert result.artifact_count == 2
+
 
 class _FakeKaggleApi:
     """Kaggle API 더블: 호출을 기록하고 dataset 존재 여부를 흉내낸다."""

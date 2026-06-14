@@ -52,6 +52,29 @@ def _shape(value: object) -> object:
     return ("scalar", type(value).__name__)
 
 
+def _collect_numeric_kinds(value: object, path: str, acc: dict[str, set[str]]) -> None:
+    """정밀도 위험 판별용 수치 종류를 구조적 경로별로 모은다 (#198).
+
+    list 요소는 동일 dtype로 합쳐지므로 같은 경로(``path[]``)로 모으고, struct 필드는
+    각각 별도 컬럼이 되므로 키별 경로(``path.key``)로 분리한다. top-level 값뿐 아니라
+    중첩 list/struct 내부까지 재귀하므로, ``[{"v": [big_int]}, {"v": [2.5]}]`` 처럼
+    중첩된 곳에서 일어나는 f64 업캐스트 반올림도 잡아낸다.
+    """
+    if isinstance(value, bool):
+        return
+    if isinstance(value, float):
+        acc.setdefault(path, set()).add("float")
+    elif isinstance(value, int):
+        if abs(value) > _SAFE_INTEGER:
+            acc.setdefault(path, set()).add("unsafe_int")
+    elif isinstance(value, Mapping):
+        for key, item in value.items():
+            _collect_numeric_kinds(item, f"{path}.{key}", acc)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _collect_numeric_kinds(item, f"{path}[]", acc)
+
+
 def _unify(a: object, b: object) -> object:
     """두 타입 형태를 통합한다. null은 무엇과도 통합되고, 충돌이면 _CONFLICT를 반환한다."""
     if a is _CONFLICT or b is _CONFLICT:
@@ -101,19 +124,11 @@ def records_to_dataframe(records: Sequence[dict[str, JsonValue]]) -> pl.DataFram
     """
     shapes: dict[str, object] = {}
     conflicts: list[str] = []
-    has_float: set[str] = set()
-    unsafe_int: set[str] = set()
+    numeric_kinds: dict[str, set[str]] = {}
 
     for record in records:
         for key, value in record.items():
-            if isinstance(value, float):
-                has_float.add(key)
-            elif (
-                isinstance(value, int)
-                and not isinstance(value, bool)
-                and abs(value) > _SAFE_INTEGER
-            ):
-                unsafe_int.add(key)
+            _collect_numeric_kinds(value, key, numeric_kinds)
             shape = _unify(shapes.get(key, _NULL), _shape(value))
             shapes[key] = shape
             if shape is _CONFLICT and key not in conflicts:
@@ -125,7 +140,11 @@ def records_to_dataframe(records: Sequence[dict[str, JsonValue]]) -> pl.DataFram
             f"{sorted(conflicts)}"
         )
 
-    precision_risk = sorted(has_float & unsafe_int)
+    precision_risk = sorted(
+        path
+        for path, kinds in numeric_kinds.items()
+        if "float" in kinds and "unsafe_int" in kinds
+    )
     if precision_risk:
         raise TabularError(
             "integer precision loss risk: columns mix floats with integers beyond the "
