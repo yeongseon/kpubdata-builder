@@ -34,7 +34,7 @@ uv sync --extra dev --extra publish --extra docs
 pip install "kpubdata-builder[publish]"
 ```
 
-`publish` extra에는 `polars`, `huggingface-hub`, `xmltodict`, `kaggle`, `kr-building-name-normalizer`가 포함됩니다. 이 예제의 로컬 파일 생성에는 Polars와 Parquet 작성 의존성이 필요하고, 실제 Hugging Face 업로드를 할 때만 Hugging Face 인증이 필요합니다.
+`publish` extra에는 `huggingface-hub`, `xmltodict`, `kaggle`이 포함됩니다. 이 예제의 로컬 파일 생성에는 Polars와 Parquet 작성 의존성이 필요하고, 실제 Hugging Face 업로드를 할 때만 Hugging Face 인증이 필요합니다. 한국어 건물명 로마자 변환이 필요하면 `kr-building-name-normalizer`를 별도로 설치하세요.
 
 ## 사전 준비
 

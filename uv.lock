@@ -573,12 +573,14 @@ requires-dist = [
     { name = "build", marker = "extra == 'dev'", specifier = ">=1.2,<2" },
     { name = "httpx", specifier = ">=0.27,<1" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1,<2" },
+    { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.5,<10" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10,<2" },
     { name = "pandas", marker = "extra == 'pandas'", specifier = ">=2.2,<3" },
     { name = "pandas-stubs", marker = "extra == 'dev'", specifier = ">=2.2,<3" },
     { name = "pydantic", marker = "extra == 'validation'", specifier = ">=2.7,<3" },
     { name = "pykrx", marker = "extra == 'dev'", specifier = ">=1.0.45,<2" },
     { name = "pykrx", marker = "extra == 'krx'", specifier = ">=1.0.45,<2" },
+    { name = "pymdown-extensions", marker = "extra == 'docs'", specifier = ">=10,<11" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.2,<9" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5,<6" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5,<1" },
@@ -586,11 +588,11 @@ requires-dist = [
     { name = "xmltodict", marker = "extra == 'dev'", specifier = ">=0.13,<1" },
     { name = "xmltodict", marker = "extra == 'xml'", specifier = ">=0.13,<1" },
 ]
-provides-extras = ["xml", "pandas", "krx", "validation", "mcp", "dev"]
+provides-extras = ["xml", "pandas", "krx", "validation", "mcp", "dev", "docs"]
 
 [[package]]
 name = "kpubdata-builder"
-version = "0.1.0a0"
+version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "kpubdata" },
@@ -621,7 +623,6 @@ publish = [
     { name = "huggingface-hub" },
     { name = "kaggle", version = "1.7.4.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "kaggle", version = "1.8.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "kr-building-name-normalizer" },
     { name = "xmltodict" },
 ]
 
@@ -632,7 +633,6 @@ requires-dist = [
     { name = "huggingface-hub", marker = "extra == 'publish'", specifier = ">=0.23,<1" },
     { name = "kaggle", marker = "extra == 'publish'", specifier = ">=1.6,<2" },
     { name = "kpubdata", editable = "../kpubdata" },
-    { name = "kr-building-name-normalizer", marker = "extra == 'publish'", specifier = ">=0.2.0,<1" },
     { name = "mkdocs", marker = "extra == 'docs'", specifier = ">=1.6,<2" },
     { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9,<10" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10,<2" },
@@ -646,15 +646,6 @@ requires-dist = [
     { name = "xmltodict", marker = "extra == 'publish'", specifier = ">=0.13,<1" },
 ]
 provides-extras = ["docs", "parquet", "huggingface", "publish", "dev"]
-
-[[package]]
-name = "kr-building-name-normalizer"
-version = "0.2.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/63/07/0cfa4961e9c8e40d8b49cd1cf58119d97202736aff5875d91f5ae9cafc26/kr_building_name_normalizer-0.2.0.tar.gz", hash = "sha256:43ec9f93ed7d452823d4093c7446189656c7ac3e369510bf01ab3b065c626f10", size = 44364, upload-time = "2026-04-27T23:27:56.535Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/e8/bc/0ae96e1ef074092e0e2b5b2752b7953b033cbef58315f722958649687eef/kr_building_name_normalizer-0.2.0-py3-none-any.whl", hash = "sha256:895d160eca4654174ec7dc957bfa1340a48f3835a945c551e925ce134678c13a", size = 15101, upload-time = "2026-04-27T23:27:55.36Z" },
-]
 
 [[package]]
 name = "librt"
