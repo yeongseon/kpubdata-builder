@@ -201,7 +201,14 @@ def build_variant_dataframes(df: pl.DataFrame, config: dict[str, Any]) -> dict[s
 
         romanize_cols = opts.get("romanize_columns", [])
         if romanize_cols:
-            from kr_building_normalizer import romanize
+            try:
+                from kr_building_normalizer import romanize
+            except ImportError:
+                logger.warning(
+                    "kr-building-name-normalizer 미설치 — romanize_columns 건너뜀. "
+                    "pip install kr-building-name-normalizer 로 설치하세요."
+                )
+                romanize_cols = []
 
             for col in romanize_cols:
                 if col in variant_df.columns:

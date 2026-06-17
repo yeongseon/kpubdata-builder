@@ -42,7 +42,7 @@ docs = [
 ]
 parquet = ["pyarrow>=15,<18"]
 huggingface = ["huggingface-hub>=0.23,<1"]
-publish = ["huggingface-hub>=0.23,<1", "xmltodict>=0.13,<1", "kaggle>=1.6,<2", "kr-building-name-normalizer>=0.2.0,<1"]
+publish = ["huggingface-hub>=0.23,<1", "xmltodict>=0.13,<1", "kaggle>=1.6,<2"]
 dev = [
   "build>=1.2,<2",
   "mypy>=1.10,<2",
