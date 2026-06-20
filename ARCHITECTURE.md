@@ -166,7 +166,49 @@ build/{run_id}/
 
 자세한 경계는 [BOUNDARY.md](./BOUNDARY.md)를 참고하세요.
 
-## 9. 관련 문서
+## 9. 빌드 실행 경로 — 정식 vs 레거시 (#208)
+
+코드베이스에는 두 실행 경로가 공존한다. 혼란을 막기 위해 **정식 경로를 다음과 같이
+확정**한다.
+
+### 9.1 정식 경로 — 메달리온 오케스트레이터
+
+```
+kpubdata_builder.pipeline.run_build(spec, client=..., output_root=..., run_id=...)
+```
+
+- 입력은 `BuildSpec`이며, 진입점에서 `validate_spec()`로 fail-fast 검증한다(#212).
+- Bronze → Silver → Gold를 오케스트레이션하고, **단일** manifest 생성기
+  (`kpubdata_builder.manifest`)로 스키마 버전·빌드 환경·입력 지문을 기록한다(#211).
+- `kpubdata_builder.service`(HTTP)와 `kpubdata_builder.cli`가 모두 이 경로를 호출한다.
+- **신규 기능과 버그 수정은 이 경로에만 추가한다.**
+
+### 9.2 레거시 경로 — 스크립트 기반 publish 파이프라인
+
+```
+scripts/publish_to_hf.py  →  scripts/pipeline/{fetch,transform,package,publish}.py
+```
+
+- BuildSpec과 다른 자체 config 스키마(`scripts/configs/*.yaml`)를 쓰며, data.go.kr →
+  HuggingFace/Kaggle 직접 publish(checkpoint/resume, variant, dataset card)를 담당한다.
+- GitHub Actions `publish-dataset.yml` 및 스케줄 워크플로에 연결된 **프로덕션 경로**다.
+- 해당 모듈에는 `DEPRECATED` 표시가 붙어 있으며, 프로덕션 호환을 위해서만 유지한다.
+
+### 9.3 통합 계획 (follow-up)
+
+두 경로는 config 스키마가 근본적으로 다르고 레거시 경로가 프로덕션에 연결돼 있어 즉시
+병합은 회귀 위험이 크다. 단계적 통합:
+
+1. **(완료)** 정식 경로를 메달리온으로 확정하고 레거시 모듈 deprecate.
+2. 레거시 config → `BuildSpec` 변환 어댑터 도입.
+3. fetch/transform/package를 메달리온 stage 호출로 치환하고 publish만 publisher 계층에
+   위임.
+4. variant/checkpoint 등 publish 전용 기능을 메달리온에서 동등 제공한 뒤 스케줄
+   워크플로를 새 진입점으로 전환하고 레거시 스크립트 제거.
+
+각 단계는 publish 워크플로의 라이브 재검증을 동반한다.
+
+## 10. 관련 문서
 
 | 문서 | 설명 |
 | :--- | :--- |
