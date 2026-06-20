@@ -26,6 +26,8 @@ from ..manifest import (
     SourceProvenance,
     build_schema_summary,
     build_source_provenance,
+    capture_build_environment,
+    compute_inputs_fingerprint,
     manifest_writer,
 )
 from ..spec import BuildSpec, SourceRef
@@ -252,6 +254,8 @@ def run_build(
         row_counts=row_counts,
         schema_summaries=schema_summaries,
         provenance=tuple(provenance),
+        build_environment=capture_build_environment(),
+        inputs_fingerprint=compute_inputs_fingerprint(provenance),
     )
     manifest_path = context.output_root / context.run_id / "manifest.json"
     manifest_writer(manifest, manifest_path)

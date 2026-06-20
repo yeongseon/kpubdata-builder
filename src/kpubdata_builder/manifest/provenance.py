@@ -99,4 +99,28 @@ def build_source_provenance(
     )
 
 
-__all__ = ["SourceProvenance", "build_source_provenance", "compute_data_checksum"]
+def compute_inputs_fingerprint(provenance: Sequence[SourceProvenance]) -> str | None:
+    """빌드 입력 전체에 대한 재현성 지문을 계산한다 (#211).
+
+    소스별 데이터 체크섬을 ``provider.dataset=sha256:...`` 형태로 정렬·결합해
+    한 번 더 해싱한다. 소스 순서와 무관하게, 같은 입력 집합이면 동일 지문이 나온다.
+
+    매개변수:
+        provenance: 소스별 출처 스냅샷 시퀀스.
+
+    반환값:
+        str | None: "sha256:" 접두사가 붙은 지문. provenance가 비면 None.
+    """
+    if not provenance:
+        return None
+    parts = sorted(f"{p.provider}.{p.dataset}={p.data_checksum}" for p in provenance)
+    digest = hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+    return f"sha256:{digest}"
+
+
+__all__ = [
+    "SourceProvenance",
+    "build_source_provenance",
+    "compute_data_checksum",
+    "compute_inputs_fingerprint",
+]
