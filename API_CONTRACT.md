@@ -324,7 +324,31 @@ artifact 목록과 메타데이터를 반환합니다.
 | `kpubdata-builder build spec.yaml` | `POST /builds` + `GET /builds/{id}` |
 | `kpubdata-builder publish --build-id ...` | `POST /publish` |
 
-## 8. 관련 문서
+## 8. 구현 현황 (#209)
+
+본 계약(`contract/builder-api.yaml`, info.version)은 단일 소스이며, 코드의
+`kpubdata_builder.service.API_CONTRACT_VERSION`과 일치해야 합니다
+(`test_service_contract`가 강제). 소비자는 `GET /version`으로 계약 버전을 먼저
+확인할 수 있고, `POST /validate`·`POST /build` 응답에도 `api_version`이 실립니다.
+
+현재 `BuilderService` 구현은 계약의 일부만, 그리고 계약과 다른 경로 이름으로
+제공합니다. 이 차이는 `test_service_contract`가 명시적으로 고정하여 한쪽만 바뀌는
+조용한 드리프트를 막습니다. 경로/비동기 모델을 계약과 완전히 일치시키는 작업은
+Studio와의 교차 레포 조율이 필요한 후속 작업입니다.
+
+| 계약 operationId | 상태 | 현재 구현 경로 |
+| :--- | :--- | :--- |
+| `validateSpec` | 구현됨 | `POST /validate` (동기) |
+| `previewBuild` | 구현됨 | `POST /preview` (동기) |
+| `createBuild` | 구현됨 | `POST /build` (동기; 계약은 비동기 `POST /builds` 지향) |
+| `listBuildArtifacts` | 구현됨 | `GET /artifacts/{run_id}` |
+| `listDatasets` | 계획됨 | — |
+| `getBuild` | 계획됨 | — |
+| `getBuildManifest` | 계획됨 | — |
+| `publishArtifacts` | 계획됨 | — |
+| (메타) | 구현됨 | `GET /version` → `{service, api_version}` |
+
+## 9. 관련 문서
 
 | 문서 | 설명 |
 | :--- | :--- |

@@ -86,6 +86,51 @@ def test_build_state_enum_matches_contract() -> None:
     }
 
 
+def test_service_api_version_matches_contract() -> None:
+    # 코드의 API_CONTRACT_VERSION이 계약 문서의 info.version과 어긋나지 않도록 고정 (#209).
+    from kpubdata_builder.service import API_CONTRACT_VERSION
+
+    assert str(_load_contract()["info"]["version"]) == API_CONTRACT_VERSION
+
+
+# 현재 BuilderService가 구현한 동기 라우트 → 계약 operationId 매핑.
+# 구현 경로 이름은 계약과 다르다(예: POST /validate vs 계약의 /spec/validate).
+# 이 매핑이 그 차이를 명시적으로 고정해, 한쪽만 바뀌는 조용한 드리프트를 막는다 (#209).
+_IMPLEMENTED_OPERATIONS = {
+    "validateSpec",  # POST /validate
+    "previewBuild",  # POST /preview
+    "createBuild",  # POST /build (동기; 계약은 비동기 POST /builds 지향)
+    "listBuildArtifacts",  # GET /artifacts/{run_id}
+}
+# 아직 builder service에 구현되지 않은(계약상 존재하는) 오퍼레이션.
+_PLANNED_OPERATIONS = {
+    "listDatasets",
+    "getBuild",
+    "getBuildManifest",
+    "publishArtifacts",
+}
+
+
+def _contract_operation_ids() -> set[str]:
+    paths = _load_contract()["paths"]
+    return {
+        operation["operationId"]
+        for methods in paths.values()
+        for operation in methods.values()
+        if isinstance(operation, dict) and "operationId" in operation
+    }
+
+
+def test_implemented_and_planned_cover_all_contract_operations() -> None:
+    # 구현됨 + 계획됨의 합집합이 계약의 모든 오퍼레이션을 빠짐없이 덮어야 한다.
+    # 계약에 새 오퍼레이션이 추가되면 이 테스트가 깨져 분류를 강제한다 (#209).
+    contract_ops = _contract_operation_ids()
+
+    assert contract_ops >= _IMPLEMENTED_OPERATIONS
+    assert contract_ops >= _PLANNED_OPERATIONS
+    assert contract_ops == _IMPLEMENTED_OPERATIONS | _PLANNED_OPERATIONS
+
+
 def test_referenced_schemas_resolve() -> None:
     # 모든 로컬 $ref("#/components/...")가 실제로 존재하는지 확인한다.
     contract = _load_contract()

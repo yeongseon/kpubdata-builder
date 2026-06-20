@@ -28,6 +28,11 @@ from ..stages._path_safety import ensure_within, validate_path_segment
 from ..stages.bronze.build import SourceClient
 from ..tabular import DEFAULT_PREVIEW_LIMIT
 
+# Builder API 계약 버전. contract/builder-api.yaml의 info.version과 일치해야 하며
+# (test_service_contract가 강제), 응답에 실어 Studio 같은 소비자가 하위 호환을
+# 협상할 수 있게 한다 (#209).
+API_CONTRACT_VERSION = "1.0.0"
+
 
 @dataclass(frozen=True)
 class ServiceResponse:
@@ -62,6 +67,15 @@ class BuilderService:
         self._output_root = output_root
         self._client_factory = client_factory
 
+    def version(self) -> ServiceResponse:
+        """Builder API 계약 버전을 반환한다 (#209).
+
+        소비자(Studio 등)가 호출 전에 계약 호환성을 확인할 수 있는 메타 엔드포인트다.
+        """
+        return ServiceResponse(
+            200, {"service": "kpubdata-builder", "api_version": API_CONTRACT_VERSION}
+        )
+
     def validate(self, spec_yaml: str) -> ServiceResponse:
         """BuildSpec을 파싱·검증한다."""
         try:
@@ -71,7 +85,14 @@ class BuilderService:
             return ServiceResponse(400, {"status": "error", "error": str(exc)})
         except ValidationError as exc:
             return ServiceResponse(400, {"status": "invalid", "problems": list(exc.problems)})
-        return ServiceResponse(200, {"status": "valid", "dataset_id": spec.dataset_id})
+        return ServiceResponse(
+            200,
+            {
+                "status": "valid",
+                "dataset_id": spec.dataset_id,
+                "api_version": API_CONTRACT_VERSION,
+            },
+        )
 
     def preview(self, spec_yaml: str, *, limit: int = DEFAULT_PREVIEW_LIMIT) -> ServiceResponse:
         """각 소스의 스키마와 샘플 행을 산출한다 (파일 미기록)."""
@@ -137,6 +158,7 @@ class BuilderService:
                 "run_id": result.context.run_id,
                 "outcomes": outcomes,
                 "manifest": str(result.manifest_path),
+                "api_version": API_CONTRACT_VERSION,
             },
         )
 
@@ -186,6 +208,9 @@ def dispatch(
     body: Mapping[str, JsonValue] | None,
 ) -> ServiceResponse:
     """(method, path)를 BuilderService 연산으로 라우팅한다."""
+    if method == "GET" and path == "/version":
+        return service.version()
+
     if method == "POST" and path == "/validate":
         spec = _spec_from_body(body)
         return spec if isinstance(spec, ServiceResponse) else service.validate(spec)
@@ -234,4 +259,4 @@ def dispatch(
     return ServiceResponse(404, {"error": f"not found: {method} {path}"})
 
 
-__all__ = ["BuilderService", "ServiceResponse", "dispatch"]
+__all__ = ["API_CONTRACT_VERSION", "BuilderService", "ServiceResponse", "dispatch"]
