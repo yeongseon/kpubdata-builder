@@ -27,6 +27,7 @@ from ..artifact import ArtifactDataset
 from ..errors import ExportError
 from ..spec import ExportTarget
 from ..stages._atomic import atomic_replace_dir
+from ..stages._path_safety import safe_output_path
 from ..tabular.convert import records_to_dataframe
 from .base import BaseExporter, ExportResult
 
@@ -122,7 +123,8 @@ class HuggingFaceExporter(BaseExporter):
             ExportError: 지원하지 않는 형식이거나 파일 쓰기에 실패한 경우.
         """
         fmt = _resolve_format(target)
-        hf_dir = output_dir / target.output_path
+        # 사용자 제어 output_path가 build 워크스페이스를 벗어나지 못하게 한다 (#210).
+        hf_dir = safe_output_path(output_dir, target.output_path)
         hf_dir.parent.mkdir(parents=True, exist_ok=True)
 
         # 레이아웃을 임시 디렉터리에 전부 쓴 뒤 atomic하게 교체한다. in-place 갱신은
