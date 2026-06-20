@@ -273,3 +273,23 @@ def test_run_build_rejects_unsafe_run_id(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="run_id"):
         _ = run_build(spec, client=client, output_root=tmp_path, run_id="../escape")
+
+
+def test_run_build_validates_spec_before_running(tmp_path: Path) -> None:
+    # 잘못된 spec(소스 없음)은 단계 진입 전 fail-fast로 거부되어야 한다 (#212).
+    from kpubdata_builder.errors import ValidationError
+
+    bad_spec = BuildSpec(
+        dataset_id="apt_trade",
+        title="Apartment Trades",
+        description="seoul apartment trades",
+        sources=(),
+        exports=(ExportTarget(kind="jsonl", output_path="data.jsonl"),),
+    )
+    client = _FakeClient({"datago.apt_trade": [{"id": "1"}]})
+
+    with pytest.raises(ValidationError, match="at least one source"):
+        _ = run_build(bad_spec, client=client, output_root=tmp_path, run_id="run1")
+
+    # fail-fast: manifest나 워크스페이스가 생성되지 않는다.
+    assert not (tmp_path / "run1").exists()

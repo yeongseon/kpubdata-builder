@@ -29,6 +29,7 @@ from ..manifest import (
     manifest_writer,
 )
 from ..spec import BuildSpec, SourceRef
+from ..spec.validator import validate_spec
 from ..stages.bronze.build import SourceClient, build_bronze_artifact
 from ..stages.bronze.models import BronzeArtifact, utc_now
 from ..stages.bronze.persist import persist_bronze_artifact
@@ -209,8 +210,12 @@ def run_build(
         BuildResult: 전체 상태, 소스별 결과, 매니페스트 경로.
 
     예외:
+        ValidationError: spec이 최소 실행 요건을 만족하지 못한 경우.
         ValueError: run_id에 안전하지 않은 문자가 포함된 경우.
     """
+    # 진입점에서 spec을 먼저 검증한다(fail-fast). 검증을 호출자에게만 맡기면 잘못된
+    # spec이 단계 깊숙이 들어가 cryptic 에러로 터지므로, 단계 진입 전에 막는다 (#212).
+    validate_spec(spec)
     context = BuildContext.create(spec, output_root=output_root, run_id=run_id)
 
     outputs: list[str] = []
