@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
 """Publish kpubdata dataset to HuggingFace Hub and/or Kaggle.
 
-This is the CLI entrypoint. All logic lives in the pipeline/ package.
+This is the CLI entrypoint for the legacy script-based publish pipeline; all
+logic lives in the pipeline/ package.
+
+DEPRECATED — legacy publish path (#208). The canonical dataset build execution
+path is the medallion orchestrator ``kpubdata_builder.pipeline.run_build``.
+This script is retained for the existing GitHub Actions publish workflows and
+its own config schema. See ``docs/ARCHITECTURE.md`` for the canonical path and
+the migration plan.
 """
 
 from __future__ import annotations

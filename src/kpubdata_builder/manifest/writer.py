@@ -32,10 +32,15 @@ def manifest_writer(manifest: BuildManifest, output_path: Path) -> None:
         ManifestError: 디렉터리 생성 또는 파일 기록에 실패한 경우.
     """
     payload = {
+        "schema_version": manifest.schema_version,
         "build_id": manifest.build_id,
         "started_at": manifest.started_at.astimezone(timezone.utc).isoformat(),
         "finished_at": manifest.finished_at.astimezone(timezone.utc).isoformat(),
+        "build_environment": (
+            asdict(manifest.build_environment) if manifest.build_environment is not None else None
+        ),
         "inputs": list(manifest.inputs),
+        "inputs_fingerprint": manifest.inputs_fingerprint,
         "outputs": list(manifest.outputs),
         "warnings": list(manifest.warnings),
         "errors": list(manifest.errors),

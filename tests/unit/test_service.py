@@ -81,12 +81,34 @@ def _service(tmp_path: Path) -> BuilderService:
     return BuilderService(output_root=tmp_path, client_factory=lambda: client)
 
 
+class TestVersion:
+    def test_version_reports_api_contract_version(self, tmp_path: Path) -> None:
+        # #209: 계약 버전을 알리는 메타 엔드포인트.
+        from kpubdata_builder.service import API_CONTRACT_VERSION
+
+        resp = _service(tmp_path).version()
+        assert resp.status_code == 200
+        assert resp.body["api_version"] == API_CONTRACT_VERSION
+        assert resp.body["service"] == "kpubdata-builder"
+
+    def test_version_route(self, tmp_path: Path) -> None:
+        from kpubdata_builder.service import API_CONTRACT_VERSION
+
+        resp = dispatch(_service(tmp_path), "GET", "/version", None)
+        assert resp.status_code == 200
+        assert resp.body["api_version"] == API_CONTRACT_VERSION
+
+
 class TestValidate:
     def test_valid_spec_returns_200(self, tmp_path: Path) -> None:
+        from kpubdata_builder.service import API_CONTRACT_VERSION
+
         resp = _service(tmp_path).validate(VALID_SPEC_YAML)
         assert resp.status_code == 200
         assert resp.body["status"] == "valid"
         assert resp.body["dataset_id"] == "dataset.sample"
+        # #209: 응답에 계약 버전을 실어 소비자가 호환성을 확인할 수 있다.
+        assert resp.body["api_version"] == API_CONTRACT_VERSION
 
     def test_invalid_spec_returns_400(self, tmp_path: Path) -> None:
         resp = _service(tmp_path).validate(INVALID_SPEC_YAML)

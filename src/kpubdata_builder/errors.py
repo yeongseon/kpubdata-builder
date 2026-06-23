@@ -48,6 +48,15 @@ class ExportError(BuildError):
     """파일 내보내기나 출력 디렉터리 준비가 실패했음을 나타낸다."""
 
 
+class PathTraversalError(ExportError):
+    """출력 경로가 허용된 기준 디렉터리를 벗어남을 나타낸다 (#210).
+
+    사용자 제어 output_path에 절대 경로나 ``..`` 상위 이동이 섞여 의도치 않은
+    위치에 파일을 쓰려는 시도를 차단할 때 쓴다. ExportError를 상속하므로 기존
+    ``except ExportError`` 경로에서도 함께 처리된다.
+    """
+
+
 class ManifestError(BuildError):
     """매니페스트 직렬화 또는 디스크 기록이 실패했음을 나타낸다."""
 
@@ -86,6 +95,7 @@ __all__ = [
     "ExecutionError",
     "ExportError",
     "ManifestError",
+    "PathTraversalError",
     "PublishError",
     "SpecLoadError",
     "TabularError",

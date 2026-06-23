@@ -11,19 +11,29 @@
 
 from __future__ import annotations
 
-from .models import BuildManifest
-from .provenance import SourceProvenance, build_source_provenance, compute_data_checksum
+from .environment import BuildEnvironment, capture_build_environment
+from .models import MANIFEST_SCHEMA_VERSION, BuildManifest
+from .provenance import (
+    SourceProvenance,
+    build_source_provenance,
+    compute_data_checksum,
+    compute_inputs_fingerprint,
+)
 from .schema_summary import FieldSummary, SchemaSummary, build_schema_summary
 from .writer import manifest_writer, write_manifest
 
 __all__ = [
+    "MANIFEST_SCHEMA_VERSION",
+    "BuildEnvironment",
     "BuildManifest",
     "FieldSummary",
     "SchemaSummary",
     "SourceProvenance",
     "build_schema_summary",
     "build_source_provenance",
+    "capture_build_environment",
     "compute_data_checksum",
+    "compute_inputs_fingerprint",
     "manifest_writer",
     "write_manifest",
 ]

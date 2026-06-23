@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from kpubdata_builder import ArtifactDataset, ExportError
+from kpubdata_builder.errors import PathTraversalError
 from kpubdata_builder.exporters import JsonlExporter, MarkdownExporter
 from kpubdata_builder.spec import ExportTarget
 
@@ -47,6 +48,16 @@ def test_markdown_exporter_raises_export_error_on_io_failure(
 
     with pytest.raises(ExportError):
         MarkdownExporter().export(artifact, target, tmp_path)
+
+
+@pytest.mark.parametrize("evil", ["../escape.jsonl", "../../tmp/evil.jsonl", "/tmp/abs.jsonl"])
+def test_exporter_rejects_output_path_traversal(tmp_path: Path, evil: str) -> None:
+    # 악의적 output_path가 build 워크스페이스 밖으로 파일을 쓰지 못하게 거부 (#210).
+    artifact = ArtifactDataset(records=({"id": "1"},), provenance=("datago.air_quality",))
+    target = ExportTarget(kind="jsonl", output_path=evil)
+
+    with pytest.raises(PathTraversalError):
+        JsonlExporter().export(artifact, target, tmp_path)
 
 
 def test_markdown_exporter_returns_export_metadata(tmp_path: Path) -> None:
