@@ -72,7 +72,9 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Error"
+                oneOf:
+                  - $ref: "#/components/schemas/Error"
+                  - $ref: "#/components/schemas/ValidationError"
 
   /build:
     post:
@@ -96,7 +98,9 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Error"
+                oneOf:
+                  - $ref: "#/components/schemas/Error"
+                  - $ref: "#/components/schemas/ValidationError"
         "502":
           description: >-
             하나 이상의 소스 fetch/stage 실패. upstream 소스 의존 실패이며 매니페스트는
