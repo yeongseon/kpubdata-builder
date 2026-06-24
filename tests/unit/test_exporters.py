@@ -90,7 +90,8 @@ def test_exporter_leaves_no_temp_file_on_failure(
 
     cls = JsonlExporter if exporter_cls == "JsonlExporter" else MarkdownExporter
     artifact = ArtifactDataset(records=({"id": "1"},), provenance=("datago.air_quality",))
-    target = ExportTarget(kind="jsonl", output_path=output_path)
+    kind = "jsonl" if exporter_cls == "JsonlExporter" else "markdown"
+    target = ExportTarget(kind=kind, output_path=output_path)
 
     def raise_on_replace(src: str, dst: str) -> None:
         raise OSError("disk full")

@@ -147,9 +147,12 @@ class HuggingFaceExporter(BaseExporter):
         except ExportError:
             shutil.rmtree(tmp_dir, ignore_errors=True)
             raise
-        except BaseException as exc:
+        except Exception as exc:
             shutil.rmtree(tmp_dir, ignore_errors=True)
             raise ExportError(f"Failed to export Hugging Face layout to {hf_dir}: {exc}") from exc
+        except BaseException:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            raise
 
         # HF exporter returns the layout directory (not a single file) since it
         # produces multiple files. Consumers should use output_path as a directory.
