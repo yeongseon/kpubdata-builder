@@ -54,8 +54,10 @@ def _ratio_split(
 
 
 # 실제 레코드 값과 충돌하지 않도록 문자열이 아닌 단일 객체를 센티널로 사용한다.
-# str()로 변환 불가능한 객체이므로 "__missing__" 또는 "__null__" 값을 가진
-# 레코드가 잘못된 버킷으로 분류되는 충돌을 방지한다 (#225).
+# object()는 str() 가능하지만, 동일한 object() 인스턴스는 정체성(identity)으로만
+# 구분된다. 이 고유한 정체성을 내부 버킷 키로 사용하므로, "__missing__" 또는
+# "__null__" 리터럴 문자열 값을 가진 레코드가 잘못된 버킷에 합산되는 충돌을
+# 방지한다 (#225).
 _MISSING_KEY_SENTINEL: object = object()
 _NULL_VALUE_SENTINEL: object = object()
 
@@ -88,7 +90,7 @@ def _key_split(records: Sequence[Record], key: str) -> dict[str, tuple[Record, .
     # 센티널을 출력 이름으로 변환; 이름 충돌 시 병합해 레코드 손실을 막는다.
     result: dict[str, list[Record]] = {}
     for k, rows in grouped.items():
-        name: str = _SENTINEL_NAMES.get(k, k)  # type: ignore[arg-type]
+        name: str = k if isinstance(k, str) else _SENTINEL_NAMES[k]
         result.setdefault(name, []).extend(rows)
     return {name: tuple(rows) for name, rows in result.items()}
 

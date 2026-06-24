@@ -81,7 +81,11 @@ def _render_template_data(path: str | Path, params: dict[str, str]) -> dict[str,
         unique = ", ".join(sorted(set(missing)))
         raise SpecLoadError(f"Missing template parameter(s): {unique}")
 
-    return substituted  # type: ignore[return-value]
+    if not isinstance(substituted, dict):
+        raise SpecLoadError(
+            f"Template substitution produced a non-mapping result for {path}: {type(substituted)}"
+        )
+    return substituted
 
 
 def render_template(path: str | Path, params: dict[str, str]) -> str:
