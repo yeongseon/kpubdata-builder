@@ -96,6 +96,8 @@ class BuilderService:
 
     def preview(self, spec_yaml: str, *, limit: int = DEFAULT_PREVIEW_LIMIT) -> ServiceResponse:
         """각 소스의 스키마와 샘플 행을 산출한다 (파일 미기록)."""
+        if limit < 1:
+            return ServiceResponse(400, {"error": "'limit' must be a positive integer"})
         spec_or_error = self._load_validated(spec_yaml)
         if isinstance(spec_or_error, ServiceResponse):
             return spec_or_error

@@ -53,8 +53,16 @@ def _ratio_split(
     return result
 
 
-_MISSING_KEY_SENTINEL = "__missing__"
-_NULL_VALUE_SENTINEL = "__null__"
+# 실제 레코드 값과 충돌하지 않도록 문자열이 아닌 단일 객체를 센티널로 사용한다.
+# str()로 변환 불가능한 객체이므로 "__missing__" 또는 "__null__" 값을 가진
+# 레코드가 잘못된 버킷으로 분류되는 충돌을 방지한다 (#225).
+_MISSING_KEY_SENTINEL: object = object()
+_NULL_VALUE_SENTINEL: object = object()
+
+_SENTINEL_NAMES: dict[object, str] = {
+    _MISSING_KEY_SENTINEL: "__missing__",
+    _NULL_VALUE_SENTINEL: "__null__",
+}
 
 
 def _key_split(records: Sequence[Record], key: str) -> dict[str, tuple[Record, ...]]:
@@ -62,17 +70,27 @@ def _key_split(records: Sequence[Record], key: str) -> dict[str, tuple[Record, .
 
     키가 없는 레코드는 "__missing__" 버킷, None 값은 "__null__" 버킷,
     빈 문자열은 "" 버킷으로 각각 분리한다.
+
+    센티널 객체를 내부 버킷 키로 사용해 키가 없는/None인 레코드와 리터럴
+    "__missing__"/"__null__" 문자열을 가진 레코드가 컬렉션 단계에서 합산되지
+    않도록 분리한다. 출력 dict 구성 시 센티널을 문자열 이름으로 변환하면서
+    이름이 충돌하면 병합(extend)한다 (#225).
     """
-    grouped: dict[str, list[Record]] = {}
+    grouped: dict[object, list[Record]] = {}
     for record in records:
         if key not in record:
-            bucket = _MISSING_KEY_SENTINEL
+            bucket: object = _MISSING_KEY_SENTINEL
         elif record[key] is None:
             bucket = _NULL_VALUE_SENTINEL
         else:
             bucket = str(record[key])
         grouped.setdefault(bucket, []).append(record)
-    return {name: tuple(rows) for name, rows in grouped.items()}
+    # 센티널을 출력 이름으로 변환; 이름 충돌 시 병합해 레코드 손실을 막는다.
+    result: dict[str, list[Record]] = {}
+    for k, rows in grouped.items():
+        name: str = _SENTINEL_NAMES.get(k, k)  # type: ignore[arg-type]
+        result.setdefault(name, []).extend(rows)
+    return {name: tuple(rows) for name, rows in result.items()}
 
 
 def apply_splits(records: Sequence[Record], spec: SplitSpec) -> dict[str, tuple[Record, ...]]:

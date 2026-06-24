@@ -165,7 +165,7 @@ def _run_source_pipeline(
         card = build_dataset_card(
             title=context.spec.title,
             description=context.spec.description,
-            sources=(fetch_key,),
+            sources=(output_key,),
             fields=(
                 (column.name, column.dtype, column.nullable) for column in silver.schema.columns
             ),
@@ -185,11 +185,26 @@ def _run_source_pipeline(
             source_key=output_key, status="ok", stages_completed=tuple(completed)
         )
     except Exception as exc:  # stage 실패를 결과로 변환하여 매니페스트에 기록
+        import warnings
+
+        # 도메인 오류(BuildError 하위)는 안전한 메시지만 포함하므로 그대로 전달한다.
+        # 그 외 예외는 절대 경로 등 내부 정보를 담을 수 있으므로, 상세 내용은 서버
+        # 경고로 기록하고 클라이언트에는 일반 메시지만 반환한다 (#225).
+        from ..errors import BuildError
+
+        if isinstance(exc, BuildError):
+            error_msg = str(exc)
+        else:
+            warnings.warn(
+                f"source pipeline failed for {output_key!r}: {exc}",
+                stacklevel=2,
+            )
+            error_msg = f"pipeline failed for source {output_key!r}"
         return SourceBuildOutcome(
             source_key=output_key,
             status="failed",
             stages_completed=tuple(completed),
-            error=str(exc),
+            error=error_msg,
         )
 
 

@@ -129,6 +129,18 @@ class TestPreview:
         assert list(tmp_path.iterdir()) == []
 
 
+class TestPreviewLimitGuard:
+    def test_preview_direct_call_rejects_zero_limit(self, tmp_path: Path) -> None:
+        # #225: BuilderService.preview()를 직접 호출할 때도 limit<1이면 400을 반환한다.
+        resp = _service(tmp_path).preview(VALID_SPEC_YAML, limit=0)
+        assert resp.status_code == 400
+        assert "limit" in str(resp.body.get("error", ""))
+
+    def test_preview_direct_call_rejects_negative_limit(self, tmp_path: Path) -> None:
+        resp = _service(tmp_path).preview(VALID_SPEC_YAML, limit=-5)
+        assert resp.status_code == 400
+
+
 class TestBuild:
     def test_build_runs_and_reports_manifest(self, tmp_path: Path) -> None:
         resp = _service(tmp_path).build(VALID_SPEC_YAML, run_id="run1")
