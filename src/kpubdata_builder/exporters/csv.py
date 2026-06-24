@@ -35,8 +35,9 @@ def _resolve_columns(artifact: ArtifactDataset) -> list[str]:
     return list(columns.keys())
 
 
+# 스프레드시트가 수식으로 해석하는 선두 문자 집합.
+# 셀 값이 이 문자로 시작하면 앞에 홑따옴표를 붙여 수식 실행을 막는다 (CSV 인젝션 대응, CWE-1236).
 _FORMULA_TRIGGER_CHARS = frozenset("=+-@\t\r")
-"""스프레드시트가 수식으로 해석하는 선두 문자 집합 (CWE-1236)."""
 
 
 def _format_cell(value: JsonValue) -> str:
