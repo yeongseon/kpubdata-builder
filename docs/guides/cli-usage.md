@@ -265,7 +265,36 @@ publish: dataset.seoul_apt_trade -> local
 ## 서비스 모드 (HTTP API)
 
 `kpubdata-builder` 패키지는 HTTP 서비스로 실행할 수도 있습니다.
-서비스는 의존성 없이 오프라인으로 기동할 수 있으며, 아래는 실제 실행 결과입니다.
+서비스는 stdlib `http.server` 어댑터 기반이며 추가 의존성 없이 실행됩니다.
+
+### 서비스 기동
+
+별도 CLI `serve` 명령은 없습니다. `BuilderService`와 `serve()`를 직접 임포트해 실행합니다.
+
+```python
+# serve_dev.py  —  개발·로컬 테스트용 기동 스크립트 예시
+from pathlib import Path
+from kpubdata_builder.service import BuilderService, serve
+from kpubdata_builder.stages.bronze.build import SourceClient
+
+def _client_factory() -> SourceClient:
+    from kpubdata import Client
+    return Client.from_env()  # type: ignore[return-value]
+
+service = BuilderService(
+    output_root=Path("build"),
+    client_factory=_client_factory,
+)
+serve(service, host="127.0.0.1", port=8000)
+```
+
+```console
+$ python serve_dev.py
+# 서버가 127.0.0.1:8000에서 요청을 대기합니다 (Ctrl-C로 종료).
+```
+
+`/validate`와 `/version`은 API 키 없이 오프라인으로 사용할 수 있습니다.
+`/preview`와 `/build`는 `KPUBDATA_DATAGO_API_KEY` 환경 변수가 필요합니다.
 
 ### GET /version
 
@@ -315,7 +344,84 @@ $ curl -s -X POST http://127.0.0.1:8000/validate \
 }
 ```
 
-서비스의 전체 엔드포인트 목록과 요청/응답 스키마는 [`contract/builder-api.yaml`](https://github.com/yeongseon/kpubdata-builder/blob/main/contract/builder-api.yaml)을 참고하세요.
+### POST /build
+
+> **[예시 — 대표 응답]** `POST /build`는 실제 data.go.kr API에 접근하므로
+> 아래 응답은 테스트 픽스처를 바탕으로 재구성한 대표 예시입니다.
+> 실제 실행을 위해서는 `KPUBDATA_DATAGO_API_KEY` 환경 변수에 유효한 API 키가 필요합니다.
+
+BuildSpec YAML 문자열을 JSON body의 `spec` 필드로 전달합니다. 선택적으로 `run_id`를 지정할 수 있습니다.
+
+빌드 성공 (HTTP 200):
+
+```console
+$ curl -s -X POST http://127.0.0.1:8000/build \
+    -H "Content-Type: application/json" \
+    -d '{"spec": "<spec-yaml-string>", "run_id": "run-20240601"}'
+```
+
+```json
+{
+  "status": "ok",
+  "run_id": "run-20240601",
+  "outcomes": [
+    {
+      "source_key": "gangnam_202401",
+      "status": "ok",
+      "stages_completed": ["bronze", "silver", "gold"],
+      "error": null
+    }
+  ],
+  "manifest": "build/run-20240601/manifest.json",
+  "api_version": "1.0.0"
+}
+```
+
+빌드 실패 (HTTP 502 — 업스트림 소스 fetch 실패):
+
+```json
+{
+  "status": "failed",
+  "run_id": "run-20240601",
+  "outcomes": [
+    {
+      "source_key": "gangnam_202401",
+      "status": "failed",
+      "stages_completed": [],
+      "error": "ConfigError: KPUBDATA_DATAGO_API_KEY not set"
+    }
+  ],
+  "manifest": "build/run-20240601/manifest.json",
+  "api_version": "1.0.0"
+}
+```
+
+### GET /artifacts/{run_id}
+
+지정한 실행 워크스페이스의 산출물 파일 목록을 반환합니다.
+
+```console
+$ curl -s http://127.0.0.1:8000/artifacts/run-20240601
+```
+
+```json
+{
+  "run_id": "run-20240601",
+  "files": [
+    "gangnam_202401/apt_trade.jsonl",
+    "manifest.json"
+  ]
+}
+```
+
+실행 ID가 존재하지 않으면 HTTP 404가 반환됩니다.
+
+---
+
+구현된 엔드포인트는 `GET /version`, `POST /validate`, `POST /preview`, `POST /build`,
+`GET /artifacts/{run_id}`이며, 이것이 실제 동작의 기준입니다.
+공식 API 계약(스키마·버전 협상 포함)은 PR #231에서 실제 구현과 동기화된
+[`contract/builder-api.yaml`](https://github.com/yeongseon/kpubdata-builder/blob/main/contract/builder-api.yaml)을 참고하세요.
 
 ---
 
