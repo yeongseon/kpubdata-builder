@@ -11,7 +11,9 @@
 from __future__ import annotations
 
 import json
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import logging
+import traceback
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import cast
 from urllib.parse import urlsplit
 
@@ -22,11 +24,20 @@ from .app import BuilderService, dispatch
 # 제한한다. spec YAML 요청에 충분하면서도 남용을 막는 보수적 상한 (#186).
 _MAX_BODY_BYTES = 10 * 1024 * 1024  # 10 MiB
 
+# 소켓 읽기 타임아웃(초). 느린 클라이언트/slowloris 공격이 스레드를 무한 점거하지 않도록
+# 한다 (#219). ThreadingHTTPServer를 사용하더라도 각 연결 스레드가 여기서 해제된다.
+_SOCKET_TIMEOUT_SECONDS = 30.0
+
+_logger = logging.getLogger(__name__)
+
 
 def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
     """주어진 BuilderService에 바인딩된 요청 핸들러 클래스를 생성한다."""
 
     class _Handler(BaseHTTPRequestHandler):
+        # BaseHTTPRequestHandler.timeout이 설정되면 소켓에 적용된다 (#219).
+        timeout = _SOCKET_TIMEOUT_SECONDS
+
         def _dispatch(self, method: str) -> None:
             try:
                 length = int(self.headers.get("Content-Length", 0) or 0)
@@ -40,7 +51,19 @@ def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
             if length > _MAX_BODY_BYTES:
                 self._write(413, {"error": "request body too large"})
                 return
-            raw = self.rfile.read(length) if length else b""
+            # body 읽기: 타임아웃이나 불완전한 읽기는 dropped connection 대신
+            # JSON 400으로 처리한다 (#219).
+            if length:
+                try:
+                    raw = self.rfile.read(length)
+                except TimeoutError:
+                    self._write(400, {"error": "request body read timed out"})
+                    return
+                if len(raw) < length:
+                    self._write(400, {"error": "incomplete request body"})
+                    return
+            else:
+                raw = b""
             body: dict[str, JsonValue] | None = None
             if raw:
                 try:
@@ -56,7 +79,19 @@ def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
                 body = cast(dict[str, JsonValue], parsed)
             # 쿼리 스트링이 경로/run_id로 새지 않도록 path 컴포넌트만으로 라우팅한다 (#184).
             path = urlsplit(self.path).path
-            response = dispatch(service, method, path, body)
+            # dispatch()에서 예상치 못한 예외가 발생하면 연결을 끊는 대신 JSON 500을
+            # 반환한다. 상세 정보는 서버 로그에만 기록하고 클라이언트에는 누설하지 않는다 (#218).
+            try:
+                response = dispatch(service, method, path, body)
+            except Exception:
+                _logger.error(
+                    "Unhandled exception in dispatch: %s %s\n%s",
+                    method,
+                    path,
+                    traceback.format_exc(),
+                )
+                self._write(500, {"error": "internal server error"})
+                return
             self._write(response.status_code, response.body)
 
         def _write(self, status_code: int, body: dict[str, JsonValue]) -> None:
@@ -83,12 +118,15 @@ def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
 def serve(service: BuilderService, *, host: str = "127.0.0.1", port: int = 8000) -> None:
     """BuilderService를 블로킹 HTTP 서버로 제공한다.
 
+    단일 스레드 HTTPServer 대신 ThreadingHTTPServer를 사용하여 느린 클라이언트가
+    서버 전체를 멈추지 않도록 한다 (#219).
+
     매개변수:
         service: 노출할 BuilderService.
         host: 바인딩 호스트.
         port: 바인딩 포트.
     """
-    server = HTTPServer((host, port), make_handler(service))
+    server = ThreadingHTTPServer((host, port), make_handler(service))
     try:
         server.serve_forever()
     finally:
