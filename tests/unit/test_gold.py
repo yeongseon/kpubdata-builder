@@ -75,6 +75,24 @@ class TestPersistGoldPackage:
         assert targets[0]["kind"] == "jsonl"
         assert meta["source_silver"] == "datago.apt_trade"
 
+    def test_rejects_non_finite_float_in_metadata(self, tmp_path: Path) -> None:
+        # export option에 실린 NaN/Infinity는 비표준 JSON 토큰이 되므로 조용히 기록하지
+        # 않고 ValueError로 실패시킨다 (bronze guard와 동일 계약) (#217).
+        package = build_gold_package(
+            _silver(({"id": "1"},)),
+            dataset_name="apt_trade",
+            exports=(
+                ExportTarget(
+                    kind="jsonl",
+                    output_path="data.jsonl",
+                    options={"threshold": float("nan")},
+                ),
+            ),
+        )
+
+        with pytest.raises(ValueError, match="Out of range float values"):
+            _ = persist_gold_package(package, output_root=tmp_path, run_id="run1")
+
     def test_rejects_unsafe_dataset_name(self, tmp_path: Path) -> None:
         package = build_gold_package(_silver(({"id": "1"},)), dataset_name="../escape")
 

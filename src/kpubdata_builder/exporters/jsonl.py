@@ -53,7 +53,11 @@ class JsonlExporter(BaseExporter):
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
                     for record in artifact.records:
-                        f.write(json.dumps(record, ensure_ascii=False, sort_keys=True))
+                        # allow_nan=False: NaN/Infinity는 비표준 JSON 토큰이 되므로 조용히
+                        # 기록하지 않고 ValueError로 실패시킨다 (#217).
+                        f.write(
+                            json.dumps(record, ensure_ascii=False, sort_keys=True, allow_nan=False)
+                        )
                         f.write("\n")
                 os.replace(tmp_name, destination)
             except BaseException:

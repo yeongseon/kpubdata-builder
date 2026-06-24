@@ -129,6 +129,69 @@ def test_returns_metadata_pointing_to_created_file(tmp_path: Path) -> None:
     assert result.format == "csv"
 
 
+def test_formula_injection_trigger_chars_are_prefixed(tmp_path: Path) -> None:
+    # 수식 트리거 문자(=, +, -, @, 탭)로 시작하는 문자열은 홑따옴표 접두사가
+    # 붙어야 한다 (CWE-1236).  캐리지리턴(\r)은 CSV round-trip이 불안정하므로
+    # 별도 test_formula_injection_cr_prefix 에서 raw 파일 내용으로 검증한다.
+    trigger_values = ["=CMD", "+SUM()", "-1+1", "@SUM", "\tTAB"]
+    artifact = ArtifactDataset(
+        records=tuple({"v": val} for val in trigger_values),
+        schema={"v": "str"},
+    )
+    target = ExportTarget(kind="csv", output_path="out/data.csv")
+
+    result = CsvExporter().export(artifact, target, tmp_path)
+
+    rows = _read_rows(result.output_path)
+    data_rows = rows[1:]  # 헤더 제외
+    for i, val in enumerate(trigger_values):
+        assert data_rows[i][0] == "'" + val, f"트리거 값 {val!r}에 접두사가 없음"
+
+
+def test_formula_injection_cr_prefix(tmp_path: Path) -> None:
+    # 캐리지리턴(\r)으로 시작하는 문자열도 홑따옴표 접두사가 붙어야 한다.
+    # csv.reader round-trip은 \r을 불안정하게 처리하므로 raw 파일 내용으로 검증한다.
+    artifact = ArtifactDataset(records=({"v": "\rCR"},), schema={"v": "str"})
+    target = ExportTarget(kind="csv", output_path="out/data.csv")
+
+    result = CsvExporter().export(artifact, target, tmp_path)
+
+    raw = result.output_path.read_bytes()
+    # 홑따옴표가 \r 앞에 붙으면 파일 내에 b"'\r" 시퀀스가 나타난다.
+    assert b"'\r" in raw, "캐리지리턴 앞에 홑따옴표 접두사가 없음"
+
+
+def test_formula_injection_normal_strings_unchanged(tmp_path: Path) -> None:
+    # 트리거 문자로 시작하지 않는 일반 문자열은 그대로 유지되어야 한다.
+    normal_values = ["hello", "world", "1234", "", "한글", "abc=def"]
+    artifact = ArtifactDataset(
+        records=tuple({"v": val} for val in normal_values),
+        schema={"v": "str"},
+    )
+    target = ExportTarget(kind="csv", output_path="out/data.csv")
+
+    result = CsvExporter().export(artifact, target, tmp_path)
+
+    rows = _read_rows(result.output_path)
+    data_rows = rows[1:]
+    for i, val in enumerate(normal_values):
+        assert data_rows[i][0] == val, f"일반 값 {val!r}이 변경됨"
+
+
+def test_formula_injection_numeric_values_unchanged(tmp_path: Path) -> None:
+    # 숫자(int/float)는 트리거 문자 검사를 거치지 않고 str()로 변환되어야 한다.
+    artifact = ArtifactDataset(
+        records=({"i": -1, "f": -3.14},),
+        schema={"i": "int", "f": "float"},
+    )
+    target = ExportTarget(kind="csv", output_path="out/data.csv")
+
+    result = CsvExporter().export(artifact, target, tmp_path)
+
+    rows = _read_rows(result.output_path)
+    assert rows[1] == ["-1", "-3.14"]
+
+
 def test_registry_exposes_csv_exporter() -> None:
     # CSV exporter가 kind 문자열 "csv"로 레지스트리에 등록되어 있는지 확인한다.
     assert isinstance(EXPORTER_REGISTRY["csv"], CsvExporter)

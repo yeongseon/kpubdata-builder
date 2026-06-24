@@ -12,4 +12,6 @@ jobs:
     with:
       mode: ""
       config: scripts/configs/air_quality.yaml
-    secrets: inherit
+    secrets:
+      KPUBDATA_DATAGO_API_KEY: ${{ secrets.KPUBDATA_DATAGO_API_KEY }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
