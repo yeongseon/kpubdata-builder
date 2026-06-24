@@ -87,6 +87,17 @@ def test_returns_metadata_pointing_to_created_file(tmp_path: Path) -> None:
     assert result.format == "jsonl"
 
 
+def test_non_finite_float_is_rejected(tmp_path: Path) -> None:
+    # NaN/Infinity는 비표준 JSON 토큰(NaN/Infinity)이 되므로 조용히 기록하지 않고
+    # ValueError로 실패시킨다 (bronze guard와 동일 계약) (#217).
+    bad_record = cast(dict[str, JsonValue], {"v": float("nan")})
+    artifact = ArtifactDataset(records=(bad_record,))
+    target = ExportTarget(kind="jsonl", output_path="out/data.jsonl")
+
+    with pytest.raises(ValueError, match="Out of range float values"):
+        JsonlExporter().export(artifact, target, tmp_path)
+
+
 def test_non_serializable_value_surfaces_type_error(tmp_path: Path) -> None:
     # JsonValue 밖의 직렬화 불가 값(예: set)은 json.dumps에서 TypeError로 표면화된다.
     # write 실패의 OSError와 달리 ExportError로 감싸지 않는 경계를 명시적으로 고정한다.

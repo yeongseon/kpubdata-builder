@@ -33,6 +33,17 @@ def test_records_to_dataframe_allows_numeric_mix_and_nulls() -> None:
     assert df.height == 3
 
 
+def test_records_to_dataframe_infers_float_beyond_default_window() -> None:
+    # 기본 추론 윈도우(앞쪽 행)를 넘어 처음 등장하는 float가 Int64로 잘려나가지 않고
+    # 전체 레코드를 스캔해 Float64로 추론되어 2.5가 보존되어야 한다 (#216).
+    records: list[dict[str, JsonValue]] = [{"b": 1}] * 150 + [{"b": 2.5}]
+
+    df = records_to_dataframe(records)
+
+    assert df.schema["b"] == pl.Float64
+    assert df["b"].to_list()[-1] == 2.5
+
+
 def test_records_to_dataframe_rejects_large_int_mixed_with_float() -> None:
     # 2^53을 넘는 정수가 float와 같은 컬럼에 있으면 f64 업캐스트로 반올림되므로 거부 (#198).
     records: list[dict[str, JsonValue]] = [{"v": 9007199254740993}, {"v": 2.5}]

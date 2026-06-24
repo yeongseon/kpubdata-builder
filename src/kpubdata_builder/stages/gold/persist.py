@@ -95,8 +95,16 @@ def persist_gold_package(
     tmp_dir = Path(tempfile.mkdtemp(dir=gold_dir.parent, prefix=".gold_tmp_"))
     try:
         package.table.write_parquet(tmp_dir / "table.parquet")
+        # allow_nan=False: NaN/Infinity는 비표준 JSON 토큰이 되므로 조용히 기록하지 않고
+        # ValueError로 실패시킨다 (#217).
         (tmp_dir / "package.json").write_text(
-            json.dumps(_package_metadata(package), ensure_ascii=False, indent=2, sort_keys=True)
+            json.dumps(
+                _package_metadata(package),
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+                allow_nan=False,
+            )
             + "\n",
             encoding="utf-8",
         )
