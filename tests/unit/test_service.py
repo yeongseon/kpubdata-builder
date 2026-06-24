@@ -459,3 +459,57 @@ class TestHttpRobustness:
             assert "too large" in str(resp_body.get("error", ""))
         finally:
             conn.close()
+
+    def test_body_read_timeout_returns_json_400(self, tmp_path: Path) -> None:
+        # rfile.read()가 TimeoutError를 던지면 연결 끊김이 아닌 JSON 400이어야 한다 (#219).
+        import io
+
+        handler_cls = make_handler(_service(tmp_path))
+
+        captured: list[tuple[int, dict[str, object]]] = []
+
+        class _PatchedHandler(handler_cls):  # type: ignore[valid-type]
+            def _write(self, status_code: int, body: dict[str, object]) -> None:  # type: ignore[override]
+                captured.append((status_code, body))
+
+        slow_rfile = io.BytesIO(b"")
+
+        def _timeout_read(n: int) -> bytes:
+            raise TimeoutError("timed out")
+
+        slow_rfile.read = _timeout_read  # type: ignore[method-assign]
+
+        h = object.__new__(_PatchedHandler)
+        h.rfile = slow_rfile
+        h.headers = {"Content-Length": "10"}  # type: ignore[assignment]
+        h._dispatch("POST")
+
+        assert len(captured) == 1
+        status, body = captured[0]
+        assert status == 400
+        assert "timed out" in str(body.get("error", ""))
+
+    def test_truncated_body_returns_json_400(self, tmp_path: Path) -> None:
+        # Content-Length보다 짧은 body(EOF)는 연결 끊김이 아닌 JSON 400이어야 한다 (#219).
+        import io
+
+        handler_cls = make_handler(_service(tmp_path))
+
+        captured: list[tuple[int, dict[str, object]]] = []
+
+        class _PatchedHandler(handler_cls):  # type: ignore[valid-type]
+            def _write(self, status_code: int, body: dict[str, object]) -> None:  # type: ignore[override]
+                captured.append((status_code, body))
+
+        # Content-Length는 10이지만 실제로는 5바이트만 전달.
+        truncated_rfile = io.BytesIO(b"hello")
+
+        h = object.__new__(_PatchedHandler)
+        h.rfile = truncated_rfile
+        h.headers = {"Content-Length": "10"}  # type: ignore[assignment]
+        h._dispatch("POST")
+
+        assert len(captured) == 1
+        status, body = captured[0]
+        assert status == 400
+        assert "incomplete" in str(body.get("error", ""))

@@ -51,7 +51,19 @@ def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
             if length > _MAX_BODY_BYTES:
                 self._write(413, {"error": "request body too large"})
                 return
-            raw = self.rfile.read(length) if length else b""
+            # body 읽기: 타임아웃이나 불완전한 읽기는 dropped connection 대신
+            # JSON 400으로 처리한다 (#219).
+            if length:
+                try:
+                    raw = self.rfile.read(length)
+                except TimeoutError:
+                    self._write(400, {"error": "request body read timed out"})
+                    return
+                if len(raw) < length:
+                    self._write(400, {"error": "incomplete request body"})
+                    return
+            else:
+                raw = b""
             body: dict[str, JsonValue] | None = None
             if raw:
                 try:
