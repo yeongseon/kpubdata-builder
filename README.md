@@ -104,35 +104,37 @@ kpubdata-builder preview specs/weather.yaml --limit 5
 kpubdata-builder build specs/weather.yaml --output-dir ./dist/weather
 ```
 
-### 향후 API 예시(placeholder)
-
-서비스 모드가 정식 도입되면 아래와 같은 형태의 API 사용 예시가 추가될 예정입니다.
+### Python API 예시
 
 ```python
-# Future API example placeholder
-# from kpubdata_builder.service import BuilderService
-# result = BuilderService().build_from_file("specs/weather.yaml")
+from pathlib import Path
+from kpubdata_builder.service import BuilderService
+
+service = BuilderService(
+    output_root=Path("./dist"),
+    client_factory=lambda: my_kpubdata_client,
+)
+result = service.build(open("specs/weather.yaml").read())
 ```
 
 ### 최소 BuildSpec 예시
 
 ```yaml
-version: "1"
-dataset: weather-village-forecast
+dataset_id: weather-village-forecast
+title: "동네예보 데이터셋"
+description: "기상청 동네예보 서비스에서 수집한 기상 예보 데이터"
 
-source:
-  provider: datago
-  dataset: village_fcst
-  params:
-    base_date: "20250401"
-    nx: 55
-    ny: 127
+sources:
+  - provider: datago
+    dataset: village_fcst
+    params:
+      base_date: "20250401"
+      nx: 55
+      ny: 127
 
-export:
-  format: markdown
-
-output:
-  dir: ./dist/weather
+exports:
+  - kind: markdown
+    output_path: artifacts/weather_report.md
 ```
 
 BuildSpec 계약은 [BUILD_SPEC.md](./BUILD_SPEC.md)를 참고하세요. Bronze/Silver/Gold stage는 현재 사용자 입력 필드가 아니라 Builder orchestrator가 내부적으로 관리하는 실행 단계입니다.
