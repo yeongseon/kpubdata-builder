@@ -35,18 +35,32 @@ def _resolve_columns(artifact: ArtifactDataset) -> list[str]:
     return list(columns.keys())
 
 
+_FORMULA_TRIGGER_CHARS = frozenset("=+-@\t\r")
+"""스프레드시트가 수식으로 해석하는 선두 문자 집합 (CWE-1236)."""
+
+
 def _format_cell(value: JsonValue) -> str:
     """단일 셀 값을 CSV 문자열로 변환한다.
 
     None은 빈 문자열, bool은 소문자 JSON 표기, 중첩 list/dict는 결정적 JSON
     문자열로 직렬화한다. 그 외 스칼라는 str()로 변환한다.
+
+    문자열이 스프레드시트 수식 트리거 문자(``=``, ``+``, ``-``, ``@``,
+    탭, 캐리지 리턴)로 시작하면 앞에 홑따옴표 ``'``를 붙여 수식 실행을
+    막는다(CSV 인젝션 대응, CWE-1236).  숫자·bool·None 등 비문자열 값은
+    변경하지 않는다.
     """
     if value is None:
         return ""
     if isinstance(value, bool):
         return "true" if value else "false"
-    if isinstance(value, (str, int, float)):
+    if isinstance(value, (int, float)):
         return str(value)
+    if isinstance(value, str):
+        text = value
+        if text and text[0] in _FORMULA_TRIGGER_CHARS:
+            text = "'" + text
+        return text
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
 

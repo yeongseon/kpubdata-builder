@@ -73,6 +73,21 @@ def test_license_override_from_metadata(tmp_path: Path) -> None:
     assert metadata["licenses"] == [{"name": "CC0-1.0"}]
 
 
+def test_formula_injection_trigger_chars_prefixed_in_kaggle(tmp_path: Path) -> None:
+    # KaggleExporter도 _format_cell을 공유하므로 수식 트리거 값에 접두사가 붙어야 한다.
+    artifact = ArtifactDataset(
+        records=({"cmd": '=HYPERLINK("evil.com")'},),
+        schema={"cmd": "str"},
+        metadata={"title": "T", "dataset_id": "kpub/t"},
+    )
+    target = ExportTarget(kind="kaggle", output_path="out/data.csv")
+
+    result = KaggleExporter().export(artifact, target, tmp_path)
+
+    rows = _read_rows(result.output_path)
+    assert rows[1][0] == '\'=HYPERLINK("evil.com")'
+
+
 def test_registry_exposes_kaggle_exporter() -> None:
     # Kaggle exporter가 kind 문자열 "kaggle"로 레지스트리에 등록되어 있는지 확인한다.
     assert isinstance(EXPORTER_REGISTRY["kaggle"], KaggleExporter)
