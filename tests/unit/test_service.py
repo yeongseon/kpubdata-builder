@@ -367,3 +367,95 @@ class TestHttpAdapter:
             assert response.status == 200
             body = cast(dict[str, object], json.loads(response.read()))
         assert body["status"] == "valid"
+
+
+class TestHttpRobustness:
+    """#218 (JSON 500 handler) 과 #219 (DoS hardening) 검증."""
+
+    def test_dispatch_exception_returns_json_500(
+        self, tmp_path: Path, http_server: tuple[str, HTTPServer, threading.Thread]
+    ) -> None:
+        # dispatch()에서 예외가 발생해도 연결이 끊기지 않고 JSON 500이 반환돼야 한다 (#218).
+        # 패치로 dispatch를 교체해 인위적으로 예외를 발생시킨다.
+        import unittest.mock
+
+        base_url, _, _ = http_server
+
+        with unittest.mock.patch(
+            "kpubdata_builder.service.http.dispatch",
+            side_effect=RuntimeError("boom"),
+        ):
+            req = urllib.request.Request(
+                f"{base_url}/validate",
+                data=json.dumps({"spec": VALID_SPEC_YAML}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with pytest.raises(urllib.error.HTTPError) as exc_info:
+                urllib.request.urlopen(req, timeout=2.0)
+        assert exc_info.value.code == 500
+        body = cast(dict[str, object], json.loads(exc_info.value.read()))
+        assert body.get("error") == "internal server error"
+        # 내부 예외 메시지("boom")가 클라이언트에 누설되지 않아야 한다.
+        assert "boom" not in json.dumps(body)
+
+    def test_make_handler_has_socket_timeout(self, tmp_path: Path) -> None:
+        # 핸들러 클래스에 timeout이 설정돼 있어야 느린 클라이언트가 스레드를 무한 점거하지
+        # 않는다 (#219). BaseHTTPRequestHandler.timeout 이 None이면 무제한이다.
+        from kpubdata_builder.service.http import _SOCKET_TIMEOUT_SECONDS, make_handler
+
+        handler_cls = make_handler(_service(tmp_path))
+        assert handler_cls.timeout is not None
+        assert handler_cls.timeout == _SOCKET_TIMEOUT_SECONDS
+        assert handler_cls.timeout > 0
+
+    def test_serve_uses_threading_http_server(self, tmp_path: Path) -> None:
+        # serve()가 ThreadingHTTPServer를 사용해야 느린 클라이언트가 서버 전체를
+        # 멈추지 않는다 (#219).
+        import contextlib
+        import unittest.mock
+        from http.server import ThreadingHTTPServer
+
+        from kpubdata_builder.service.http import serve
+
+        created_servers: list[object] = []
+        original_init = ThreadingHTTPServer.__init__
+
+        def capturing_init(self: object, *args: object, **kwargs: object) -> None:
+            created_servers.append(self)
+            original_init(self, *args, **kwargs)  # type: ignore[misc]
+
+        with (
+            unittest.mock.patch.object(ThreadingHTTPServer, "__init__", capturing_init),
+            unittest.mock.patch.object(
+                ThreadingHTTPServer, "serve_forever", side_effect=KeyboardInterrupt
+            ),
+            unittest.mock.patch.object(ThreadingHTTPServer, "server_close"),
+            contextlib.suppress(KeyboardInterrupt),
+        ):
+            serve(_service(tmp_path), host="127.0.0.1", port=0)
+
+        assert len(created_servers) == 1
+        assert isinstance(created_servers[0], ThreadingHTTPServer)
+
+    def test_oversized_body_content_length_returns_413_http(
+        self, http_server: tuple[str, HTTPServer, threading.Thread]
+    ) -> None:
+        # Content-Length가 _MAX_BODY_BYTES를 넘으면 body를 읽지 않고 413으로 거부 (#219).
+        import http.client
+
+        base_url, _, _ = http_server
+        host_port = base_url.removeprefix("http://")
+        host, port = host_port.split(":")
+        conn = http.client.HTTPConnection(host, int(port), timeout=2.0)
+        try:
+            conn.putrequest("POST", "/validate")
+            conn.putheader("Content-Type", "application/json")
+            conn.putheader("Content-Length", str(20 * 1024 * 1024))  # 20 MiB > 10 MiB 상한
+            conn.endheaders()  # body는 보내지 않는다 — 핸들러가 헤더만 보고 거부.
+            response = conn.getresponse()
+            assert response.status == 413
+            resp_body = cast(dict[str, object], json.loads(response.read()))
+            assert "too large" in str(resp_body.get("error", ""))
+        finally:
+            conn.close()
