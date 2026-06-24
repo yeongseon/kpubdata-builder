@@ -8,9 +8,12 @@ exporter를 제공한다. 컬럼은 artifact.schema가 있으면 그 순서를, 
 
 from __future__ import annotations
 
+import contextlib
 import csv
 import io
 import json
+import os
+import tempfile
 from pathlib import Path
 
 from ..artifact import ArtifactDataset
@@ -91,7 +94,15 @@ class CsvExporter(BaseExporter):
         content = buffer.getvalue()
 
         try:
-            _ = destination.write_text(content, encoding="utf-8")
+            fd, tmp_name = tempfile.mkstemp(dir=destination.parent, suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(content)
+                os.replace(tmp_name, destination)
+            except BaseException:
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp_name)
+                raise
         except OSError as exc:
             raise ExportError(f"Failed to export CSV artifact to {destination}: {exc}") from exc
 

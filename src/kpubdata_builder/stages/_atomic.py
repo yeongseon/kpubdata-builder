@@ -43,8 +43,10 @@ def atomic_replace_dir(tmp_dir: Path, final_dir: Path) -> None:
         tmp_dir.rename(final_dir)  # 원자적: 신규 데이터를 제자리로
     except BaseException:
         # 신규 배치 실패 → 기존 데이터를 원위치로 복구한다.
-        if not final_dir.exists():
-            backup.rename(final_dir)
+        # partial final_dir이 남아 있으면 제거한 뒤 백업을 원위치로 되돌린다.
+        if final_dir.exists():
+            shutil.rmtree(final_dir, ignore_errors=True)
+        backup.rename(final_dir)
         raise
     shutil.rmtree(backup, ignore_errors=True)
 

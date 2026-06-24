@@ -10,6 +10,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -141,11 +142,10 @@ def test_wraps_io_failure_in_export_error(tmp_path: Path, monkeypatch: pytest.Mo
     artifact = ArtifactDataset(records=({"id": "1"},), schema={"id": "str"})
     target = ExportTarget(kind="kaggle", output_path="out/data.csv")
 
-    def raise_io_error(self: Path, data: str, *, encoding: str) -> int:
-        del self, data, encoding
+    def raise_on_replace(src: str, dst: str) -> None:
         raise OSError("permission denied")
 
-    monkeypatch.setattr(Path, "write_text", raise_io_error)
+    monkeypatch.setattr(os, "replace", raise_on_replace)
 
     with pytest.raises(ExportError):
         KaggleExporter().export(artifact, target, tmp_path)

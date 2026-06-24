@@ -136,14 +136,15 @@ def test_registry_exposes_csv_exporter() -> None:
 
 def test_wraps_io_failure_in_export_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # 파일 쓰기 실패가 ExportError로 래핑되는지 확인한다.
+    import os
+
     artifact = ArtifactDataset(records=({"id": "1"},), schema={"id": "str"})
     target = ExportTarget(kind="csv", output_path="out/data.csv")
 
-    def raise_io_error(self: Path, data: str, *, encoding: str) -> int:
-        del self, data, encoding
+    def raise_on_replace(src: str, dst: object) -> None:
         raise OSError("permission denied")
 
-    monkeypatch.setattr(Path, "write_text", raise_io_error)
+    monkeypatch.setattr(os, "replace", raise_on_replace)
 
     with pytest.raises(ExportError):
         CsvExporter().export(artifact, target, tmp_path)

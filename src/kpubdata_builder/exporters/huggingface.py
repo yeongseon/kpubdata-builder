@@ -20,7 +20,6 @@ import shutil
 import tempfile
 from pathlib import Path
 
-import polars as pl
 import yaml
 
 from ..artifact import ArtifactDataset
@@ -145,7 +144,10 @@ class HuggingFaceExporter(BaseExporter):
             )
             total_size = sum(path.stat().st_size for path in (data_path, readme_path, infos_path))
             atomic_replace_dir(tmp_dir, hf_dir)
-        except (OSError, pl.exceptions.PolarsError) as exc:
+        except ExportError:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            raise
+        except BaseException as exc:
             shutil.rmtree(tmp_dir, ignore_errors=True)
             raise ExportError(f"Failed to export Hugging Face layout to {hf_dir}: {exc}") from exc
 
