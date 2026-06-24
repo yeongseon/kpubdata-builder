@@ -93,7 +93,7 @@ BuildSpec을 실행 전에 검증합니다. body의 `spec` 키에 YAML 문자열
 ```json
 {
   "status": "error",
-  "error": "Failed to load build spec: dataset_id is required"
+  "error": "Failed to parse build spec: dataset_id is required"
 }
 ```
 
@@ -103,8 +103,8 @@ BuildSpec을 실행 전에 검증합니다. body의 `spec` 키에 YAML 문자열
 {
   "status": "invalid",
   "problems": [
-    "sources must not be empty",
-    "exports must not be empty"
+    "at least one source is required",
+    "at least one export target is required"
   ]
 }
 ```
@@ -129,7 +129,7 @@ BuildSpec을 실행 전에 검증합니다. body의 `spec` 키에 YAML 문자열
   "dataset_id": "weather-village-forecast",
   "previews": [
     {
-      "source_key": "datago/village_fcst",
+      "source_key": "datago.village_fcst",
       "status": "ok",
       "error": null,
       "schema": [
@@ -163,7 +163,7 @@ BuildSpec을 실행 전에 검증합니다. body의 `spec` 키에 YAML 문자열
   "run_id": "my-run-001",
   "outcomes": [
     {
-      "source_key": "datago/village_fcst",
+      "source_key": "datago.village_fcst",
       "status": "ok",
       "stages_completed": ["bronze", "silver", "gold"],
       "error": null
@@ -182,10 +182,10 @@ BuildSpec을 실행 전에 검증합니다. body의 `spec` 키에 YAML 문자열
   "run_id": "my-run-001",
   "outcomes": [
     {
-      "source_key": "datago/village_fcst",
+      "source_key": "datago.village_fcst",
       "status": "failed",
       "stages_completed": ["bronze"],
-      "error": "ExecutionError: fetch failed: ..."
+      "error": "fetch failed: ..."
     }
   ],
   "manifest": "/path/to/dist/my-run-001/manifest.json",

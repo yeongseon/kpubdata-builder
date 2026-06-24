@@ -176,7 +176,16 @@ from my_package.exporters.xml import XmlExporter
 register_exporter(XmlExporter())
 ```
 
-또는 `pyproject.toml`의 entry point를 이용해 플러그인으로 등록할 수 있습니다.
+또는 `pyproject.toml`의 entry point 그룹 `kpubdata_builder.exporters`에 선언하여 플러그인으로 등록할 수도 있습니다.
+단, entry point 선언만으로는 자동 로드되지 않습니다. 보안과 결정론적 실행을 위해 런타임에
+`load_entry_point_exporters()`를 명시적으로 호출해야 레지스트리에 등록됩니다.
+
+```python
+from kpubdata_builder.exporters import load_entry_point_exporters
+
+# 애플리케이션 시작 시 한 번 호출하여 플러그인 exporter를 레지스트리에 등록
+load_entry_point_exporters()
+```
 
 ## 5. Publisher vs Exporter (출판사 vs 배달부)
 

@@ -13,7 +13,7 @@ classDiagram
         +Tuple~str~ transforms
         +Dict~str_str~ metadata
         +bool publish
-        +SplitSpec splits
+        +SplitSpec splits 0..1
     }
     class SourceRef {
         +String provider

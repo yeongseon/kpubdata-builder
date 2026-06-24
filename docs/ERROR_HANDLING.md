@@ -76,39 +76,42 @@ class DatasetValidationError(BuildError):
 
 | 실패 원인 | 변환 |
 |:---|:---|
-| `dataset_id` 비어 있음 | `ValidationError` (problems에 추가) |
-| sources 없음 | `ValidationError` (problems에 추가) |
-| exports 없음 | `ValidationError` (problems에 추가) |
-| source.provider/dataset 비어 있음 | `ValidationError` (problems에 추가) |
-| source.alias 중복 | `ValidationError` (problems에 추가) |
-| export.output_path 중복 | `ValidationError` (problems에 추가) |
+| `dataset_id` 비어 있음 | `ValidationError` (problems에 추가): `"dataset_id must be a non-empty string"` |
+| sources 없음 | `ValidationError` (problems에 추가): `"at least one source is required"` |
+| exports 없음 | `ValidationError` (problems에 추가): `"at least one export target is required"` |
+| source.provider 또는 source.dataset 비어 있음 | `ValidationError` (problems에 추가): `"sources[i].provider must be a non-empty string"` 등 |
+| source.alias가 공백 문자열로만 구성됨 | `ValidationError` (problems에 추가): `"sources[i].alias must not be blank when provided"` |
+| export.kind가 레지스트리에 없는 값 | `ValidationError` (problems에 추가): `"exports[i].kind ... is not supported; supported kinds: [...]"` |
 
 **핵심**: 첫 번째 오류에서 즉시 중단하지 않고, 모든 문제를 모아 한 번에 보고
 
 ### 4.3 Source 실행 (`stages/bronze/`)
 
+> **Medallion 파이프라인**: `pipeline/orchestrator._run_source_pipeline()`은 단계 예외를
+> `ExecutionError`로 감싸지 않습니다. `except Exception as exc:` 블록에서 `str(exc)`를
+> `SourceBuildOutcome.error`에 그대로 기록합니다.
+
+아래 변환 표는 `executor.py`(레거시) 흐름을 참고용으로 나타낸 것이며,
+Medallion 파이프라인에서는 단계 예외가 모두 `str(exc)`로 직렬화되어 `outcomes[].error`에 저장됩니다.
+
 ```
 kpubdata.PublicDataError
-  ├── TransportTimeoutError       → ExecutionError (cause.retryable 계승)
-  ├── AuthError                   → ExecutionError + 같은 provider 후속 source 중단
-  ├── RateLimitError              → ExecutionError (cause.retryable 계승 — 항상 retryable은 아님)
-  ├── ServiceUnavailableError     → ExecutionError (cause.retryable 계승)
-  ├── ParseError                  → ExecutionError
-  ├── ProviderResponseError       → ExecutionError
-  ├── DatasetNotFoundError        → ExecutionError
-  ├── ConfigError                 → ExecutionError (API 키 미설정 등)
-  ├── InvalidRequestError         → ExecutionError (잘못된 쿼리 파라미터)
-  ├── UnsupportedCapabilityError  → ExecutionError (미지원 operation)
-  └── ProviderNotRegisteredError  → ExecutionError (미등록 provider)
+  ├── TransportTimeoutError       → str(exc)가 outcomes[].error에 기록
+  ├── AuthError                   → str(exc)가 outcomes[].error에 기록
+  ├── RateLimitError              → str(exc)가 outcomes[].error에 기록
+  ├── ServiceUnavailableError     → str(exc)가 outcomes[].error에 기록
+  ├── ParseError                  → str(exc)가 outcomes[].error에 기록
+  ├── ProviderResponseError       → str(exc)가 outcomes[].error에 기록
+  ├── DatasetNotFoundError        → str(exc)가 outcomes[].error에 기록
+  ├── ConfigError                 → str(exc)가 outcomes[].error에 기록 (API 키 미설정 등)
+  ├── InvalidRequestError         → str(exc)가 outcomes[].error에 기록 (잘못된 쿼리 파라미터)
+  ├── UnsupportedCapabilityError  → str(exc)가 outcomes[].error에 기록 (미지원 operation)
+  └── ProviderNotRegisteredError  → str(exc)가 outcomes[].error에 기록 (미등록 provider)
 ```
-
-> **`retryable` 플래그 계승**: Builder는 `cause.retryable` 값을 그대로 계승합니다.
-> `RateLimitError`라도 quota 소진(retryable=False)일 수 있으므로, 예외 타입만으로 retryable 여부를 판단하지 않습니다.
 
 **정책**:
 - 기본: source 하나라도 실패하면 build 실패
-- executor는 여러 source 결과를 계속 수집 (에러 집계용)
-- assembler/export/publish는 errors가 비어 있을 때만 실행
+- 오케스트레이터는 여러 source 결과를 계속 수집 (에러 집계용)
 - 향후: `allow_partial=True` 옵션으로 부분 빌드 허용
 
 ### 4.4 데이터 조립 (`stages/`)
