@@ -3,28 +3,30 @@ info:
   title: KPubData Builder Service API
   version: "1.0.0"
   description: >-
-    Builder 중심 서비스 계약. BuildSpec 검증, preview, build 실행, manifest/artifact
-    조회, publish 실행을 제공한다. CLI와 HTTP service mode가 동일한 도메인 계약을
-    공유한다. 본 문서는 API_CONTRACT.md의 기계 판독용(OpenAPI 3.1) 단일 소스이며,
-    Studio 같은 소비자가 타입 클라이언트를 생성하는 기준이 된다.
+    Builder 중심 서비스 계약. BuildSpec 검증, preview, build 실행, artifact 조회,
+    계약 버전 조회를 제공한다. CLI와 HTTP service mode(#36)가 동일한 도메인 계약을
+    공유한다. 본 문서는 BuilderService(service/app.py)의 dispatch 라우팅과 실제
+    wire 형태를 기계 판독용(OpenAPI 3.1) 단일 소스로 고정하며, Studio 같은 소비자가
+    타입 클라이언트를 생성하는 기준이 된다. 구현되지 않은 비동기/publish 엔드포인트는
+    드리프트를 막기 위해 계약에서 제거했다(#226).
 servers:
   - url: http://localhost:8000
     description: 로컬 builder 개발 서버
 
 paths:
-  /datasets:
+  /version:
     get:
-      operationId: listDatasets
-      summary: 사용 가능한 dataset/source 메타데이터 조회 (동기식)
+      operationId: getVersion
+      summary: Builder API 계약 버전 조회
       responses:
         "200":
-          description: dataset 카탈로그
+          description: 서비스/계약 버전
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/DatasetCatalog"
+                $ref: "#/components/schemas/VersionResponse"
 
-  /spec/validate:
+  /validate:
     post:
       operationId: validateSpec
       summary: BuildSpec 검증 (동기식)
@@ -36,18 +38,22 @@ paths:
               $ref: "#/components/schemas/SpecRequest"
       responses:
         "200":
-          description: 검증 결과
+          description: 검증 통과
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ValidateResponse"
-        "422":
-          $ref: "#/components/responses/ErrorResponse"
+        "400":
+          description: spec 파싱 실패 또는 검증 실패
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationError"
 
   /preview:
     post:
       operationId: previewBuild
-      summary: 샘플 실행 및 export preview (동기식)
+      summary: 각 소스의 스키마와 샘플 행 산출 (파일 미기록, 동기식)
       requestBody:
         required: true
         content:
@@ -61,114 +67,80 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/PreviewResponse"
-        "422":
-          $ref: "#/components/responses/ErrorResponse"
+        "400":
+          description: 잘못된 요청(spec 누락/검증 실패, limit 타입 오류 등)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
-  /builds:
+  /build:
     post:
       operationId: createBuild
-      summary: 새로운 build 실행 시작 (비동기식)
+      summary: 파이프라인 실행 및 결과 반환 (동기식)
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/SpecRequest"
-      responses:
-        "202":
-          description: build 수락됨
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/BuildAccepted"
-        "422":
-          $ref: "#/components/responses/ErrorResponse"
-
-  /builds/{id}:
-    get:
-      operationId: getBuild
-      summary: build 상태 조회 (비동기식)
-      parameters:
-        - $ref: "#/components/parameters/BuildId"
+              $ref: "#/components/schemas/BuildRequest"
       responses:
         "200":
-          description: build 상태
+          description: 모든 소스 성공
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/BuildStatus"
-        "404":
-          $ref: "#/components/responses/ErrorResponse"
-
-  /builds/{id}/manifest:
-    get:
-      operationId: getBuildManifest
-      summary: build manifest 조회 (manifested 이상 상태)
-      parameters:
-        - $ref: "#/components/parameters/BuildId"
-      responses:
-        "200":
-          description: manifest 본문
+                $ref: "#/components/schemas/BuildSuccessResponse"
+        "400":
+          description: 잘못된 요청(spec 누락/검증 실패, run_id 타입/경로 안전성 오류 등)
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ManifestResponse"
-        "404":
-          $ref: "#/components/responses/ErrorResponse"
+                $ref: "#/components/schemas/Error"
+        "502":
+          description: >-
+            하나 이상의 소스 fetch/stage 실패. upstream 소스 의존 실패이며 매니페스트는
+            partial 정책으로 남는다.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BuildFailureResponse"
 
-  /builds/{id}/artifacts:
+  /artifacts/{run_id}:
     get:
       operationId: listBuildArtifacts
-      summary: build artifact 목록 조회 (exported 이상 상태)
+      summary: 실행 워크스페이스의 산출물 파일 목록 조회
       parameters:
-        - $ref: "#/components/parameters/BuildId"
+        - $ref: "#/components/parameters/RunId"
       responses:
         "200":
-          description: artifact 목록
+          description: artifact 파일 목록
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ArtifactsResponse"
-        "404":
-          $ref: "#/components/responses/ErrorResponse"
-
-  /publish:
-    post:
-      operationId: publishArtifacts
-      summary: 이미 생성된 build artifact 게시 (비동기식)
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/PublishRequest"
-      responses:
-        "202":
-          description: publish 수락됨
+        "400":
+          description: 경로 안전하지 않은 run_id
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/PublishAccepted"
-        "422":
-          $ref: "#/components/responses/ErrorResponse"
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: 해당 run을 찾을 수 없음
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
 components:
   parameters:
-    BuildId:
-      name: id
+    RunId:
+      name: run_id
       in: path
       required: true
-      description: build 실행 식별자
+      description: build 실행 식별자(경로 안전한 단일 세그먼트)
       schema:
         type: string
-
-  responses:
-    ErrorResponse:
-      description: 표준 오류 응답
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/Error"
 
   schemas:
     Error:
@@ -176,191 +148,245 @@ components:
       required: [error]
       properties:
         error:
-          type: object
-          required: [code, message]
-          properties:
-            code:
-              type: string
-              description: 안정적인 기계 판독용 오류 코드
-            message:
-              type: string
-              description: 사람이 읽는 요약 메시지
-            details:
-              type: array
-              items:
-                type: object
-                properties:
-                  field:
-                    type: string
-                  reason:
-                    type: string
+          type: string
+          description: 사람이 읽는 오류 요약 메시지
 
-    BuildState:
-      type: string
-      enum: [draft, validated, running, exported, manifested, published, failed]
+    ValidationError:
+      type: object
+      description: >-
+        validate/build/preview의 spec 검증 실패 응답. SpecLoadError는
+        {status:"error", error}, ValidationError는 {status:"invalid", problems}로
+        나뉜다.
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [error, invalid]
+        error:
+          type: string
+          description: status=error일 때의 파싱 오류 메시지
+        problems:
+          type: array
+          description: status=invalid일 때의 검증 문제 목록
+          items:
+            type: string
 
     BuildSpec:
       type: object
-      description: 선언적 빌드 명세. 세부 스키마는 spec 모델을 따른다.
+      description: >-
+        선언적 빌드 명세(snake_case). dataset_id/title/description/sources/exports는
+        필수, metadata/transforms/publish/splits는 선택. 세부 스키마는 spec 모델
+        (spec/models.py)을 따른다.
       additionalProperties: true
+      required: [dataset_id, title, description, sources, exports]
+      properties:
+        dataset_id:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        sources:
+          type: array
+          items:
+            $ref: "#/components/schemas/SourceRef"
+        exports:
+          type: array
+          items:
+            $ref: "#/components/schemas/ExportTarget"
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+
+    SourceRef:
+      type: object
+      required: [provider, dataset]
+      properties:
+        provider:
+          type: string
+        dataset:
+          type: string
+        params:
+          type: object
+          additionalProperties: true
+        alias:
+          type: string
+        normalization_mode:
+          type: string
+
+    ExportTarget:
+      type: object
+      required: [kind, output_path]
+      properties:
+        kind:
+          type: string
+        output_path:
+          type: string
+        options:
+          type: object
+          additionalProperties: true
 
     SpecRequest:
       type: object
       required: [spec]
       properties:
         spec:
-          $ref: "#/components/schemas/BuildSpec"
+          type: string
+          description: BuildSpec을 YAML로 직렬화한 문자열
 
     PreviewRequest:
       type: object
       required: [spec]
       properties:
         spec:
-          $ref: "#/components/schemas/BuildSpec"
+          type: string
+          description: BuildSpec을 YAML로 직렬화한 문자열
         limit:
           type: integer
           minimum: 1
           default: 5
 
-    DatasetCatalog:
+    BuildRequest:
       type: object
-      required: [datasets]
+      required: [spec]
       properties:
-        datasets:
-          type: array
-          items:
-            type: object
-            required: [provider, dataset]
-            properties:
-              provider:
-                type: string
-              dataset:
-                type: string
-              supports_preview:
-                type: boolean
-              supported_exports:
-                type: array
-                items:
-                  type: string
+        spec:
+          type: string
+          description: BuildSpec을 YAML로 직렬화한 문자열
+        run_id:
+          type: string
+          description: 명시 시 비어있지 않은 경로 안전한 단일 세그먼트여야 한다
+
+    VersionResponse:
+      type: object
+      required: [service, api_version]
+      properties:
+        service:
+          type: string
+        api_version:
+          type: string
 
     ValidateResponse:
       type: object
-      required: [valid]
+      required: [status, dataset_id, api_version]
       properties:
-        valid:
-          type: boolean
-        issues:
-          type: array
-          items:
-            type: string
+        status:
+          type: string
+          enum: [valid]
+        dataset_id:
+          type: string
+        api_version:
+          type: string
 
     PreviewResponse:
       type: object
-      required: [records, schema]
+      required: [dataset_id, previews]
       properties:
-        stage:
+        dataset_id:
           type: string
-        records:
+        previews:
+          type: array
+          items:
+            $ref: "#/components/schemas/SourcePreview"
+
+    SourcePreview:
+      type: object
+      required: [source_key, status, schema, sample, total_rows]
+      properties:
+        source_key:
+          type: string
+        status:
+          type: string
+        error:
+          type: [string, "null"]
+        schema:
+          type: array
+          items:
+            type: object
+            required: [name, dtype, nullable, unique_count]
+            properties:
+              name:
+                type: string
+              dtype:
+                type: string
+              nullable:
+                type: boolean
+              unique_count:
+                type: integer
+        sample:
           type: array
           items:
             type: object
             additionalProperties: true
-        schema:
-          type: object
-          additionalProperties:
-            type: string
-        export_preview:
-          type: object
-          properties:
-            format:
-              type: string
-            artifact_path:
-              type: string
-
-    BuildAccepted:
-      type: object
-      required: [build_id, state]
-      properties:
-        build_id:
-          type: string
-        state:
-          $ref: "#/components/schemas/BuildState"
-        status_url:
-          type: string
-
-    BuildStatus:
-      type: object
-      required: [build_id, state]
-      properties:
-        build_id:
-          type: string
-        dataset:
-          type: string
-        state:
-          $ref: "#/components/schemas/BuildState"
-        started_at:
-          type: string
-          format: date-time
-        updated_at:
-          type: string
-          format: date-time
-
-    Artifact:
-      type: object
-      required: [path, format]
-      properties:
-        path:
-          type: string
-        format:
-          type: string
-        size_bytes:
+        total_rows:
           type: integer
 
-    ManifestResponse:
+    BuildOutcome:
       type: object
-      required: [build_id, manifest]
+      required: [source_key, status, stages_completed, error]
       properties:
-        build_id:
+        source_key:
           type: string
-        state:
-          $ref: "#/components/schemas/BuildState"
+        status:
+          type: string
+          enum: [ok, failed]
+        stages_completed:
+          type: array
+          items:
+            type: string
+        error:
+          type: [string, "null"]
+
+    BuildSuccessResponse:
+      type: object
+      required: [status, run_id, outcomes, manifest, api_version]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        run_id:
+          type: string
+        outcomes:
+          type: array
+          items:
+            $ref: "#/components/schemas/BuildOutcome"
         manifest:
-          type: object
-          additionalProperties: true
+          type: string
+          description: 기록된 manifest.json의 경로
+        api_version:
+          type: string
+
+    BuildFailureResponse:
+      type: object
+      required: [status, run_id, outcomes, manifest, api_version, error]
+      properties:
+        status:
+          type: string
+          enum: [failed]
+        run_id:
+          type: string
+        outcomes:
+          type: array
+          items:
+            $ref: "#/components/schemas/BuildOutcome"
+        manifest:
+          type: string
+          description: partial 정책으로 남은 manifest.json의 경로
+        api_version:
+          type: string
+        error:
+          type: string
+          description: 첫 번째 실패 outcome의 error에서 파생된 human-readable 요약 (#226)
 
     ArtifactsResponse:
       type: object
-      required: [build_id, artifacts]
+      required: [run_id, files]
       properties:
-        build_id:
+        run_id:
           type: string
-        artifacts:
+        files:
           type: array
           items:
-            $ref: "#/components/schemas/Artifact"
-
-    PublishRequest:
-      type: object
-      required: [build_id, target]
-      properties:
-        build_id:
-          type: string
-        target:
-          type: object
-          required: [kind]
-          properties:
-            kind:
-              type: string
-            repository:
-              type: string
-
-    PublishAccepted:
-      type: object
-      required: [publish_id, build_id, state]
-      properties:
-        publish_id:
-          type: string
-        build_id:
-          type: string
-        state:
-          type: string
+            type: string
+            description: run 디렉터리 기준 상대 파일 경로
