@@ -152,7 +152,10 @@ def records_to_dataframe(records: Sequence[dict[str, JsonValue]]) -> pl.DataFram
             "Use an explicit cast to keep these columns as strings or integers."
         )
 
-    return pl.DataFrame(list(records))
+    # infer_schema_length=None: 모든 레코드를 스캔해 dtype를 추론한다. 기본 추론 윈도우
+    # (앞쪽 일부 행)만 보면, 윈도우 밖에서 처음 등장하는 float가 Int64로 추론된 컬럼에서
+    # 조용히 정수로 잘려나간다 (#216).
+    return pl.DataFrame(list(records), infer_schema_length=None)
 
 
 def dataframe_to_records(df: pl.DataFrame) -> list[dict[str, JsonValue]]:

@@ -52,8 +52,11 @@ def _write_data_file(artifact: ArtifactDataset, data_dir: Path, fmt: str) -> Pat
     if fmt == "parquet":
         records_to_dataframe(list(artifact.records)).write_parquet(data_path)
     else:
+        # allow_nan=False: NaN/Infinity는 비표준 JSON 토큰이 되므로 조용히 기록하지 않고
+        # ValueError로 실패시킨다 (#217).
         content = "\n".join(
-            json.dumps(record, ensure_ascii=False, sort_keys=True) for record in artifact.records
+            json.dumps(record, ensure_ascii=False, sort_keys=True, allow_nan=False)
+            for record in artifact.records
         )
         _ = data_path.write_text(f"{content}\n" if content else "", encoding="utf-8")
     return data_path
@@ -139,7 +142,13 @@ class HuggingFaceExporter(BaseExporter):
             _ = readme_path.write_text(_render_card(artifact), encoding="utf-8")
             infos_path = tmp_dir / "dataset_infos.json"
             _ = infos_path.write_text(
-                json.dumps(_dataset_infos(artifact), ensure_ascii=False, indent=2, sort_keys=True)
+                json.dumps(
+                    _dataset_infos(artifact),
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=True,
+                    allow_nan=False,
+                )
                 + "\n",
                 encoding="utf-8",
             )
