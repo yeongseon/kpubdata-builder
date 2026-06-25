@@ -91,6 +91,8 @@ build/{run_id}/
 
 ## 빠른 시작
 
+> **의존성 설치 참고 (kpubdata 해석 전략):** 로컬 개발에서는 `../kpubdata` 형제 디렉터리를 editable checkout으로 사용하고, CI/배포에서는 `uv sync --no-sources`로 PyPI 릴리스를 설치합니다. 자세한 내용은 [CONTRIBUTING.md의 Step 3-1](./CONTRIBUTING.md#step-3-1-의존성-해석-전략-dependency-resolution-strategy)을 참고하세요.
+
 ### CLI 예시
 
 ```bash

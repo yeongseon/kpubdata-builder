@@ -54,6 +54,54 @@ uv run ruff check .
 uv run mypy src
 ```
 
+### Step 3-1: 의존성 해석 전략 (Dependency-Resolution Strategy)
+
+`kpubdata-builder`는 `kpubdata`를 두 가지 방법으로 해석합니다. 상황에 따라 아래 중 하나를 선택하세요.
+
+#### 로컬 개발 (Local Development) — 기본 권장 방식
+
+`pyproject.toml`의 `[tool.uv.sources]` 섹션이 `kpubdata`를 **형제 디렉터리의 editable checkout**으로 연결합니다.
+
+```toml
+[tool.uv.sources]
+kpubdata = { path = "../kpubdata", editable = true }
+```
+
+이 방식을 사용하려면 `kpubdata` 저장소를 **같은 부모 디렉터리에** 함께 클론해야 합니다.
+
+```bash
+# 부모 디렉터리 기준 구조
+~/projects/
+├── kpubdata/          # ← 이 저장소가 있어야 함
+└── kpubdata-builder/  # ← 현재 저장소
+
+git clone https://github.com/yeongseon/kpubdata.git ../kpubdata
+uv sync --extra dev    # ../kpubdata 를 editable로 연결
+```
+
+형제 디렉터리가 존재하면 `uv sync`는 자동으로 PyPI 대신 로컬 소스를 사용합니다.
+
+#### CI / PyPI 배포 — `--no-sources` 플래그
+
+CI(`publish-dataset.yml`)와 패키지 배포 환경에서는 `--no-sources` 플래그를 사용합니다.
+
+```bash
+uv sync --extra dev --extra publish --no-sources
+```
+
+`--no-sources`는 `[tool.uv.sources]`를 무시하고, `pyproject.toml`의 `dependencies`에 명시된 **PyPI 릴리스 핀**(`kpubdata>=0.5.0,<0.6`)을 직접 설치합니다. 형제 디렉터리가 없어도 작동합니다.
+
+#### 핀 범위(`>=0.5.0,<0.6`)를 이렇게 설정한 이유
+
+`kpubdata-builder`는 `kpubdata` 0.5.x의 API(`Client.dataset(...).list` 등)에 의존합니다. 0.6 이상은 호환성 정책이 확정되지 않아 현재로서는 허용하지 않습니다. 호환 정책이 확정되면 상한을 올릴 예정입니다 (관련 이슈: #213).
+
+#### 요약
+
+| 환경 | 명령 | `kpubdata` 소스 |
+| :--- | :--- | :--- |
+| 로컬 개발 | `uv sync --extra dev` | `../kpubdata` (editable, 형제 디렉터리 필요) |
+| CI / 배포 | `uv sync ... --no-sources` | PyPI (`kpubdata>=0.5.0,<0.6`) |
+
 ## 3. 브랜치 전략과 협업 규칙
 
 프로젝트는 여러 사람이 함께 만듭니다. 서로의 코드가 엉키지 않도록 몇 가지 규칙을 정해두었습니다. 규칙은 적지만, **반드시 지켜야 합니다.**
