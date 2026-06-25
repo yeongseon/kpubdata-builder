@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
+import os
+import tempfile
 from pathlib import Path
 
 from ..artifact import ArtifactDataset
@@ -27,7 +30,15 @@ class MarkdownExporter(BaseExporter):
         destination = ensure_output_dir(output_dir, target.output_path)
         content = _render_markdown(artifact)
         try:
-            _ = destination.write_text(content, encoding="utf-8")
+            fd, tmp_name = tempfile.mkstemp(dir=destination.parent, suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(content)
+                os.replace(tmp_name, destination)
+            except BaseException:
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp_name)
+                raise
         except OSError as exc:
             raise ExportError(
                 f"Failed to export Markdown artifact to {destination}: {exc}"

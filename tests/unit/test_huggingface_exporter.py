@@ -133,3 +133,28 @@ def test_jsonl_format_rejects_non_finite_float(tmp_path: Path) -> None:
 def test_registry_exposes_huggingface_exporter() -> None:
     # HF exporter가 kind "huggingface"로 레지스트리에 등록되어 있는지 확인한다.
     assert isinstance(EXPORTER_REGISTRY["huggingface"], HuggingFaceExporter)
+
+
+def test_failing_export_leaves_no_temp_dir_behind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # TabularError(또는 다른 예외)가 발생해도 .hf_tmp_* 임시 디렉터리가 남지 않아야 한다 (#222).
+    import kpubdata_builder.exporters.huggingface as hf_module
+    from kpubdata_builder.errors import TabularError
+
+    target = ExportTarget(kind="huggingface", output_path="hf/apt_trade")
+
+    def raise_tabular_error(records: object) -> None:
+        raise TabularError("혼합 타입 컬럼")
+
+    # huggingface 모듈에서 직접 import한 records_to_dataframe을 교체해야 패치가 적용된다.
+    monkeypatch.setattr(hf_module, "records_to_dataframe", raise_tabular_error)
+
+    with pytest.raises(ExportError):
+        HuggingFaceExporter().export(_artifact(), target, tmp_path)
+
+    # 임시 디렉터리(.hf_tmp_*)가 남아 있으면 안 된다.
+    hf_parent = tmp_path / "hf"
+    if hf_parent.exists():
+        leaked = [p for p in hf_parent.iterdir() if p.name.startswith(".hf_tmp_")]
+        assert leaked == [], f"Temp dirs leaked: {leaked}"

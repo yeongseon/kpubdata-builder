@@ -7,9 +7,12 @@
 
 from __future__ import annotations
 
+import contextlib
 import csv
 import io
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -42,7 +45,15 @@ class KaggleExporter(BaseExporter):
         content = buffer.getvalue()
 
         try:
-            _ = destination.write_text(content, encoding="utf-8")
+            fd, tmp_name = tempfile.mkstemp(dir=destination.parent, suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(content)
+                os.replace(tmp_name, destination)
+            except BaseException:
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp_name)
+                raise
         except OSError as exc:
             raise ExportError(f"Failed to export Kaggle artifact to {destination}: {exc}") from exc
 
@@ -78,10 +89,15 @@ class KaggleExporter(BaseExporter):
         metadata["licenses"] = [{"name": artifact.metadata.get("license", "CC-BY-4.0")}]
 
         try:
-            metadata_path.write_text(
-                json.dumps(metadata, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
+            fd, tmp_meta = tempfile.mkstemp(dir=metadata_path.parent, suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n")
+                os.replace(tmp_meta, metadata_path)
+            except BaseException:
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp_meta)
+                raise
         except OSError as exc:
             raise ExportError(f"Failed to write Kaggle metadata to {metadata_path}: {exc}") from exc
 
