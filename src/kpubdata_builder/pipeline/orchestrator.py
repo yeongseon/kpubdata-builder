@@ -16,10 +16,11 @@ Export 단계 연결은 stage-aware exporter 도입(#28/v0.2) 시점으로 연�
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..errors import DatasetValidationError
+from ..errors import DatasetValidationError, ValidationError
 from ..manifest import (
     BuildManifest,
     SchemaSummary,
@@ -165,7 +166,7 @@ def _run_source_pipeline(
         card = build_dataset_card(
             title=context.spec.title,
             description=context.spec.description,
-            sources=(fetch_key,),
+            sources=(output_key,),
             fields=(
                 (column.name, column.dtype, column.nullable) for column in silver.schema.columns
             ),
@@ -185,11 +186,24 @@ def _run_source_pipeline(
             source_key=output_key, status="ok", stages_completed=tuple(completed)
         )
     except Exception as exc:  # stage 실패를 결과로 변환하여 매니페스트에 기록
+        # 검증 오류(ValidationError, DatasetValidationError)는 파일시스템 경로를
+        # 포함하지 않으므로 메시지를 그대로 전달한다.
+        # ExportError/ManifestError 등 다른 BuildError 하위 예외는 목적지 경로
+        # 같은 내부 정보를 메시지에 포함할 수 있으므로, 상세 내용은 서버 경고로
+        # 기록하고 클라이언트에는 일반 메시지만 반환한다 (#225).
+        if isinstance(exc, (ValidationError, DatasetValidationError)):
+            error_msg = str(exc)
+        else:
+            warnings.warn(
+                f"source pipeline failed for {output_key!r}: {exc}",
+                stacklevel=2,
+            )
+            error_msg = f"pipeline failed for source {output_key!r}"
         return SourceBuildOutcome(
             source_key=output_key,
             status="failed",
             stages_completed=tuple(completed),
-            error=str(exc),
+            error=error_msg,
         )
 
 

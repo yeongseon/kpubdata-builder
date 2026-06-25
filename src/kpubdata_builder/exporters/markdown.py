@@ -130,4 +130,4 @@ def _format_cell(value: object) -> str:
     """마크다운 테이블 셀 값을 안전하게 문자열로 변환한다."""
     if value is None:
         return ""
-    return str(value).replace("|", "\\|").replace("\n", " ")
+    return str(value).replace("|", "\\|").replace("\r", " ").replace("\n", " ")

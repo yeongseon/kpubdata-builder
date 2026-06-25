@@ -107,3 +107,16 @@ def test_cell_with_pipe_is_escaped(tmp_path: Path) -> None:
     )
     content = _export(artifact, tmp_path)
     assert "a\\|b" in content
+
+
+def test_cell_with_carriage_return_is_escaped(tmp_path: Path) -> None:
+    # #225: \r는 마크다운 테이블을 깨트리므로 공백으로 대체해야 한다.
+    artifact = ArtifactDataset(
+        records=({"note": "line1\rline2"},),
+        schema={"note": "string"},
+    )
+    content = _export(artifact, tmp_path)
+    # \r이 제거/공백 치환되어 raw CR이 출력에 없어야 한다.
+    assert "\r" not in content
+    # 셀 내용은 공백으로 연결된다.
+    assert "line1 line2" in content
