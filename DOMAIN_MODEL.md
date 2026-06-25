@@ -8,16 +8,25 @@ classDiagram
         +String dataset_id
         +String title
         +String description
-        +List~SourceRef~ sources
-        +List~ExportTarget~ exports
-        +Dict metadata
-        +validate() Boolean
+        +Tuple~SourceRef~ sources
+        +Tuple~ExportTarget~ exports
+        +Tuple~str~ transforms
+        +Dict~str_str~ metadata
+        +bool publish
+        +SplitSpec splits 0..1
     }
     class SourceRef {
         +String provider
         +String dataset
         +Dict params
         +String alias
+        +String normalization_mode
+    }
+    class SplitSpec {
+        +String mode
+        +Dict~str_float~ ratios
+        +String key
+        +int seed
     }
     class ArtifactDataset {
         +List~Record~ records
@@ -28,19 +37,28 @@ classDiagram
     }
     class ExportTarget {
         +String kind
-        +Path output_path
+        +String output_path
         +Dict options
     }
     class BuildManifest {
         +String build_id
         +DateTime started_at
         +DateTime finished_at
-        +List~Path~ outputs
+        +String schema_version
+        +Tuple~str~ inputs
+        +Tuple~str~ outputs
+        +Tuple~str~ warnings
+        +Tuple~str~ errors
         +Dict row_counts
+        +Dict schema_summaries
+        +Tuple~SourceProvenance~ provenance
+        +BuildEnvironment build_environment
+        +String inputs_fingerprint
     }
 
     BuildSpec "1" *-- "1..*" SourceRef : defines
     BuildSpec "1" *-- "1..*" ExportTarget : defines
+    BuildSpec "1" o-- "0..1" SplitSpec : defines
     SourceRef ..> ArtifactDataset : populates
     ArtifactDataset --> ExportTarget : formatted by
     BuildManifest "1" -- "1" BuildSpec : records result
@@ -55,10 +73,10 @@ stateDiagram-v2
     [*] --> Created: YAML Loaded
     Created --> LoadFailed: SpecLoadError
     Created --> Validated: Spec Check Passed
-    Validated --> ValidationFailed: SpecValidationError
+    Validated --> ValidationFailed: ValidationError
     Validated --> Executing: Fetching via kpubdata
     Executing --> Assembling: Merging Records
-    Executing --> ExecutionFailed: SourceExecutionError
+    Executing --> ExecutionFailed: ExecutionError
     Assembling --> Exporting: Writing Files
     Assembling --> AssemblyFailed: AssemblyError
     Exporting --> Completed: Manifest Written
@@ -79,6 +97,12 @@ stateDiagram-v2
 ### 2. SourceRef (데이터 출처 정보)
 - **무엇인가요?** `kpubdata` 라이브러리를 통해 가져올 구체적인 공공데이터 정보입니다.
 - **비유:** "재료를 어디서 사올지 적어둔 메모"
+- **주요 필드:**
+    - `provider`: provider 식별자
+    - `dataset`: dataset 식별자
+    - `params`: list 호출에 전달할 파라미터 (JSON 호환 값)
+    - `alias`: 조립 단계에서 사용할 사용자 정의 소스 이름
+    - `normalization_mode`: 정규화 모드 (`canonical` 기본값, `raw` 지원)
 
 ```mermaid
 flowchart LR
@@ -105,32 +129,50 @@ flowchart LR
 - **무엇인가요?** 조립된 데이터를 어떤 형식의 파일로 만들지 정의합니다.
 - **비유:** "완성된 요리를 담을 그릇의 종류 (접시, 냄비, 포장 용기 등)"
 - **주요 필드:**
-    - `kind`: 출력 형식의 종류 (예: `markdown`, `jsonl`)
-    - `output_path`: 파일이 저장될 경로
-    - `options`: 특정 형식에 필요한 추가 설정값
+    - `kind`: 출력 형식의 종류 (예: `markdown`, `jsonl`, `csv`, `parquet`, `huggingface`, `kaggle`)
+    - `output_path`: output_dir 기준 상대 출력 경로
+    - `options`: 특정 형식에 필요한 추가 설정값 (JSON 호환 값)
+
+### 4a. SplitSpec (데이터셋 분할 정의)
+- **무엇인가요?** 데이터셋을 명명된 분할(train/val/test 등)로 나누는 방법을 정의합니다.
+- **주요 필드:**
+    - `mode`: 분할 방식 (`ratio`: 비율 기반, `key`: 컬럼 값 기반)
+    - `ratios`: ratio 모드에서 분할 이름 → 비율 매핑 (합이 1.0이어야 함)
+    - `key`: key 모드에서 분할 기준이 되는 컬럼 이름
+    - `seed`: ratio 모드의 결정적 셔플 시드 (기본값: `0`)
+
+> 계획(planned)/미구현: `SplitSpec`은 현재 파싱되어 BuildSpec에 보존되지만, 실제 분할 로직은 아직 구현되지 않았습니다.
 
 ### 5. BuildManifest (빌드 명세서)
 - **무엇인가요?** 빌드가 끝난 후, 언제 어떤 데이터가 얼마나 생성되었는지 기록한 요약 파일입니다. 실패한 빌드도 manifest를 남겨 감사 추적이 가능합니다.
 - **비유:** "요리 완성 후 작성하는 조리 일지 또는 영수증 (실패한 요리도 기록)"
 - **주요 필드:**
     - `build_id`: 이번 빌드 실행의 고유 ID
-    - `status`: 빌드 결과 (`"succeeded"` | `"failed"` | `"cancelled"`)
-    - `spec_digest`: 어떤 기획서로 빌드했는지 식별하는 지문
-    - `started_at`/`finished_at`: 빌드가 시작되고 끝난 시각
-    - `sources`: source별 결과 요약 (provider, dataset, status, records_fetched, error)
+    - `started_at` / `finished_at`: 빌드가 시작되고 끝난 시각
+    - `schema_version`: 매니페스트 형식 버전 (semver, 현재 `"1.0.0"`)
+    - `inputs`: 입력 소스 식별자 목록
     - `outputs`: 실제로 생성된 파일 경로 목록
-    - `row_counts`: 각 데이터 소스별로 가져온 데이터 건수
     - `warnings`: 빌드 중 발생한 사소한 문제들
     - `errors`: 빌드 실패 시 에러 요약 목록
+    - `row_counts`: 단계별 또는 산출물별 레코드 수 요약
+    - `schema_summaries`: 소스(산출물) 키별 스키마 요약
+    - `provenance`: 소스별 상세 출처 (fetch 시각/파라미터/레코드 수/체크섬) 목록
+    - `build_environment`: 빌드를 생성한 실행 환경 (Python/kpubdata/builder 버전)
+    - `inputs_fingerprint`: 입력 데이터 전체의 재현성 지문 (`"sha256:..."`)
+
+> **참고**: 빌드 상태(`"ok"` | `"failed"`)는 디스크에 저장되는 `BuildManifest`가 아닌,
+> 파이프라인 실행 결과인 `BuildResult.status`에 담깁니다.
 
 ## 엔티티 관계도
 
 ```text
 [BuildSpec] (레시피)
     |
-    +-- [SourceRef] (1..N) (데이터 출처)
+    +-- [SourceRef] (1..N) (데이터 출처, normalization_mode 포함)
     |
     +-- [ExportTarget] (1..N) (출력 형식)
+    |
+    +-- [SplitSpec] (0..1) (데이터셋 분할 정의, 계획/미구현)
     |
     v
 [ArtifactDataset] (조립된 데이터 뭉치)
@@ -157,6 +199,7 @@ sources:
       nx: 55
       ny: 127
     alias: forecast
+    normalization_mode: canonical
 
 # 어떤 형식으로 저장할까요?
 exports:
@@ -183,7 +226,11 @@ spec = BuildSpec(
     title="테스트 데이터",
     description="설명",
     sources=(
-        SourceRef(provider="datago", dataset="test_ds"),
+        SourceRef(
+            provider="datago",
+            dataset="test_ds",
+            normalization_mode="canonical",
+        ),
     ),
     exports=(
         ExportTarget(kind="markdown", output_path="out.md"),
@@ -191,6 +238,7 @@ spec = BuildSpec(
 )
 
 print(f"빌드 준비 중: {spec.title}")
+```
 
 ---
 
@@ -207,5 +255,3 @@ print(f"빌드 준비 중: {spec.title}")
 | 저장소 | 문서 | 설명 |
 | :--- | :--- | :--- |
 | [kpubdata](https://github.com/yeongseon/kpubdata) | [CANONICAL_MODEL.md](https://github.com/yeongseon/kpubdata/blob/main/CANONICAL_MODEL.md) | 관련 데이터 모델 |
-
-```
