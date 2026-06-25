@@ -21,6 +21,7 @@ theme:
 nav:
   - Home: index.md
   - 사용 가이드:
+      - CLI 사용 가이드: guides/cli-usage.md
       - API 규약: api-contract.md
       - 도메인 모델: domain-model.md
       - 내보내기 모델: export-model.md
