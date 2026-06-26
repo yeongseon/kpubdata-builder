@@ -1,0 +1,66 @@
+name: CI
+
+# PR 머지 전 코드 품질 게이트: lint(ruff) + type check(mypy) + 테스트 매트릭스.
+# 데이터셋 발행 워크플로(publish-dataset.yml)와 분리된, 코드 품질 전용 CI다 (#214).
+#
+# --no-sources: [tool.uv.sources]의 editable ../kpubdata 오버라이드를 무시하고
+# pyproject의 버전 핀(>=0.5.0,<0.6, #213)대로 PyPI에서 kpubdata를 해석한다.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint & type check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --extra dev --no-sources
+
+      - name: Ruff (lint)
+        run: uv run --no-sources ruff check .
+
+      - name: Ruff (format check)
+        run: uv run --no-sources ruff format --check .
+
+      - name: mypy (type check)
+        run: uv run --no-sources mypy src
+
+  test:
+    name: Tests (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --extra dev --no-sources --python ${{ matrix.python-version }}
+
+      - name: Run tests
+        run: uv run --no-sources pytest

@@ -141,9 +141,7 @@ def records_to_dataframe(records: Sequence[dict[str, JsonValue]]) -> pl.DataFram
         )
 
     precision_risk = sorted(
-        path
-        for path, kinds in numeric_kinds.items()
-        if "float" in kinds and "unsafe_int" in kinds
+        path for path, kinds in numeric_kinds.items() if "float" in kinds and "unsafe_int" in kinds
     )
     if precision_risk:
         raise TabularError(
