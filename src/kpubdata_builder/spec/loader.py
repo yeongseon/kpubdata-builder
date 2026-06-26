@@ -165,9 +165,7 @@ def _validate_json_value(
         result: dict[str, JsonValue] = {}
         for k, v in cast(dict[object, object], value).items():
             if not isinstance(k, str):
-                raise TypeError(
-                    f"{field_name} keys must be strings, got {type(k).__name__}"
-                )
+                raise TypeError(f"{field_name} keys must be strings, got {type(k).__name__}")
             result[k] = _validate_json_value(
                 v, field_name=f"{field_name}.{k}", _ancestors=child_ancestors
             )
