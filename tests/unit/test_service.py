@@ -166,6 +166,45 @@ class TestArtifacts:
         assert resp.status_code == 404
 
 
+class TestListBuilds:
+    def test_empty_when_no_runs(self, tmp_path: Path) -> None:
+        resp = _service(tmp_path).list_builds()
+        assert resp.status_code == 200
+        assert resp.body["builds"] == []
+
+    def test_lists_run_after_build(self, tmp_path: Path) -> None:
+        service = _service(tmp_path)
+        service.build(VALID_SPEC_YAML, run_id="run1")
+
+        resp = service.list_builds()
+        assert resp.status_code == 200
+        builds = resp.body["builds"]
+        assert isinstance(builds, list)
+        assert len(builds) == 1
+        assert builds[0]["run_id"] == "run1"  # type: ignore[index]
+        assert builds[0]["status"] == "ok"  # type: ignore[index]
+
+    def test_skips_dirs_without_manifest(self, tmp_path: Path) -> None:
+        (tmp_path / "no-manifest-dir").mkdir()
+        resp = _service(tmp_path).list_builds()
+        assert resp.status_code == 200
+        assert resp.body["builds"] == []
+
+    def test_dispatch_get_builds_returns_200(self, tmp_path: Path) -> None:
+        service = _service(tmp_path)
+        service.build(VALID_SPEC_YAML, run_id="run2")
+        resp = dispatch(service, "GET", "/builds", None)
+        assert resp.status_code == 200
+        builds = resp.body["builds"]
+        assert isinstance(builds, list)
+        assert any(b["run_id"] == "run2" for b in builds)  # type: ignore[index,union-attr]
+
+    def test_dispatch_limit_guard(self, tmp_path: Path) -> None:
+        resp = dispatch(_service(tmp_path), "GET", "/builds", {"limit": 0})
+        assert resp.status_code == 400
+        assert "limit" in str(resp.body.get("error", ""))
+
+
 class TestDispatch:
     def test_routes_post_validate(self, tmp_path: Path) -> None:
         resp = dispatch(_service(tmp_path), "POST", "/validate", {"spec": VALID_SPEC_YAML})
