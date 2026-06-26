@@ -16,7 +16,7 @@ Export 단계 연결은 stage-aware exporter 도입(#28/v0.2) 시점으로 연�
 
 from __future__ import annotations
 
-import warnings
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -42,6 +42,8 @@ from ..stages.gold.persist import persist_gold_package
 from ..stages.silver.build import build_silver_dataset
 from ..stages.silver.persist import persist_silver_dataset
 from .context import BuildContext
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -194,9 +196,11 @@ def _run_source_pipeline(
         if isinstance(exc, (ValidationError, DatasetValidationError)):
             error_msg = str(exc)
         else:
-            warnings.warn(
-                f"source pipeline failed for {output_key!r}: {exc}",
-                stacklevel=2,
+            logger.error(
+                "source pipeline failed for %r: %s",
+                output_key,
+                exc,
+                exc_info=exc,
             )
             error_msg = f"pipeline failed for source {output_key!r}"
         return SourceBuildOutcome(

@@ -169,9 +169,12 @@ def test_run_build_card_uses_alias_as_source_identity(tmp_path: Path) -> None:
 
 
 def test_run_build_redacts_path_from_unexpected_exception(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     # #225: 예상치 못한 예외(OS 오류 등)의 절대 경로가 클라이언트에 노출되지 않아야 한다.
+    # #246: 상세 정보는 warnings.warn이 아닌 logger.error로 기록해야 한다.
     spec = _spec(SourceRef(provider="datago", dataset="apt_trade"))
     client = _FakeClient({"datago.apt_trade": [{"id": "1"}]})
 
@@ -180,18 +183,17 @@ def test_run_build_redacts_path_from_unexpected_exception(
 
     monkeypatch.setattr(orchestrator, "build_gold_package", _fail_with_path)
 
-    import warnings
+    import logging
 
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
+    with caplog.at_level(logging.ERROR, logger="kpubdata_builder.pipeline.orchestrator"):
         result = run_build(spec, client=client, output_root=tmp_path, run_id="run1")
 
     outcome = result.outcomes[0]
     assert outcome.status == "failed"
     # 클라이언트에게 돌아가는 error 메시지에는 절대 경로가 없어야 한다.
     assert "/absolute/path" not in (outcome.error or "")
-    # 상세 정보는 서버 경고에만 기록된다.
-    assert any("/absolute/path" in str(w.message) for w in caught)
+    # 상세 정보는 logger.error로만 기록된다 (#246).
+    assert any("/absolute/path" in r.getMessage() for r in caplog.records)
 
 
 def test_run_build_records_failure_when_source_missing(tmp_path: Path) -> None:

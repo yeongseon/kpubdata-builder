@@ -13,6 +13,7 @@ Studio 같은 외부 UI가 Builder를 호출할 수 있도록 validate/preview/b
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -187,6 +188,39 @@ class BuilderService:
         )
         return ServiceResponse(200, {"run_id": run_id, "files": list(files)})
 
+    def list_builds(self, *, limit: int = 50) -> ServiceResponse:
+        """실행 이력 목록을 최신 수정 시각 기준으로 내림차순 반환한다.
+
+        output_root 아래의 디렉터리를 스캔해 manifest.json이 있는 실행만
+        포함한다. Studio 같은 소비자가 빌드 이력 목록을 표시하는 데 쓰인다 (#250).
+        """
+        if not self._output_root.exists():
+            return ServiceResponse(200, {"builds": []})
+
+        candidates = sorted(
+            (d for d in self._output_root.iterdir() if d.is_dir()),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        builds: list[JsonValue] = []
+        for run_dir in candidates[:limit]:
+            manifest_path = run_dir / "manifest.json"
+            if not manifest_path.exists():
+                continue
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            builds.append(
+                {
+                    "run_id": run_dir.name,
+                    "status": "failed" if manifest.get("errors") else "ok",
+                    "started_at": manifest.get("started_at"),
+                    "finished_at": manifest.get("finished_at"),
+                }
+            )
+        return ServiceResponse(200, {"builds": builds})
+
     def _load_validated(self, spec_yaml: str) -> BuildSpec | ServiceResponse:
         """spec_yaml을 파싱·검증하고, 실패 시 오류 ServiceResponse를 반환한다."""
         try:
@@ -263,6 +297,15 @@ def dispatch(
     if method == "GET" and path.startswith("/artifacts/"):
         run_id = path[len("/artifacts/") :]
         return service.artifacts(run_id)
+
+    if method == "GET" and path == "/builds":
+        limit = 50
+        if body is not None and "limit" in body:
+            limit_value = body["limit"]
+            if not isinstance(limit_value, int) or isinstance(limit_value, bool) or limit_value < 1:
+                return ServiceResponse(400, {"error": "'limit' must be a positive integer"})
+            limit = limit_value
+        return service.list_builds(limit=limit)
 
     return ServiceResponse(404, {"error": f"not found: {method} {path}"})
 
