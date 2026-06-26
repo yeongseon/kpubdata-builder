@@ -36,19 +36,10 @@ def _effective_params(template_meta: dict[str, object], params: dict[str, str]) 
     return effective
 
 
-def render_template(path: str | Path, params: dict[str, str]) -> str:
-    """템플릿 YAML을 파라미터로 렌더링해 완성된 YAML 문자열을 반환한다.
+def _render_template_data(path: str | Path, params: dict[str, str]) -> dict[str, object]:
+    """템플릿 YAML을 파라미터로 치환해 메모리 매핑으로 반환한다(내부 헬퍼).
 
-    매개변수:
-        path: 템플릿 YAML 경로.
-        params: 플레이스홀더에 채울 파라미터(선언된 기본값을 덮어쓴다).
-
-    반환값:
-        str: `_template` 블록이 제거되고 플레이스홀더가 치환된 YAML.
-
-    예외:
-        SpecLoadError: 파일 로드 실패, 최상위가 매핑이 아님, 또는 값이 없는
-            플레이스홀더가 남은 경우.
+    렌더링된 YAML을 재파싱하지 않아 "1" → int 같은 타입 강제 변환을 방지한다.
     """
     try:
         raw = Path(path).read_text(encoding="utf-8")
@@ -65,7 +56,6 @@ def render_template(path: str | Path, params: dict[str, str]) -> str:
     effective = _effective_params(meta, params)
 
     # Substitute in the data structure directly to avoid YAML structure corruption.
-    # Then re-dump so the output is valid YAML regardless of substitution values.
     missing: list[str] = []
 
     def _substitute_in_value(value: object) -> object:
@@ -91,8 +81,30 @@ def render_template(path: str | Path, params: dict[str, str]) -> str:
         unique = ", ".join(sorted(set(missing)))
         raise SpecLoadError(f"Missing template parameter(s): {unique}")
 
-    rendered = yaml.safe_dump(substituted, allow_unicode=True, sort_keys=False)
-    return rendered
+    if not isinstance(substituted, dict):
+        raise SpecLoadError(
+            f"Template substitution produced a non-mapping result for {path}: {type(substituted)}"
+        )
+    return substituted
+
+
+def render_template(path: str | Path, params: dict[str, str]) -> str:
+    """템플릿 YAML을 파라미터로 렌더링해 완성된 YAML 문자열을 반환한다.
+
+    매개변수:
+        path: 템플릿 YAML 경로.
+        params: 플레이스홀더에 채울 파라미터(선언된 기본값을 덮어쓴다).
+
+    반환값:
+        str: `_template` 블록이 제거되고 플레이스홀더가 치환된 YAML.
+
+    예외:
+        SpecLoadError: 파일 로드 실패, 최상위가 매핑이 아님, 또는 값이 없는
+            플레이스홀더가 남은 경우.
+    """
+    substituted = _render_template_data(path, params)
+    # Re-dump so the output is valid YAML regardless of substitution values.
+    return yaml.safe_dump(substituted, allow_unicode=True, sort_keys=False)
 
 
 def load_template(path: str | Path, params: dict[str, str]) -> BuildSpec:
@@ -108,11 +120,10 @@ def load_template(path: str | Path, params: dict[str, str]) -> BuildSpec:
     예외:
         SpecLoadError: 렌더링 또는 파싱 실패 시.
     """
-    rendered = render_template(path, params)
-    loaded = yaml.safe_load(rendered)
-    if not isinstance(loaded, dict):
-        raise SpecLoadError(f"Rendered template {path} is not a mapping")
-    return parse_spec(loaded)
+    # 이미 치환된 메모리 구조를 직접 parse_spec에 전달해 YAML 재직렬화·재파싱으로 인한
+    # 타입 강제 변환("1" → int 등)을 방지한다 (#225).
+    substituted = _render_template_data(path, params)
+    return parse_spec(substituted)
 
 
 __all__ = ["load_template", "render_template"]

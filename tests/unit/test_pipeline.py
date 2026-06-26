@@ -144,6 +144,56 @@ def test_run_build_uses_alias_as_source_key(tmp_path: Path) -> None:
     assert (tmp_path / "run1" / "gold" / "trades" / "table.parquet").exists()
 
 
+def test_run_build_card_uses_alias_as_source_identity(tmp_path: Path) -> None:
+    # #225: alias가 설정된 경우 dataset card의 sources 항목도 output_key(alias)를 사용해야
+    # manifest의 inputs 필드와 일치해야 한다.
+    spec = _spec(SourceRef(provider="datago", dataset="apt_trade", alias="trades"))
+    client = _FakeClient({"datago.apt_trade": [{"id": "1", "amount": 1000}]})
+
+    result = run_build(spec, client=client, output_root=tmp_path, run_id="run1")
+
+    readme = tmp_path / "run1" / "gold" / "trades" / "README.md"
+    assert readme.exists()
+    text = readme.read_text(encoding="utf-8")
+    # card는 alias(output_key)를 source 식별자로 사용해야 한다.
+    assert "- trades" in text
+    # fetch_key(provider.dataset)는 card에 나타나지 않아야 한다.
+    assert "- datago.apt_trade" not in text
+
+    # manifest inputs도 alias를 사용한다 — 두 곳이 일치해야 한다.
+    import json
+    from typing import cast
+
+    manifest = cast(dict[str, object], json.loads(result.manifest_path.read_text(encoding="utf-8")))
+    assert "trades" in cast(list[str], manifest["inputs"])
+
+
+def test_run_build_redacts_path_from_unexpected_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # #225: 예상치 못한 예외(OS 오류 등)의 절대 경로가 클라이언트에 노출되지 않아야 한다.
+    spec = _spec(SourceRef(provider="datago", dataset="apt_trade"))
+    client = _FakeClient({"datago.apt_trade": [{"id": "1"}]})
+
+    def _fail_with_path(*_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("failed: /absolute/path/to/file.json")
+
+    monkeypatch.setattr(orchestrator, "build_gold_package", _fail_with_path)
+
+    import warnings
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        result = run_build(spec, client=client, output_root=tmp_path, run_id="run1")
+
+    outcome = result.outcomes[0]
+    assert outcome.status == "failed"
+    # 클라이언트에게 돌아가는 error 메시지에는 절대 경로가 없어야 한다.
+    assert "/absolute/path" not in (outcome.error or "")
+    # 상세 정보는 서버 경고에만 기록된다.
+    assert any("/absolute/path" in str(w.message) for w in caught)
+
+
 def test_run_build_records_failure_when_source_missing(tmp_path: Path) -> None:
     spec = _spec(SourceRef(provider="datago", dataset="missing"))
     client = _FakeClient({"datago.apt_trade": [{"id": "1"}]})

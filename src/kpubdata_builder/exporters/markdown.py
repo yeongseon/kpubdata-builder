@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
+import os
+import tempfile
 from pathlib import Path
 
 from ..artifact import ArtifactDataset
@@ -27,7 +30,15 @@ class MarkdownExporter(BaseExporter):
         destination = ensure_output_dir(output_dir, target.output_path)
         content = _render_markdown(artifact)
         try:
-            _ = destination.write_text(content, encoding="utf-8")
+            fd, tmp_name = tempfile.mkstemp(dir=destination.parent, suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(content)
+                os.replace(tmp_name, destination)
+            except BaseException:
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp_name)
+                raise
         except OSError as exc:
             raise ExportError(
                 f"Failed to export Markdown artifact to {destination}: {exc}"
@@ -119,4 +130,4 @@ def _format_cell(value: object) -> str:
     """마크다운 테이블 셀 값을 안전하게 문자열로 변환한다."""
     if value is None:
         return ""
-    return str(value).replace("|", "\\|").replace("\n", " ")
+    return str(value).replace("|", "\\|").replace("\r", " ").replace("\n", " ")

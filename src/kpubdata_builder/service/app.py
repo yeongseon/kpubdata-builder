@@ -96,6 +96,8 @@ class BuilderService:
 
     def preview(self, spec_yaml: str, *, limit: int = DEFAULT_PREVIEW_LIMIT) -> ServiceResponse:
         """각 소스의 스키마와 샘플 행을 산출한다 (파일 미기록)."""
+        if limit < 1:
+            return ServiceResponse(400, {"error": "'limit' must be a positive integer"})
         spec_or_error = self._load_validated(spec_yaml)
         if isinstance(spec_or_error, ServiceResponse):
             return spec_or_error
@@ -151,16 +153,22 @@ class BuilderService:
             for outcome in result.outcomes
         ]
         status_code = 200 if result.status == "ok" else 502
-        return ServiceResponse(
-            status_code,
-            {
-                "status": result.status,
-                "run_id": result.context.run_id,
-                "outcomes": outcomes,
-                "manifest": str(result.manifest_path),
-                "api_version": API_CONTRACT_VERSION,
-            },
-        )
+        body: dict[str, JsonValue] = {
+            "status": result.status,
+            "run_id": result.context.run_id,
+            "outcomes": outcomes,
+            "manifest": str(result.manifest_path),
+            "api_version": API_CONTRACT_VERSION,
+        }
+        # 실패한 빌드는 첫 번째 실패 outcome의 error를 최상위 `error` 요약으로 노출해,
+        # Studio 같은 소비자가 outcomes 배열을 파싱하지 않고도 사람이 읽을 수 있는
+        # 사유를 즉시 표면화할 수 있게 한다 (#226).
+        if result.status != "ok":
+            first_error = next(
+                (o.error for o in result.outcomes if o.status != "ok" and o.error), None
+            )
+            body["error"] = first_error or "build failed"
+        return ServiceResponse(status_code, body)
 
     def artifacts(self, run_id: str) -> ServiceResponse:
         """실행 워크스페이스의 산출물 파일 목록을 반환한다."""

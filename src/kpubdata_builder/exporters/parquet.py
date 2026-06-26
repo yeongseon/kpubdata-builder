@@ -7,6 +7,9 @@
 
 from __future__ import annotations
 
+import contextlib
+import os
+import tempfile
 from pathlib import Path
 
 import polars as pl
@@ -40,9 +43,7 @@ def _build_frame(artifact: ArtifactDataset) -> pl.DataFrame:
             "bool": pl.Boolean,
             "Boolean": pl.Boolean,
         }
-        schema = {
-            name: _TYPE_MAP.get(dtype, pl.Utf8) for name, dtype in artifact.schema.items()
-        }
+        schema = {name: _TYPE_MAP.get(dtype, pl.Utf8) for name, dtype in artifact.schema.items()}
         return pl.DataFrame(schema=schema)
     return pl.DataFrame()
 
@@ -79,7 +80,16 @@ class ParquetExporter(BaseExporter):
         destination = ensure_output_dir(output_dir, target.output_path)
         frame = _build_frame(artifact)
         try:
-            frame.write_parquet(destination)
+            fd, tmp_name = tempfile.mkstemp(dir=destination.parent, suffix=".tmp")
+            os.close(fd)
+            tmp_path = Path(tmp_name)
+            try:
+                frame.write_parquet(tmp_path)
+                os.replace(tmp_name, destination)
+            except BaseException:
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp_name)
+                raise
         except (OSError, pl.exceptions.PolarsError) as exc:
             raise ExportError(f"Failed to export Parquet artifact to {destination}: {exc}") from exc
 
