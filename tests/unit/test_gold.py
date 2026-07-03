@@ -104,3 +104,82 @@ class TestPersistGoldPackage:
 
         with pytest.raises(ValueError, match="run_id"):
             _ = persist_gold_package(package, output_root=tmp_path, run_id="../escape")
+
+
+class TestBuildGoldPackageWithSplits:
+    def test_builds_splits_when_spec_provided(self) -> None:
+        silver = _silver(
+            (
+                {"id": "1", "amount": 1000, "year": "2024"},
+                {"id": "2", "amount": 2500, "year": "2025"},
+                {"id": "3", "amount": 1500, "year": "2024"},
+            )
+        )
+        from kpubdata_builder.spec import SplitSpec
+
+        splits_spec = SplitSpec(mode="key", key="year")
+
+        package = build_gold_package(silver, dataset_name="apt_trade", splits_spec=splits_spec)
+
+        assert package.splits is not None
+        assert set(package.splits.keys()) == {"2024", "2025"}
+        assert len(package.splits["2024"]) == 2
+        assert len(package.splits["2025"]) == 1
+
+    def test_no_splits_when_spec_none(self) -> None:
+        package = build_gold_package(_silver(({"id": "1"},)), dataset_name="d")
+
+        assert package.splits is None
+
+
+class TestPersistGoldPackageWithSplits:
+    def test_writes_splits_to_subdirectory(self, tmp_path: Path) -> None:
+        silver = _silver(
+            (
+                {"id": "1", "amount": 1000, "year": "2024"},
+                {"id": "2", "amount": 2500, "year": "2025"},
+            )
+        )
+        from kpubdata_builder.spec import SplitSpec
+
+        splits_spec = SplitSpec(mode="key", key="year")
+        package = build_gold_package(silver, dataset_name="apt_trade", splits_spec=splits_spec)
+
+        result = persist_gold_package(package, output_root=tmp_path, run_id="run1")
+
+        assert result.splits_paths
+        assert "2024" in result.splits_paths
+        assert "2025" in result.splits_paths
+        assert result.splits_paths["2024"].exists()
+        assert result.splits_paths["2025"].exists()
+
+        # 분할 파일을 읽어 내용 확인
+        split_2024 = pl.read_parquet(result.splits_paths["2024"])
+        assert len(split_2024) == 1
+        assert split_2024["year"][0] == "2024"
+
+    def test_splits_metadata_included_in_package_json(self, tmp_path: Path) -> None:
+        silver = _silver(({"id": "1", "year": "2024"}, {"id": "2", "year": "2025"}))
+        from kpubdata_builder.spec import SplitSpec
+
+        splits_spec = SplitSpec(mode="key", key="year")
+        package = build_gold_package(silver, dataset_name="apt_trade", splits_spec=splits_spec)
+
+        result = persist_gold_package(package, output_root=tmp_path, run_id="run1")
+
+        meta = cast(
+            dict[str, JsonValue], json.loads(result.package_path.read_text(encoding="utf-8"))
+        )
+        assert meta["splits"] is not None
+        splits_meta = cast(dict[str, int], meta["splits"])
+        assert splits_meta["2024"] == 1
+        assert splits_meta["2025"] == 1
+
+    def test_no_splits_directory_when_splits_none(self, tmp_path: Path) -> None:
+        package = build_gold_package(_silver(({"id": "1"},)), dataset_name="apt_trade")
+
+        result = persist_gold_package(package, output_root=tmp_path, run_id="run1")
+
+        splits_dir = result.gold_dir / "splits"
+        assert not splits_dir.exists()
+        assert not result.splits_paths
