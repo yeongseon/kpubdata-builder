@@ -113,6 +113,21 @@ exports:
 | `output_path` | string | 예 | output_dir 기준 상대 출력 경로 |
 | `options` | object | 아니오 | exporter별 선택 옵션 (JSON 호환 값) |
 
+#### Studio → Builder 필드명 매핑 (#264)
+
+KPubData Studio에서는 `ExportTarget.format`이라는 필드명을 사용하지만, Builder에서는 `kind`를 사용합니다. Studio에서 Builder로 BuildSpec을 전송할 때, Studio의 `specMapping.ts:toBuilderSpec()` 함수가 자동으로 필드명을 변환합니다.
+
+| Studio (format) | Builder (kind) | 비고 |
+| :--- | :--- | :--- |
+| `"markdown"` | `"markdown"` | |
+| `"jsonl"` | `"jsonl"` | |
+| `"parquet"` | `"parquet"` | |
+| `"csv"` | `"csv"` | |
+| `"huggingface"` | `"huggingface"` | |
+| `"kaggle"` | `"kaggle"` | |
+
+> **참고**: 값 자체는 동일하며, 단지 필드명만 `format` → `kind`로 변환됩니다. Builder API를 직접 호출하는 경우(CLI 등)에는 항상 `kind`를 사용해야 합니다.
+
 ### 4.6 `transforms` (optional)
 
 ```yaml
