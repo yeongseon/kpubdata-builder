@@ -598,6 +598,7 @@ dependencies = [
     { name = "kpubdata" },
     { name = "polars" },
     { name = "pyyaml" },
+    { name = "typing-extensions" },
 ]
 
 [package.optional-dependencies]
@@ -643,6 +644,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0,<7" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5,<1" },
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
+    { name = "typing-extensions", specifier = ">=4.5" },
     { name = "xmltodict", marker = "extra == 'publish'", specifier = ">=0.13,<1" },
 ]
 provides-extras = ["docs", "parquet", "huggingface", "publish", "dev"]
