@@ -78,6 +78,34 @@ class TestBuildSilverDataset:
         assert dataset.validation.ok is False
         assert any("amount" in problem for problem in dataset.validation.problems)
 
+    def test_validation_passes_when_dtype_matches(self) -> None:
+        bronze = _bronze(({"id": "1", "amount": 1000},))
+
+        dataset = build_silver_dataset(
+            bronze, casts={"amount": "int"}, column_dtypes={"amount": "int"}
+        )
+
+        assert dataset.validation.ok is True
+        assert dataset.validation.problems == ()
+
+    def test_validation_fails_when_dtype_mismatches(self) -> None:
+        bronze = _bronze(({"id": "1", "amount": 1000},))
+
+        # amount는 바로 읽으면 Int64; Float64를 요구하면 실패해야 한다
+        dataset = build_silver_dataset(bronze, column_dtypes={"amount": "float"})
+
+        assert dataset.validation.ok is False
+        assert any("amount" in p for p in dataset.validation.problems)
+
+    def test_validation_reports_missing_column_for_dtype_spec(self) -> None:
+        bronze = _bronze(({"id": "1"},))
+
+        # 'amount' 코럼이 없으면 dtype 검증 실패 메시지를 포함해야 한다
+        dataset = build_silver_dataset(bronze, column_dtypes={"amount": "int"})
+
+        assert dataset.validation.ok is False
+        assert any("amount" in p for p in dataset.validation.problems)
+
     def test_preview_respects_limit(self) -> None:
         records = tuple({"n": i} for i in range(10))
         dataset = build_silver_dataset(_bronze(records), preview_limit=3)
