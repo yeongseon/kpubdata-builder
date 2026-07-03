@@ -5,6 +5,7 @@ Bronze raw records를 Polars 테이블로 정제한 결과와, 스키마/통계/
 타입을 재사용한다. Silver는 내부 stage 모델이므로 table에 Polars 타입을 노출한다.
 
 주요 구성:
+    - ValidationProblem: 개별 검증 위반 사항 (구조화된 객체, #261)
     - ValidationResult: 스키마 검증 결과
     - SilverDataset: Silver 단계 산출물
 """
@@ -12,10 +13,14 @@ Bronze raw records를 Polars 테이블로 정제한 결과와, 스키마/통계/
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import polars as pl
 
 from ...tabular import PreviewSlice, SchemaInfo, TableStatistics
+
+if TYPE_CHECKING:
+    from .validate import ValidationProblem
 
 
 @dataclass(frozen=True)
@@ -28,7 +33,7 @@ class ValidationResult:
     """
 
     ok: bool
-    problems: tuple[str, ...] = ()
+    problems: tuple[ValidationProblem, ...] = ()
 
 
 @dataclass(frozen=True)

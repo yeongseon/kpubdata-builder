@@ -251,12 +251,22 @@ def test_run_build_fails_source_when_silver_validation_fails(
 
     from kpubdata_builder.stages.silver import build_silver_dataset as real_build
     from kpubdata_builder.stages.silver.models import ValidationResult
+    from kpubdata_builder.stages.silver.validate import ValidationProblem
 
     def _invalid_silver(*args: object, **kwargs: object) -> object:
         dataset = real_build(*args, **kwargs)  # type: ignore[arg-type]
         return dataclasses.replace(
             dataset,
-            validation=ValidationResult(ok=False, problems=("synthetic validation failure",)),
+            validation=ValidationResult(
+                ok=False,
+                problems=(
+                    ValidationProblem(
+                        code="synthetic_failure",
+                        field=None,
+                        message="synthetic validation failure",
+                    ),
+                ),
+            ),
         )
 
     monkeypatch.setattr(orchestrator, "build_silver_dataset", _invalid_silver)
