@@ -11,7 +11,7 @@ parquet으로, 패키지 메타데이터는 결정적 JSON으로 기록한다.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
 
@@ -33,6 +33,7 @@ class GoldPersistResult:
     gold_dir: Path
     table_path: Path
     package_path: Path
+    splits_paths: dict[str, Path] = field(default_factory=dict)
 
 
 def _package_metadata(package: GoldPackage) -> dict[str, JsonValue]:
@@ -114,14 +115,28 @@ def persist_gold_package(
             encoding="utf-8",
         )
 
+        # splits 처리: package.splits가 있으면 splits/ 서브디렉토리에 각 분할을 parquet로 기록
+        if package.splits is not None:
+            (tmp_dir / "splits").mkdir(exist_ok=True)
+            for split_name, split_df in package.splits.items():
+                validate_path_segment(split_name, field_name="split_name")
+                split_df.write_parquet(tmp_dir / "splits" / f"{split_name}.parquet")
+
         # Atomic swap: 기존 디렉터리가 있어도 데이터 유실 없이 교체한다 (#180).
         atomic_replace_dir(tmp_dir, gold_dir)
     except BaseException:
         shutil.rmtree(tmp_dir, ignore_errors=True)
         raise
 
+    # splits_paths 결과 구성
+    splits_paths: dict[str, Path] = {}
+    if package.splits is not None:
+        for split_name in package.splits:
+            splits_paths[split_name] = gold_dir / "splits" / f"{split_name}.parquet"
+
     return GoldPersistResult(
         gold_dir=gold_dir,
         table_path=table_path,
         package_path=package_path,
+        splits_paths=splits_paths,
     )
