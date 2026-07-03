@@ -45,7 +45,5 @@ def validate_table(
         expected = _resolve_dtype(expected_spec)
         actual = table.schema[column]
         if actual != expected:
-            problems.append(
-                f"column {column!r}: expected dtype {expected}, got {actual}"
-            )
+            problems.append(f"column {column!r}: expected dtype {expected}, got {actual}")
     return ValidationResult(ok=not problems, problems=tuple(problems))

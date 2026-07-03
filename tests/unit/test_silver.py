@@ -92,9 +92,7 @@ class TestBuildSilverDataset:
         bronze = _bronze(({"id": "1", "amount": 1000},))
 
         # amount는 바로 읽으면 Int64; Float64를 요구하면 실패해야 한다
-        dataset = build_silver_dataset(
-            bronze, column_dtypes={"amount": "float"}
-        )
+        dataset = build_silver_dataset(bronze, column_dtypes={"amount": "float"})
 
         assert dataset.validation.ok is False
         assert any("amount" in p for p in dataset.validation.problems)
