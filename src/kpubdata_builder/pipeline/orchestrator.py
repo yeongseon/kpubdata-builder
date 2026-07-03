@@ -158,12 +158,22 @@ def _run_source_pipeline(
             silver_paths.validation_path,
         )
 
-        gold = build_gold_package(silver, dataset_name=output_key, exports=context.spec.exports)
+        gold = build_gold_package(
+            silver,
+            dataset_name=output_key,
+            exports=context.spec.exports,
+            splits_spec=context.spec.splits,
+        )
         gold_paths = persist_gold_package(
             gold, output_root=context.output_root, run_id=context.run_id
         )
         completed.append("gold")
-        _record_output_paths(outputs, gold_paths.table_path, gold_paths.package_path)
+        _record_output_paths(
+            outputs,
+            gold_paths.table_path,
+            gold_paths.package_path,
+            *gold_paths.splits_paths.values(),
+        )
 
         card = build_dataset_card(
             title=context.spec.title,
