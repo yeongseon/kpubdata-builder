@@ -46,4 +46,3 @@ class GoldPackage:
     export_plan: ExportPlan
     source_silver: str
     metadata: dict[str, str] = field(default_factory=dict)
-    splits: dict[str, pl.DataFrame] | None = None

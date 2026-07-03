@@ -76,7 +76,8 @@ class TestBuildSilverDataset:
         dataset = build_silver_dataset(bronze, required_columns=("id", "amount"))
 
         assert dataset.validation.ok is False
-        assert any("amount" in problem for problem in dataset.validation.problems)
+        # ValidationProblem 객체로 바뀔었으므로 message 필드를 확인 (#261)
+        assert any("amount" in problem.message for problem in dataset.validation.problems)
 
     def test_validation_passes_when_dtype_matches(self) -> None:
         bronze = _bronze(({"id": "1", "amount": 1000},))
@@ -95,7 +96,7 @@ class TestBuildSilverDataset:
         dataset = build_silver_dataset(bronze, column_dtypes={"amount": "float"})
 
         assert dataset.validation.ok is False
-        assert any("amount" in p for p in dataset.validation.problems)
+        assert any("amount" in p.message for p in dataset.validation.problems)
 
     def test_validation_reports_missing_column_for_dtype_spec(self) -> None:
         bronze = _bronze(({"id": "1"},))
@@ -104,7 +105,7 @@ class TestBuildSilverDataset:
         dataset = build_silver_dataset(bronze, column_dtypes={"amount": "int"})
 
         assert dataset.validation.ok is False
-        assert any("amount" in p for p in dataset.validation.problems)
+        assert any("amount" in p.message for p in dataset.validation.problems)
 
     def test_preview_respects_limit(self) -> None:
         records = tuple({"n": i} for i in range(10))
