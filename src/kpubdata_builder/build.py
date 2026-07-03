@@ -1,4 +1,4 @@
-"""Build orchestration: connect source execution, assembly, export, and manifest."""
+"""빌드 오케스트레이션: 소스 실행, 조립, 내보내기, 매니페스트를 연결한다."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ MANIFEST_FILENAME = "manifest.json"
 
 @dataclass(frozen=True)
 class BuildResult:
-    """Outcome of a build run: produced files and manifest location."""
+    """빌드 실행 결과: 생성된 파일 목록과 매니페스트 경로를 담는다."""
 
     artifact_paths: tuple[Path, ...]
     manifest_path: Path
@@ -37,11 +37,11 @@ def execute_build(
     exporters: Mapping[str, BaseExporter] = EXPORTER_REGISTRY,
     build_id: str | None = None,
 ) -> BuildResult:
-    """Run the full build pipeline for a validated spec.
+    """검증된 스펙을 기반으로 전체 빌드 파이프라인을 실행한다.
 
-    Steps: validate -> fetch sources -> assemble -> export -> write manifest.
-    The client is injected so tests can supply a fake without network access.
-    A manifest is always written, recording inputs, outputs, and warnings.
+    실행 순서: 스펙 검증 → 소스 수집 → 조립 → 내보내기 → 매니페스트 기록.
+    client는 주입 방식으로 전달돼 테스트에서 네트워크 없이 가짜 구현체를 사용할 수 있다.
+    매니페스트는 항상 기록되며 입력 소스, 출력 파일, 경고를 포함한다.
     """
     validate_spec(spec)
 

@@ -1,4 +1,4 @@
-"""Hugging Face Hub publisher — uploads artifacts to a HF dataset repo."""
+"""Hugging Face Hub 게시자 — artifact를 HF 데이터셋 레포지토리에 업로드한다."""
 
 from __future__ import annotations
 
@@ -24,18 +24,18 @@ def _repo_path_for(path: Path, common_root: Path | None) -> str:
 
 
 class HuggingFacePublisher(BasePublisher):
-    """Upload artifact files to a Hugging Face Hub dataset repository."""
+    """Hugging Face Hub 데이터셋 레포지토리에 artifact 파일을 업로드한다."""
 
     @property
     def name(self) -> str:
         return "huggingface"
 
     def publish(self, artifact_paths: tuple[Path, ...], *, destination: str) -> PublishResult:
-        """Publish artifacts to a HuggingFace dataset repo.
+        """artifact를 HuggingFace 데이터셋 레포지토리에 게시한다.
 
-        Args:
-            artifact_paths: Files/directories to upload.
-            destination: HF repo ID (e.g. "kpubdata/air-quality").
+        매개변수:
+            artifact_paths: 업로드할 파일 또는 디렉토리 목록.
+            destination: HF 레포지토리 ID (예: "kpubdata/air-quality").
         """
         try:
             from huggingface_hub import HfApi  # type: ignore[import-not-found]
