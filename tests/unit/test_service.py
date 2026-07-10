@@ -450,9 +450,7 @@ class TestHttpAdapter:
         monkeypatch.setenv("KPUBDATA_BUILDER_CORS_ALLOW_ORIGIN", "http://localhost:5173")
         base_url, _, _ = http_server
         with urllib.request.urlopen(f"{base_url}/version", timeout=2.0) as response:
-            assert (
-                response.headers["Access-Control-Allow-Origin"] == "http://localhost:5173"
-            )
+            assert response.headers["Access-Control-Allow-Origin"] == "http://localhost:5173"
 
 
 class TestHttpRobustness:
