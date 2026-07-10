@@ -355,7 +355,11 @@ def _run_serve(*, output_dir: str, host: str, port: int) -> int:
         output_root=Path(output_dir),
         client_factory=_create_client,
     )
-    print(f"serving kpubdata-builder on http://{host}:{port} (output: {output_dir})")
+    # 장시간 실행 명령이므로 시작 로그가 파이프 버퍼링에 갈리지 않도록 즉시 flush한다.
+    print(
+        f"serving kpubdata-builder on http://{host}:{port} (output: {output_dir})",
+        flush=True,
+    )
     try:
         serve(service, host=host, port=port)
     except KeyboardInterrupt:
