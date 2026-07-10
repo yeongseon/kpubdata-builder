@@ -165,6 +165,72 @@ flowchart LR
 
 ## 엔티티 관계도
 
+```mermaid
+erDiagram
+    BUILDSPEC ||--|{ SOURCEREF : "defines (1..N)"
+    BUILDSPEC ||--|{ EXPORTTARGET : "defines (1..N)"
+    BUILDSPEC ||--o| SPLITSPEC : "defines (0..1)"
+    BUILDSPEC ||--|| BUILDMANIFEST : "records result"
+    SOURCEREF }|--|| ARTIFACTDATASET : "populates"
+    ARTIFACTDATASET ||--|{ EXPORTTARGET : "formatted by"
+    EXPORTTARGET ||--|{ PHYSICALFILE : "writes"
+    BUILDMANIFEST ||--|{ PHYSICALFILE : "records as outputs"
+
+    BUILDSPEC {
+        String dataset_id PK
+        String title
+        String description
+        Tuple transforms
+        Dict metadata
+        bool publish
+    }
+    SOURCEREF {
+        String provider
+        String dataset
+        Dict params
+        String alias
+        String normalization_mode
+    }
+    SPLITSPEC {
+        String mode
+        Dict ratios
+        String key
+        int seed
+    }
+    ARTIFACTDATASET {
+        List records
+        Dict schema
+        Dict provenance
+        Dict statistics
+    }
+    EXPORTTARGET {
+        String kind
+        String output_path
+        Dict options
+    }
+    BUILDMANIFEST {
+        String build_id PK
+        DateTime started_at
+        DateTime finished_at
+        String schema_version
+        Tuple inputs
+        Tuple outputs
+        Tuple warnings
+        Tuple errors
+        Dict row_counts
+        Dict schema_summaries
+        Tuple provenance
+        BuildEnvironment build_environment
+        String inputs_fingerprint
+    }
+```
+
+> **참고**: `BuildSpec`의 `sources`(SourceRef)·`exports`(ExportTarget)·`splits`(SplitSpec) 필드는
+> 값 속성이 아니라 다른 엔티티를 참조하는 관계이므로, 속성 목록 대신 관계선(edge)으로 표현했습니다.
+> 각 엔티티의 전체 필드 정의와 제네릭 타입 표기는 파일 상단의 `classDiagram`을 참조하세요.
+
+> 위 다이어그램의 텍스트 버전은 아래와 같습니다.
+
 ```text
 [BuildSpec] (레시피)
     |
