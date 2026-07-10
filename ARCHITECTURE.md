@@ -215,5 +215,6 @@ scripts/publish_to_hf.py  →  scripts/pipeline/{fetch,transform,package,publish
 | [BUILD_SPEC.md](./BUILD_SPEC.md) | BuildSpec 계약 |
 | [API_CONTRACT.md](./API_CONTRACT.md) | Builder 중심 API 계약 |
 | [BUILD_STATE.md](./BUILD_STATE.md) | 빌드 상태 머신 |
+| [ALGORITHM.md](./ALGORITHM.md) | 전체 빌드 알고리즘 명세 |
 | [BOUNDARY.md](./BOUNDARY.md) | Builder-Studio 경계 |
 | [ROADMAP.md](./ROADMAP.md) | 향후 확장 계획 |
