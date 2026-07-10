@@ -223,3 +223,4 @@ Builder는 최소한 다음 규칙을 검증해야 합니다.
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | BuildSpec 중심 설계 |
 | [API_CONTRACT.md](./API_CONTRACT.md) | BuildSpec을 받는 서비스 계약 |
 | [BOUNDARY.md](./BOUNDARY.md) | Builder-Studio 경계 |
+| [ALGORITHM.md](./ALGORITHM.md) | 전체 빌드 알고리즘 명세 |
