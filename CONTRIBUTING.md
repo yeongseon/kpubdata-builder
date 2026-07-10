@@ -139,13 +139,13 @@ gitGraph
 
 ```mermaid
 flowchart TD
-    Start[이슈 확인 및 선택] --> Branch[새 브랜치 만들기]
+    Start([시작: 이슈 확인 및 선택]) --> Branch[새 브랜치 만들기]
     Branch --> Coding[코드 수정 및 테스트]
     Coding --> Commit[변경 사항 커밋]
     Commit --> Push[내 GitHub에 올리기]
     Push --> PR[Pull Request 생성]
     PR --> Review[코드 리뷰 및 수정]
-    Review --> Merge[main에 합치기]
+    Review --> Merge([완료: main에 합치기])
 ```
 
 1.  **브랜치 생성**: `git checkout -b feat/issue-번호-설명`

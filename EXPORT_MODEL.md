@@ -121,11 +121,13 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-    S1[Step 1: BaseExporter 상속받기] --> S2[Step 2: name 속성 구현]
+    Start([시작]) --> S1[Step 1: BaseExporter 상속받기]
+    S1 --> S2[Step 2: name 속성 구현]
     S2 --> S3[Step 3: export 메서드 구현]
     S3 --> S4[Step 4: ExportResult 반환]
     S4 --> S5[Step 5: 레지스트리에 등록]
     S5 --> S6[Step 6: 테스트 코드 추가]
+    S6 --> End([완료])
 ```
 
 ### Step 1: BaseExporter 상속받기
