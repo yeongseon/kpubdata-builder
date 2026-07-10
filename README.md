@@ -44,7 +44,7 @@
 ```mermaid
 flowchart LR
     BS[BuildSpec] --> B[Bronze: raw fetch]
-    B --> S[Silver: tabularize/validate\n(Polars)]
+    B --> S["Silver: tabularize/validate<br/>(Polars)"]
     S --> G[Gold: package]
     G --> E[Export]
     E --> M[Manifest]
