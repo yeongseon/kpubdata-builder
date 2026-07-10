@@ -165,6 +165,72 @@ flowchart LR
 
 ## 엔티티 관계도
 
+```mermaid
+erDiagram
+    BUILDSPEC ||--|{ SOURCEREF : "defines (1..N)"
+    BUILDSPEC ||--|{ EXPORTTARGET : "defines (1..N)"
+    BUILDSPEC ||--o| SPLITSPEC : "defines (0..1)"
+    BUILDSPEC ||--|| BUILDMANIFEST : "records result"
+    SOURCEREF }|--|| ARTIFACTDATASET : "populates"
+    ARTIFACTDATASET ||--|{ EXPORTTARGET : "formatted by"
+    EXPORTTARGET ||--|{ PHYSICALFILE : "writes"
+    BUILDMANIFEST ||--|{ PHYSICALFILE : "records as outputs"
+
+    BUILDSPEC {
+        string dataset_id PK
+        string title
+        string description
+        tuple transforms
+        dict metadata
+        bool publish
+    }
+    SOURCEREF {
+        string provider
+        string dataset
+        dict params
+        string alias
+        string normalization_mode
+    }
+    SPLITSPEC {
+        string mode
+        dict ratios
+        string key
+        int seed
+    }
+    ARTIFACTDATASET {
+        list records
+        dict schema
+        dict provenance
+        dict statistics
+    }
+    EXPORTTARGET {
+        string kind
+        string output_path
+        dict options
+    }
+    BUILDMANIFEST {
+        string build_id PK
+        datetime started_at
+        datetime finished_at
+        string schema_version
+        tuple inputs
+        tuple outputs
+        tuple warnings
+        tuple errors
+        dict row_counts
+        dict schema_summaries
+        tuple provenance
+        string build_environment
+        string inputs_fingerprint
+    }
+    PHYSICALFILE {
+        string path PK
+        string kind
+    }
+```
+
+> 위 다이어그램의 텍스트 버전은 아래와 같습니다.
+
 ```text
 [BuildSpec] (레시피)
     |
