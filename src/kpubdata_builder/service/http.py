@@ -94,11 +94,20 @@ def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
                 return
             self._write(response.status_code, response.body)
 
+        def _send_cors_headers(self) -> None:
+            # 로컬 개발 도구로서 Studio 등 브라우저 클라이언트의 크로스오리진 요청을
+            # 허용한다 (#254).
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.send_header("Access-Control-Max-Age", "86400")
+
         def _write(self, status_code: int, body: dict[str, JsonValue]) -> None:
             payload = json.dumps(body, ensure_ascii=False, default=str).encode("utf-8")
             self.send_response(status_code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(payload)))
+            self._send_cors_headers()
             self.end_headers()
             _ = self.wfile.write(payload)
 
@@ -107,6 +116,13 @@ def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:  # noqa: N802 - http.server 규약
             self._dispatch("POST")
+
+        def do_OPTIONS(self) -> None:  # noqa: N802 - http.server 규약
+            # CORS preflight 요청에 응답한다 (#254). body 없이 204로 허용 헤더만 반환한다.
+            self.send_response(204)
+            self.send_header("Content-Length", "0")
+            self._send_cors_headers()
+            self.end_headers()
 
         def log_message(self, format: str, *args: object) -> None:
             # 기본 stderr 접근 로그를 억제한다.

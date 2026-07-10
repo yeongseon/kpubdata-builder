@@ -419,6 +419,25 @@ class TestHttpAdapter:
             body = cast(dict[str, object], json.loads(response.read()))
         assert body["status"] == "valid"
 
+    def test_options_preflight_returns_204_with_cors(
+        self, http_server: tuple[str, HTTPServer, threading.Thread]
+    ) -> None:
+        # CORS preflight(OPTIONS)가 204와 허용 헤더를 반환해야 한다 (#254).
+        base_url, _, _ = http_server
+        req = urllib.request.Request(f"{base_url}/build", method="OPTIONS")
+        with urllib.request.urlopen(req, timeout=2.0) as response:
+            assert response.status == 204
+            assert response.headers["Access-Control-Allow-Origin"] == "*"
+            assert "POST" in response.headers["Access-Control-Allow-Methods"]
+
+    def test_response_includes_cors_header(
+        self, http_server: tuple[str, HTTPServer, threading.Thread]
+    ) -> None:
+        # 일반 응답에도 CORS 헤더가 포함되어야 한다 (#254).
+        base_url, _, _ = http_server
+        with urllib.request.urlopen(f"{base_url}/version", timeout=2.0) as response:
+            assert response.headers["Access-Control-Allow-Origin"] == "*"
+
 
 class TestHttpRobustness:
     """#218 (JSON 500 handler) 과 #219 (DoS hardening) 검증."""
