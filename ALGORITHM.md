@@ -25,8 +25,8 @@ def run_build(
 
 ```mermaid
 flowchart TD
-    A[run_build 진입] --> B[1. validate_spec: fail-fast 검증]
-    B -->|ValidationError| Z[failed 종료]
+    A([run_build 진입]) --> B[1. validate_spec: fail-fast 검증]
+    B -->|ValidationError| Z([failed 종료])
     B -->|통과| C[2. BuildContext.create<br/>run workspace 준비]
     C --> D{3. 각 source 순회}
     D --> E[per-source 파이프라인<br/>Bronze to Silver to Gold]
@@ -36,7 +36,7 @@ flowchart TD
     G --> D
     D -->|모든 source 완료| H[4. 상태 판정<br/>errors 있으면 failed]
     H --> I[5. BuildManifest 조립 + 기록]
-    I --> J[BuildResult 반환]
+    I --> J([BuildResult 반환])
 ```
 
 의사코드:
@@ -101,15 +101,17 @@ build/{run_id}/
 
 ```mermaid
 flowchart LR
-    B1["build_bronze_artifact<br/>source_key=provider.dataset"] --> B2[_retag_bronze_artifact]
+    Start([source 파이프라인 시작]) --> B1["build_bronze_artifact<br/>source_key=provider.dataset"]
+    B1 --> B2[_retag_bronze_artifact]
     B2 --> B3[persist_bronze_artifact]
     B3 --> S1["build_silver_dataset"]
     S1 --> S2{validation.ok?}
-    S2 -->|No| SX[DatasetValidationError<br/>중단]
+    S2 -->|No| SX([DatasetValidationError<br/>중단])
     S2 -->|Yes| S3[persist_silver_dataset]
     S3 --> G1["build_gold_package<br/>exports/splits 반영"]
     G1 --> G2[persist_gold_package]
     G2 --> G3[build/render dataset_card<br/>gold README.md 기록]
+    G3 --> End([source 완료])
 ```
 
 1. **Bronze — 원시 수집/스냅샷**
