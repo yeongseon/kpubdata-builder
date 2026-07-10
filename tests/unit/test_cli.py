@@ -410,3 +410,43 @@ def test_publish_kaggle_end_to_end(
     assert "create_new:public=False" in calls
     assert "publish: dataset.sample -> kaggle" in captured.out
     assert "artifacts: 1" in captured.out
+
+
+def test_serve_invokes_http_server(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # serve 명령이 http.serve를 올바른 host/port로 호출해야 한다 (#249).
+    import kpubdata_builder.service.http as http_module
+    from kpubdata_builder.service import BuilderService
+
+    captured_kwargs: dict[str, object] = {}
+
+    def fake_serve(service: object, *, host: str, port: int) -> None:
+        captured_kwargs["host"] = host
+        captured_kwargs["port"] = port
+        # --output-dir가 BuilderService.output_root로 올바르게 전달되는지 확인한다 (#249 review).
+        assert isinstance(service, BuilderService)
+        captured_kwargs["output_root"] = service._output_root
+
+    monkeypatch.setattr(http_module, "serve", fake_serve)
+
+    exit_code = main(
+        [
+            "serve",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "9123",
+            "--output-dir",
+            str(tmp_path),
+        ]
+    )
+    out = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert captured_kwargs == {
+        "host": "0.0.0.0",
+        "port": 9123,
+        "output_root": tmp_path,
+    }
+    assert "serving kpubdata-builder" in out

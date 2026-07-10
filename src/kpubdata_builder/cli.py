@@ -1,6 +1,6 @@
 """kpubdata-builder용 명령줄 진입점.
 
-이 모듈은 argparse 기반 CLI를 구성하고, validate/preview/build/publish 명령의
+이 모듈은 argparse 기반 CLI를 구성하고, validate/preview/build/publish/serve 명령의
 진입점을 제공한다.
 
 주요 함수:
@@ -112,6 +112,27 @@ def build_parser() -> argparse.ArgumentParser:
         "--public",
         action="store_true",
         help="Create new datasets as public (kaggle only; default: private).",
+    )
+
+    serve_cmd = subparsers.add_parser(
+        "serve",
+        help="Run the Builder HTTP service.",
+    )
+    serve_cmd.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Bind host (default: 127.0.0.1).",
+    )
+    serve_cmd.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Bind port (default: 8000).",
+    )
+    serve_cmd.add_argument(
+        "--output-dir",
+        default="build",
+        help="Run workspace root directory (default: build).",
     )
 
     return parser
@@ -316,6 +337,36 @@ def _run_publish(
     return 0
 
 
+def _run_serve(*, output_dir: str, host: str, port: int) -> int:
+    """BuilderService를 HTTP 서버로 실행한다 (#249).
+
+    매개변수:
+        output_dir: 실행 워크스페이스 루트.
+        host: 바인딩 호스트.
+        port: 바인딩 포트.
+
+    반환값:
+        int: 종료 코드. Ctrl-C로 중단 시 0.
+    """
+    from .service import BuilderService
+    from .service.http import serve
+
+    service = BuilderService(
+        output_root=Path(output_dir),
+        client_factory=_create_client,
+    )
+    # 장시간 실행 명령이므로 시작 로그가 파이프 버퍼링에 갈리지 않도록 즉시 flush한다.
+    print(
+        f"serving kpubdata-builder on http://{host}:{port} (output: {output_dir})",
+        flush=True,
+    )
+    try:
+        serve(service, host=host, port=port)
+    except KeyboardInterrupt:
+        print("\nshutting down", file=sys.stderr)
+    return 0
+
+
 def dispatch(args: argparse.Namespace) -> int:
     """파싱된 argparse 결과를 실제 명령 실행 함수로 전달한다.
 
@@ -344,6 +395,12 @@ def dispatch(args: argparse.Namespace) -> int:
             destination=args.destination,
             artifacts_dir=args.artifacts_dir,
             public=args.public,
+        )
+    if command == "serve":
+        return _run_serve(
+            output_dir=args.output_dir,
+            host=args.host,
+            port=args.port,
         )
     # 일반적인 CLI 경로로는 도달할 수 없지만(argparse가 알 수 없는 하위 명령을 거부함),
     # 프로그래밍 방식 호출자를 위한 방어적 대체 경로로 유지한다.
