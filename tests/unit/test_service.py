@@ -204,6 +204,24 @@ class TestListBuilds:
         assert resp.status_code == 400
         assert "limit" in str(resp.body.get("error", ""))
 
+    def test_dispatch_get_builds_query_limit(self, tmp_path: Path) -> None:
+        # ?limit=N 쿼리 파라미터를 지원해야 한다 (#252).
+        service = _service(tmp_path)
+        service.build(VALID_SPEC_YAML, run_id="run_q1")
+        service.build(VALID_SPEC_YAML, run_id="run_q2")
+        resp = dispatch(service, "GET", "/builds", None, query="limit=1")
+        assert resp.status_code == 200
+        builds = resp.body["builds"]
+        assert isinstance(builds, list)
+        assert len(builds) == 1
+
+    def test_dispatch_get_builds_query_limit_guard(self, tmp_path: Path) -> None:
+        # 쿼리 limit이 양의 정수가 아니면 400 (#252).
+        resp = dispatch(_service(tmp_path), "GET", "/builds", None, query="limit=0")
+        assert resp.status_code == 400
+        resp = dispatch(_service(tmp_path), "GET", "/builds", None, query="limit=abc")
+        assert resp.status_code == 400
+
 
 class TestDispatch:
     def test_routes_post_validate(self, tmp_path: Path) -> None:
