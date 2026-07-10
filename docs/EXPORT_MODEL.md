@@ -1,1 +1,1 @@
---8<-- "../EXPORT_MODEL.md"
+../EXPORT_MODEL.md

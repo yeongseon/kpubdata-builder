@@ -171,9 +171,9 @@ src/kpubdata_builder/
 
 ### 핵심 설계
 - [아키텍처](ARCHITECTURE.md): 시스템 아키텍처 및 레이어 설계
-- [도메인 모델](domain-model.md): 핵심 도메인 모델(BuildSpec, Artifact 등) 정의
-- [내보내기 모델](export-model.md): 데이터 변환 및 Exporter 구현 모델
-- [API 규약](api-contract.md): CLI 및 파이썬 인터페이스 규약
+- [도메인 모델](DOMAIN_MODEL.md): 핵심 도메인 모델(BuildSpec, Artifact 등) 정의
+- [내보내기 모델](EXPORT_MODEL.md): 데이터 변환 및 Exporter 구현 모델
+- [API 규약](API_CONTRACT.md): CLI 및 파이썬 인터페이스 규약
 
 ### 개발 가이드
 - [에이전트 가이드](AGENTS.md): AI 에이전트를 위한 개발 규칙 및 가이드
@@ -207,9 +207,9 @@ src/kpubdata_builder/
 | 문서 | 설명 |
 | :--- | :--- |
 | [아키텍처](ARCHITECTURE.md) | 시스템 아키텍처 설계 |
-| [도메인 모델](domain-model.md) | 도메인 모델 정의 |
-| [내보내기 모델](export-model.md) | 데이터 변환 모델 |
-| [API 규약](api-contract.md) | API 인터페이스 규약 |
+| [도메인 모델](DOMAIN_MODEL.md) | 도메인 모델 정의 |
+| [내보내기 모델](EXPORT_MODEL.md) | 데이터 변환 모델 |
+| [API 규약](API_CONTRACT.md) | API 인터페이스 규약 |
 | [에이전트 가이드](AGENTS.md) | 에이전트 개발 가이드 |
 | [기여 방법](CONTRIBUTING.md) | 프로젝트 기여 가이드 |
 | [요구사항 (PRD)](PRD.md) | 제품 요구사항 정의서 |
