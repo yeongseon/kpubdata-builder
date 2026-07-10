@@ -1,1 +1,1 @@
---8<-- "../API_CONTRACT.md"
+../API_CONTRACT.md

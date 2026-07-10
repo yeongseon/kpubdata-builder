@@ -257,7 +257,7 @@ to avoid data leakage. Recommended split: train ≤ 2023, test = 2024.
 
 ## 7. Config YAML 작성 규칙
 
-Config YAML 스키마 자체는 [publishing.md](./publishing.md#config-yaml-스키마)를 참고한다. 여기서는 **표준 준수를 위한 작성 규칙**만 정의한다.
+Config YAML 스키마 자체는 [publishing.md](./publishing.md#config-yaml)를 참고한다. 여기서는 **표준 준수를 위한 작성 규칙**만 정의한다.
 
 ### fetch_params
 

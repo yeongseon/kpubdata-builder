@@ -1,1 +1,1 @@
---8<-- "../DOMAIN_MODEL.md"
+../DOMAIN_MODEL.md
