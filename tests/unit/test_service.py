@@ -429,6 +429,9 @@ class TestHttpAdapter:
             assert response.status == 204
             assert response.headers["Access-Control-Allow-Origin"] == "*"
             assert "POST" in response.headers["Access-Control-Allow-Methods"]
+            assert "OPTIONS" in response.headers["Access-Control-Allow-Methods"]
+            assert response.headers["Access-Control-Allow-Headers"] == "Content-Type"
+            assert response.headers["Access-Control-Max-Age"] == "86400"
 
     def test_response_includes_cors_header(
         self, http_server: tuple[str, HTTPServer, threading.Thread]
@@ -437,6 +440,19 @@ class TestHttpAdapter:
         base_url, _, _ = http_server
         with urllib.request.urlopen(f"{base_url}/version", timeout=2.0) as response:
             assert response.headers["Access-Control-Allow-Origin"] == "*"
+
+    def test_cors_allow_origin_is_configurable(
+        self,
+        http_server: tuple[str, HTTPServer, threading.Thread],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # 환경변수로 허용 Origin을 특정 값으로 제한할 수 있어야 한다 (#254 보안 강화).
+        monkeypatch.setenv("KPUBDATA_BUILDER_CORS_ALLOW_ORIGIN", "http://localhost:5173")
+        base_url, _, _ = http_server
+        with urllib.request.urlopen(f"{base_url}/version", timeout=2.0) as response:
+            assert (
+                response.headers["Access-Control-Allow-Origin"] == "http://localhost:5173"
+            )
 
 
 class TestHttpRobustness:
