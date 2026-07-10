@@ -18,6 +18,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
+from urllib.parse import parse_qs
 
 import yaml
 
@@ -248,6 +249,7 @@ def dispatch(
     method: str,
     path: str,
     body: Mapping[str, JsonValue] | None,
+    query: str = "",
 ) -> ServiceResponse:
     """(method, path)를 BuilderService 연산으로 라우팅한다."""
     if method == "GET" and path == "/version":
@@ -300,7 +302,19 @@ def dispatch(
 
     if method == "GET" and path == "/builds":
         limit = 50
-        if body is not None and "limit" in body:
+        # 표준 REST 스타일에 맞게 쿼리 파라미터(?limit=N)를 우선 지원한다 (#252).
+        # 기존 소비자 호환을 위해 body의 limit도 계속 받아들인다.
+        query_params = parse_qs(query)
+        if "limit" in query_params:
+            raw_limit = query_params["limit"][-1]
+            try:
+                query_limit = int(raw_limit)
+            except ValueError:
+                return ServiceResponse(400, {"error": "'limit' must be a positive integer"})
+            if query_limit < 1:
+                return ServiceResponse(400, {"error": "'limit' must be a positive integer"})
+            limit = query_limit
+        elif body is not None and "limit" in body:
             limit_value = body["limit"]
             if not isinstance(limit_value, int) or isinstance(limit_value, bool) or limit_value < 1:
                 return ServiceResponse(400, {"error": "'limit' must be a positive integer"})

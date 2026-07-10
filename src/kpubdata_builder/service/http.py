@@ -77,12 +77,14 @@ def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
                     self._write(400, {"error": "JSON body must be an object"})
                     return
                 body = cast(dict[str, JsonValue], parsed)
-            # 쿼리 스트링이 경로/run_id로 새지 않도록 path 컴포넌트만으로 라우팅한다 (#184).
-            path = urlsplit(self.path).path
+            # 쿼리 스트링이 경로/run_id로 새지 않도록 path 컴포넌트만으로 라우팅하고,
+            # 쿼리는 별도로 dispatch에 전달한다 (#252).
+            split = urlsplit(self.path)
+            path = split.path
             # dispatch()에서 예상치 못한 예외가 발생하면 연결을 끊는 대신 JSON 500을
             # 반환한다. 상세 정보는 서버 로그에만 기록하고 클라이언트에는 누설하지 않는다 (#218).
             try:
-                response = dispatch(service, method, path, body)
+                response = dispatch(service, method, path, body, query=split.query)
             except Exception:
                 _logger.error(
                     "Unhandled exception in dispatch: %s %s\n%s",
