@@ -113,7 +113,7 @@ uv sync --extra dev --extra publish --no-sources
 우리는 `main` 브랜치에 직접 코드를 올리지 않습니다. 반드시 새로운 브랜치를 만들어 작업한 뒤 **Pull Request (PR)**를 통해 합칩니다.
 
 ```mermaid
-gitgraph
+gitGraph
     commit id: "initial"
     branch feat/issue-3-csv-exporter
     checkout feat/issue-3-csv-exporter
