@@ -1,0 +1,51 @@
+name: 버그 리포트
+description: 예상과 다르게 동작하는 문제를 신고합니다
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        버그를 신고해 주셔서 감사합니다. 재현에 필요한 정보를 최대한 채워주세요.
+  - type: textarea
+    id: summary
+    attributes:
+      label: 문제 요약
+      description: 무엇이 잘못되었나요?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 재현 절차
+      description: 문제를 재현하는 단계별 절차 또는 최소 재현 예시(BuildSpec, 명령어 등)
+      placeholder: |
+        1. `kpubdata-builder build specs/xxx.yaml` 실행
+        2. ...
+        3. 오류 발생
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 기대 동작
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 실제 동작 / 오류 로그
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 실행 환경
+      description: OS, Python 버전, kpubdata-builder 버전, kpubdata 버전 등
+      placeholder: |
+        - OS: macOS 14 / Ubuntu 24.04
+        - Python: 3.12
+        - kpubdata-builder: x.y.z
+    validations:
+      required: false
