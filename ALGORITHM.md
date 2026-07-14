@@ -8,6 +8,7 @@
 
 - **정식 경로(이 문서의 대상)**: `kpubdata_builder.pipeline.orchestrator.run_build`. Service·CLI가 사용하는 Medallion 파이프라인이며 모든 신규 작업의 기준입니다.
 - **레거시 경로(대상 아님, DEPRECATED)**: `scripts/publish_to_hf.py` 계열. 별도 설정 스키마를 사용하는 구형 흐름으로, 자세한 구분은 [ARCHITECTURE.md §9](./ARCHITECTURE.md#9-vs-208)를 참고하세요.
+- **기능 단위 시퀀스**(validate/preview/build/publish 각 CLI 명령의 처리 흐름)는 [FEATURE_FLOWS.md](./FEATURE_FLOWS.md)를 참고하세요. 이 문서는 알고리즘(처리 순서)을, FEATURE_FLOWS는 기능별 호출 시퀀스를 다룹니다.
 
 진입점 시그니처:
 
