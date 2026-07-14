@@ -26,3 +26,4 @@ PR 제목은 Conventional Commits 형식을 권장합니다: feat/fix/docs/refac
 - [ ] 커밋 메시지를 영어로 작성했다
 - [ ] `kpubdata` provider 로직을 중복 구현하지 않았다
 - [ ] 필요한 단위/단계 인지형 테스트를 추가했다
+- [ ] 사용자 노출 기능 변경 시 문서를 분류해 갱신했다: 제품 계약→PRD, 향후 의도→ROADMAP, 릴리스 변경→CHANGELOG (해당 시)
