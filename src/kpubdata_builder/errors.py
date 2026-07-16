@@ -90,5 +90,4 @@ __all__ = [
     "TabularError",
     "ValidationError",
     "DatasetValidationError",
-    "ExecutionError",
 ]
