@@ -87,7 +87,12 @@ def persist_silver_dataset(
     silver_dir = output_root / run_id / "silver" / source_key_segment
     ensure_within(output_root, silver_dir, label="silver directory")
 
-    silver_dir.mkdir(parents=True, exist_ok=True)
+    import shutil
+    import tempfile
+
+    from .._atomic import atomic_replace_dir
+
+    silver_dir.parent.mkdir(parents=True, exist_ok=True)
 
     table_path = silver_dir / "table.parquet"
     schema_path = silver_dir / "schema.json"
@@ -95,11 +100,20 @@ def persist_silver_dataset(
     preview_path = silver_dir / "preview.json"
     validation_path = silver_dir / "validation.json"
 
-    dataset.table.write_parquet(table_path)
-    _write_json(schema_path, asdict(dataset.schema))
-    _write_json(stats_path, asdict(dataset.statistics))
-    _write_json(preview_path, asdict(dataset.preview))
-    _write_json(validation_path, asdict(dataset.validation))
+    # Atomic write: write to temp dir then rename
+    tmp_dir = Path(tempfile.mkdtemp(dir=silver_dir.parent, prefix=".silver_tmp_"))
+    try:
+        dataset.table.write_parquet(tmp_dir / "table.parquet")
+        _write_json(tmp_dir / "schema.json", asdict(dataset.schema))
+        _write_json(tmp_dir / "stats.json", asdict(dataset.statistics))
+        _write_json(tmp_dir / "preview.json", asdict(dataset.preview))
+        _write_json(tmp_dir / "validation.json", asdict(dataset.validation))
+
+        # Atomic swap: 기존 디렉터리가 있어도 데이터 유실 없이 교체한다 (#180).
+        atomic_replace_dir(tmp_dir, silver_dir)
+    except BaseException:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        raise
 
     return SilverPersistResult(
         silver_dir=silver_dir,

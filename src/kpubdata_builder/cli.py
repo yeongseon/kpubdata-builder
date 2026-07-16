@@ -1,7 +1,7 @@
 """kpubdata-builder용 명령줄 진입점.
 
-이 모듈은 argparse 기반 CLI를 구성하고, validate/preview/build 명령의 진입점을
-제공한다.
+이 모듈은 argparse 기반 CLI를 구성하고, validate/preview/build/publish/serve 명령의
+진입점을 제공한다.
 
 주요 함수:
     - build_parser: 하위 명령을 포함한 ArgumentParser 구성
@@ -18,8 +18,9 @@ from pathlib import Path
 from typing import cast
 
 from . import __version__
-from .errors import SpecLoadError, ValidationError
+from .errors import PublishError, SpecLoadError, ValidationError
 from .pipeline import preview_build, run_build
+from .publishers import PUBLISHER_REGISTRY
 from .spec import load_spec
 from .spec.validator import validate_spec
 from .stages.bronze.build import SourceClient
@@ -84,6 +85,54 @@ def build_parser() -> argparse.ArgumentParser:
         "--run-id",
         default=None,
         help="Run identifier (default: generated timestamp).",
+    )
+
+    publish_cmd = subparsers.add_parser(
+        "publish",
+        help="Publish build artifacts to a local or remote destination.",
+    )
+    publish_cmd.add_argument("spec", help="Path to the BuildSpec YAML file.")
+    publish_cmd.add_argument(
+        "--target",
+        choices=sorted(PUBLISHER_REGISTRY.keys()),
+        default="local",
+        help="Publish target (default: local).",
+    )
+    publish_cmd.add_argument(
+        "--destination",
+        required=True,
+        help="Local directory path (local) or HF repo id (huggingface).",
+    )
+    publish_cmd.add_argument(
+        "--artifacts-dir",
+        required=True,
+        help="Directory whose files will be published.",
+    )
+    publish_cmd.add_argument(
+        "--public",
+        action="store_true",
+        help="Create new datasets as public (kaggle only; default: private).",
+    )
+
+    serve_cmd = subparsers.add_parser(
+        "serve",
+        help="Run the Builder HTTP service.",
+    )
+    serve_cmd.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Bind host (default: 127.0.0.1).",
+    )
+    serve_cmd.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Bind port (default: 8000).",
+    )
+    serve_cmd.add_argument(
+        "--output-dir",
+        default="build",
+        help="Run workspace root directory (default: build).",
     )
 
     return parser
@@ -222,6 +271,102 @@ def _run_preview(spec_path: str, *, limit: int) -> int:
     return 0
 
 
+def _run_publish(
+    spec_path: str,
+    *,
+    target: str,
+    destination: str,
+    artifacts_dir: str,
+    public: bool = False,
+) -> int:
+    """BuildSpec을 로드·검증한 뒤 지정한 target에 산출물을 게시한다.
+
+    매개변수:
+        spec_path: 게시 기준 BuildSpec YAML 경로.
+        target: 게시 대상 식별자 (PUBLISHER_REGISTRY 키).
+        destination: 로컬 디렉터리 경로 또는 원격 repo id.
+        artifacts_dir: 게시할 파일이 있는 디렉터리.
+        public: kaggle 신규 데이터셋을 공개로 만들지 여부 (다른 target은 무시).
+
+    반환값:
+        int: 성공 시 0, 로드/검증/게시 실패 시 1.
+    """
+    try:
+        spec = load_spec(Path(spec_path))
+        validate_spec(spec)
+    except SpecLoadError as exc:
+        print(f"error: failed to load spec: {exc}", file=sys.stderr)
+        return 1
+    except ValidationError as exc:
+        print("error: spec validation failed:", file=sys.stderr)
+        for problem in exc.problems:
+            print(f"  - {problem}", file=sys.stderr)
+        return 1
+
+    artifacts_path = Path(artifacts_dir)
+    if not artifacts_path.is_dir():
+        print(f"error: no artifacts found in {artifacts_dir}", file=sys.stderr)
+        return 1
+
+    publisher = PUBLISHER_REGISTRY[target]
+
+    # 레이아웃 단위(Kaggle)는 디렉터리 자체를, 파일 단위(local/HF)는 개별 파일을
+    # 전달한다. 이렇게 publisher별 입력 계약 불일치를 해소한다 (#176).
+    paths: tuple[Path, ...]
+    if publisher.expects_directory:
+        paths = (artifacts_path,)
+    else:
+        paths = tuple(sorted(p for p in artifacts_path.rglob("*") if p.is_file()))
+        if not paths:
+            print(f"error: no artifacts found in {artifacts_dir}", file=sys.stderr)
+            return 1
+
+    publish_kwargs: dict[str, object] = {"destination": destination}
+    if target == "kaggle":
+        publish_kwargs["public"] = public
+
+    try:
+        result = publisher.publish(paths, **publish_kwargs)  # type: ignore[arg-type]
+    except (PublishError, RuntimeError) as exc:
+        print(f"error: publish failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"publish: {spec.dataset_id} -> {target}")
+    print(f"  target: {result.reference}")
+    print(f"  artifacts: {result.artifact_count}")
+    return 0
+
+
+def _run_serve(*, output_dir: str, host: str, port: int) -> int:
+    """BuilderService를 HTTP 서버로 실행한다 (#249).
+
+    매개변수:
+        output_dir: 실행 워크스페이스 루트.
+        host: 바인딩 호스트.
+        port: 바인딩 포트.
+
+    반환값:
+        int: 종료 코드. Ctrl-C로 중단 시 0.
+    """
+    from .service import BuilderService
+    from .service.http import serve
+
+    service = BuilderService(
+        output_root=Path(output_dir),
+        client_factory=_create_client,
+    )
+    # 장시간 실행 명령이므로 시작 로그가 파이프 버퍼링에 갈리지 않도록 즉시 flush한다.
+    print(
+        f"serving kpubdata-builder on http://{host}:{port} (output: {output_dir})",
+        flush=True,
+    )
+    try:
+        serve(service, host=host, port=port)
+    except KeyboardInterrupt:
+        print("\nshutting down", file=sys.stderr)
+    return 0
+
+
 def dispatch(args: argparse.Namespace) -> int:
     """파싱된 argparse 결과를 실제 명령 실행 함수로 전달한다.
 
@@ -243,6 +388,20 @@ def dispatch(args: argparse.Namespace) -> int:
         return _run_preview(args.spec, limit=args.limit)
     if command == "build":
         return _run_build(args.spec, output_dir=args.output_dir, run_id=args.run_id)
+    if command == "publish":
+        return _run_publish(
+            args.spec,
+            target=args.target,
+            destination=args.destination,
+            artifacts_dir=args.artifacts_dir,
+            public=args.public,
+        )
+    if command == "serve":
+        return _run_serve(
+            output_dir=args.output_dir,
+            host=args.host,
+            port=args.port,
+        )
     # 일반적인 CLI 경로로는 도달할 수 없지만(argparse가 알 수 없는 하위 명령을 거부함),
     # 프로그래밍 방식 호출자를 위한 방어적 대체 경로로 유지한다.
     return 2

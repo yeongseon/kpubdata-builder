@@ -49,6 +49,16 @@ class BasePublisher(ABC):
     def name(self) -> str:
         """게시 도구 식별자를 반환한다."""
 
+    @property
+    def expects_directory(self) -> bool:
+        """publish가 개별 파일이 아닌 디렉터리(레이아웃)를 입력으로 기대하는지 여부.
+
+        기본값은 ``False``로, 호출자는 개별 파일 경로들을 전달한다. Kaggle처럼
+        ``dataset-metadata.json``이 포함된 디렉터리 단위를 요구하는 publisher는
+        이를 ``True``로 재정의한다 (#176).
+        """
+        return False
+
     @abstractmethod
     def publish(self, artifact_paths: tuple[Path, ...], *, destination: str) -> PublishResult:
         """생성된 산출물 경로를 지정한 destination에 게시한다.

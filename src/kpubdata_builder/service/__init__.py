@@ -10,10 +10,11 @@ Studio 등 외부 UI가 Builder를 호출할 수 있도록 validate/preview/buil
 
 from __future__ import annotations
 
-from .app import BuilderService, ServiceResponse, dispatch
+from .app import API_CONTRACT_VERSION, BuilderService, ServiceResponse, dispatch
 from .http import make_handler, serve
 
 __all__ = [
+    "API_CONTRACT_VERSION",
     "BuilderService",
     "ServiceResponse",
     "dispatch",

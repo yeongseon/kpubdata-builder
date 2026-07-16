@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..spec import BuildSpec, SourceRef
+from ..spec.validator import validate_spec
 from ..stages.bronze.build import SourceClient, build_bronze_artifact
 from ..stages.silver.build import build_silver_dataset
 from ..tabular import DEFAULT_PREVIEW_LIMIT, PreviewSlice, SchemaInfo
@@ -109,8 +110,12 @@ def preview_build(
 
     예외:
         ValueError: limit이 1보다 작은 경우.
+        ValidationError: spec이 최소 실행 요건을 충족하지 못한 경우. 유효하지 않은
+            spec을 부분 실행하거나 빈 결과로 돌려보내지 않고 빠르게 실패시켜
+            서비스 레이어와 동일하게 동작하도록 한다 (#193).
     """
     if limit < 1:
         raise ValueError(f"limit must be >= 1, got {limit}")
+    validate_spec(spec)
     previews = tuple(_preview_source(source, client=client, limit=limit) for source in spec.sources)
     return PreviewResult(previews=previews)

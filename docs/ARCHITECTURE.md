@@ -1,1 +1,1 @@
---8<-- "../ARCHITECTURE.md"
+../ARCHITECTURE.md

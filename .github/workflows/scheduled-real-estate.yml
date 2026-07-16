@@ -1,0 +1,26 @@
+# 부동산 실거래가 — monthly incremental (1st~10th)
+name: "Scheduled: Real Estate"
+
+on:
+  schedule:
+    - cron: "30 0 1-10 * *"
+  workflow_dispatch:
+
+jobs:
+  apt-trade:
+    uses: ./.github/workflows/publish-dataset.yml
+    with:
+      mode: ""
+      config: scripts/configs/seoul_apartment_trades.yaml
+    secrets:
+      KPUBDATA_DATAGO_API_KEY: ${{ secrets.KPUBDATA_DATAGO_API_KEY }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+  apt-rent:
+    uses: ./.github/workflows/publish-dataset.yml
+    with:
+      mode: ""
+      config: scripts/configs/seoul_apartment_rent.yaml
+    secrets:
+      KPUBDATA_DATAGO_API_KEY: ${{ secrets.KPUBDATA_DATAGO_API_KEY }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}

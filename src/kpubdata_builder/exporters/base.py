@@ -18,6 +18,7 @@ from pathlib import Path
 from ..artifact import ArtifactDataset
 from ..errors import ExportError
 from ..spec import ExportTarget
+from ..stages._path_safety import safe_output_path
 
 
 @dataclass(frozen=True)
@@ -47,8 +48,9 @@ def ensure_output_dir(output_dir: Path, relative_output_path: str) -> Path:
 
     예외:
         ExportError: 디렉터리 생성 실패 시.
+        PathTraversalError: relative_output_path가 output_dir를 벗어나는 경우 (#210).
     """
-    destination = output_dir / relative_output_path
+    destination = safe_output_path(output_dir, relative_output_path)
     try:
         destination.parent.mkdir(parents=True, exist_ok=True)
     except OSError as exc:

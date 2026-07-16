@@ -54,6 +54,54 @@ uv run ruff check .
 uv run mypy src
 ```
 
+### Step 3-1: 의존성 해석 전략 (Dependency-Resolution Strategy)
+
+`kpubdata-builder`는 `kpubdata`를 두 가지 방법으로 해석합니다. 상황에 따라 아래 중 하나를 선택하세요.
+
+#### 로컬 개발 (Local Development) — 기본 권장 방식
+
+`pyproject.toml`의 `[tool.uv.sources]` 섹션이 `kpubdata`를 **형제 디렉터리의 editable checkout**으로 연결합니다.
+
+```toml
+[tool.uv.sources]
+kpubdata = { path = "../kpubdata", editable = true }
+```
+
+이 방식을 사용하려면 `kpubdata` 저장소를 **같은 부모 디렉터리에** 함께 클론해야 합니다.
+
+```bash
+# 부모 디렉터리 기준 구조
+~/projects/
+├── kpubdata/          # ← 이 저장소가 있어야 함
+└── kpubdata-builder/  # ← 현재 저장소
+
+git clone https://github.com/yeongseon/kpubdata.git ../kpubdata
+uv sync --extra dev    # ../kpubdata 를 editable로 연결
+```
+
+형제 디렉터리가 존재하면 `uv sync`는 자동으로 PyPI 대신 로컬 소스를 사용합니다.
+
+#### CI / PyPI 배포 — `--no-sources` 플래그
+
+CI(`publish-dataset.yml`)와 패키지 배포 환경에서는 `--no-sources` 플래그를 사용합니다.
+
+```bash
+uv sync --extra dev --extra publish --no-sources
+```
+
+`--no-sources`는 `[tool.uv.sources]`를 무시하고, `pyproject.toml`의 `dependencies`에 명시된 **PyPI 릴리스 핀**(`kpubdata>=0.5.0,<0.6`)을 직접 설치합니다. 형제 디렉터리가 없어도 작동합니다.
+
+#### 핀 범위(`>=0.5.0,<0.6`)를 이렇게 설정한 이유
+
+`kpubdata-builder`는 `kpubdata` 0.5.x의 API(`Client.dataset(...).list` 등)에 의존합니다. 0.6 이상은 호환성 정책이 확정되지 않아 현재로서는 허용하지 않습니다. 호환 정책이 확정되면 상한을 올릴 예정입니다 (관련 이슈: #213).
+
+#### 요약
+
+| 환경 | 명령 | `kpubdata` 소스 |
+| :--- | :--- | :--- |
+| 로컬 개발 | `uv sync --extra dev` | `../kpubdata` (editable, 형제 디렉터리 필요) |
+| CI / 배포 | `uv sync ... --no-sources` | PyPI (`kpubdata>=0.5.0,<0.6`) |
+
 ## 3. 브랜치 전략과 협업 규칙
 
 프로젝트는 여러 사람이 함께 만듭니다. 서로의 코드가 엉키지 않도록 몇 가지 규칙을 정해두었습니다. 규칙은 적지만, **반드시 지켜야 합니다.**
@@ -65,7 +113,7 @@ uv run mypy src
 우리는 `main` 브랜치에 직접 코드를 올리지 않습니다. 반드시 새로운 브랜치를 만들어 작업한 뒤 **Pull Request (PR)**를 통해 합칩니다.
 
 ```mermaid
-gitgraph
+gitGraph
     commit id: "initial"
     branch feat/issue-3-csv-exporter
     checkout feat/issue-3-csv-exporter
@@ -91,13 +139,13 @@ gitgraph
 
 ```mermaid
 flowchart TD
-    Start[이슈 확인 및 선택] --> Branch[새 브랜치 만들기]
+    Start([시작: 이슈 확인 및 선택]) --> Branch[새 브랜치 만들기]
     Branch --> Coding[코드 수정 및 테스트]
     Coding --> Commit[변경 사항 커밋]
     Commit --> Push[내 GitHub에 올리기]
     Push --> PR[Pull Request 생성]
     PR --> Review[코드 리뷰 및 수정]
-    Review --> Merge[main에 합치기]
+    Review --> Merge([완료: main에 합치기])
 ```
 
 1.  **브랜치 생성**: `git checkout -b feat/issue-번호-설명`

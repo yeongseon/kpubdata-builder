@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import cast
 
@@ -133,17 +134,58 @@ def _parse_string_dict(value: object, *, field_name: str) -> dict[str, str]:
     return parsed
 
 
+def _validate_json_value(
+    value: object, *, field_name: str, _ancestors: frozenset[int] = frozenset()
+) -> JsonValue:
+    """값이 JSON 프리미티브/컨테이너인지 재귀적으로 검증한다.
+
+    YAML anchor/alias로 만들어진 순환 구조(예: ``a: &x {self: *x}``)를 만나면
+    무한 재귀로 ``RecursionError`` crash가 발생할 수 있다. 현재 재귀 경로상의
+    컨테이너 ``id()``를 추적해 순환을 감지하면 ``ValueError``로 명확히 실패한다
+    (load_spec이 이를 SpecLoadError로 감싼다) (#169).
+    """
+    if isinstance(value, float) and not math.isfinite(value):
+        # NaN/Infinity는 json.dumps가 비표준 토큰(NaN/Infinity)으로 직렬화하므로,
+        # 표준 JSON 계약을 깨지 않도록 비유한 float를 전역적으로 거부한다 (#201).
+        raise ValueError(f"{field_name} must be a finite number, got {value!r}")
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, (list, dict)):
+        marker = id(value)
+        if marker in _ancestors:
+            raise ValueError(f"{field_name} contains a circular reference")
+        child_ancestors = _ancestors | {marker}
+        if isinstance(value, list):
+            return [
+                _validate_json_value(
+                    item, field_name=f"{field_name}[{i}]", _ancestors=child_ancestors
+                )
+                for i, item in enumerate(value)
+            ]
+        result: dict[str, JsonValue] = {}
+        for k, v in cast(dict[object, object], value).items():
+            if not isinstance(k, str):
+                raise TypeError(f"{field_name} keys must be strings, got {type(k).__name__}")
+            result[k] = _validate_json_value(
+                v, field_name=f"{field_name}.{k}", _ancestors=child_ancestors
+            )
+        return result
+    raise TypeError(
+        f"{field_name} contains non-JSON value of type {type(value).__name__}: {value!r}"
+    )
+
+
 def _parse_json_mapping(value: object, *, field_name: str) -> dict[str, JsonValue]:
     """JSON 호환 값만 담는 매핑 필드를 검증한다."""
     if not isinstance(value, dict):
         raise TypeError(f"{field_name} must be a mapping")
 
-    raw_mapping = cast(dict[object, JsonValue], value)
+    raw_mapping = cast(dict[object, object], value)
     parsed: dict[str, JsonValue] = {}
     for key, item in raw_mapping.items():
         if not isinstance(key, str):
             raise TypeError(f"{field_name} keys must be strings")
-        parsed[key] = item
+        parsed[key] = _validate_json_value(item, field_name=f"{field_name}.{key}")
     return parsed
 
 

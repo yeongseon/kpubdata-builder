@@ -13,10 +13,12 @@ Studio 같은 외부 UI가 Builder를 호출할 수 있도록 validate/preview/b
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
+from urllib.parse import parse_qs
 
 import yaml
 
@@ -27,6 +29,11 @@ from ..spec.validator import validate_spec
 from ..stages._path_safety import ensure_within, validate_path_segment
 from ..stages.bronze.build import SourceClient
 from ..tabular import DEFAULT_PREVIEW_LIMIT
+
+# Builder API 계약 버전. contract/builder-api.yaml의 info.version과 일치해야 하며
+# (test_service_contract가 강제), 응답에 실어 Studio 같은 소비자가 하위 호환을
+# 협상할 수 있게 한다 (#209).
+API_CONTRACT_VERSION = "1.0.0"
 
 
 @dataclass(frozen=True)
@@ -62,6 +69,15 @@ class BuilderService:
         self._output_root = output_root
         self._client_factory = client_factory
 
+    def version(self) -> ServiceResponse:
+        """Builder API 계약 버전을 반환한다 (#209).
+
+        소비자(Studio 등)가 호출 전에 계약 호환성을 확인할 수 있는 메타 엔드포인트다.
+        """
+        return ServiceResponse(
+            200, {"service": "kpubdata-builder", "api_version": API_CONTRACT_VERSION}
+        )
+
     def validate(self, spec_yaml: str) -> ServiceResponse:
         """BuildSpec을 파싱·검증한다."""
         try:
@@ -71,10 +87,19 @@ class BuilderService:
             return ServiceResponse(400, {"status": "error", "error": str(exc)})
         except ValidationError as exc:
             return ServiceResponse(400, {"status": "invalid", "problems": list(exc.problems)})
-        return ServiceResponse(200, {"status": "valid", "dataset_id": spec.dataset_id})
+        return ServiceResponse(
+            200,
+            {
+                "status": "valid",
+                "dataset_id": spec.dataset_id,
+                "api_version": API_CONTRACT_VERSION,
+            },
+        )
 
     def preview(self, spec_yaml: str, *, limit: int = DEFAULT_PREVIEW_LIMIT) -> ServiceResponse:
         """각 소스의 스키마와 샘플 행을 산출한다 (파일 미기록)."""
+        if limit < 1:
+            return ServiceResponse(400, {"error": "'limit' must be a positive integer"})
         spec_or_error = self._load_validated(spec_yaml)
         if isinstance(spec_or_error, ServiceResponse):
             return spec_or_error
@@ -130,15 +155,22 @@ class BuilderService:
             for outcome in result.outcomes
         ]
         status_code = 200 if result.status == "ok" else 502
-        return ServiceResponse(
-            status_code,
-            {
-                "status": result.status,
-                "run_id": result.context.run_id,
-                "outcomes": outcomes,
-                "manifest": str(result.manifest_path),
-            },
-        )
+        body: dict[str, JsonValue] = {
+            "status": result.status,
+            "run_id": result.context.run_id,
+            "outcomes": outcomes,
+            "manifest": str(result.manifest_path),
+            "api_version": API_CONTRACT_VERSION,
+        }
+        # 실패한 빌드는 첫 번째 실패 outcome의 error를 최상위 `error` 요약으로 노출해,
+        # Studio 같은 소비자가 outcomes 배열을 파싱하지 않고도 사람이 읽을 수 있는
+        # 사유를 즉시 표면화할 수 있게 한다 (#226).
+        if result.status != "ok":
+            first_error = next(
+                (o.error for o in result.outcomes if o.status != "ok" and o.error), None
+            )
+            body["error"] = first_error or "build failed"
+        return ServiceResponse(status_code, body)
 
     def artifacts(self, run_id: str) -> ServiceResponse:
         """실행 워크스페이스의 산출물 파일 목록을 반환한다."""
@@ -156,6 +188,39 @@ class BuilderService:
             str(path.relative_to(run_dir)) for path in run_dir.rglob("*") if path.is_file()
         )
         return ServiceResponse(200, {"run_id": run_id, "files": list(files)})
+
+    def list_builds(self, *, limit: int = 50) -> ServiceResponse:
+        """실행 이력 목록을 최신 수정 시각 기준으로 내림차순 반환한다.
+
+        output_root 아래의 디렉터리를 스캔해 manifest.json이 있는 실행만
+        포함한다. Studio 같은 소비자가 빌드 이력 목록을 표시하는 데 쓰인다 (#250).
+        """
+        if not self._output_root.exists():
+            return ServiceResponse(200, {"builds": []})
+
+        candidates = sorted(
+            (d for d in self._output_root.iterdir() if d.is_dir()),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        builds: list[JsonValue] = []
+        for run_dir in candidates[:limit]:
+            manifest_path = run_dir / "manifest.json"
+            if not manifest_path.exists():
+                continue
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            builds.append(
+                {
+                    "run_id": run_dir.name,
+                    "status": "failed" if manifest.get("errors") else "ok",
+                    "started_at": manifest.get("started_at"),
+                    "finished_at": manifest.get("finished_at"),
+                }
+            )
+        return ServiceResponse(200, {"builds": builds})
 
     def _load_validated(self, spec_yaml: str) -> BuildSpec | ServiceResponse:
         """spec_yaml을 파싱·검증하고, 실패 시 오류 ServiceResponse를 반환한다."""
@@ -184,8 +249,12 @@ def dispatch(
     method: str,
     path: str,
     body: Mapping[str, JsonValue] | None,
+    query: str = "",
 ) -> ServiceResponse:
     """(method, path)를 BuilderService 연산으로 라우팅한다."""
+    if method == "GET" and path == "/version":
+        return service.version()
+
     if method == "POST" and path == "/validate":
         spec = _spec_from_body(body)
         return spec if isinstance(spec, ServiceResponse) else service.validate(spec)
@@ -209,15 +278,50 @@ def dispatch(
         spec = _spec_from_body(body)
         if isinstance(spec, ServiceResponse):
             return spec
-        run_id_value = body.get("run_id") if body else None
-        run_id = run_id_value if isinstance(run_id_value, str) else None
+        run_id: str | None = None
+        if body is not None and "run_id" in body:
+            run_id_value = body["run_id"]
+            # run_id가 명시되면 비어있지 않은 문자열이어야 한다. 잘못된 타입을 조용히
+            # 자동 생성 run id로 떨어뜨리면 클라이언트가 의도한 run id와 실제 기록 위치가
+            # 달라지므로 400으로 거부한다 (#185).
+            if not isinstance(run_id_value, str) or not run_id_value.strip():
+                return ServiceResponse(400, {"error": "'run_id' must be a non-empty string"})
+            # 경로 안전하지 않은 run_id("../bad" 등)는 이후 BuildContext.create에서
+            # ValueError를 일으켜 HTTP 어댑터에서 500/연결 끊김이 되므로, 진입점에서
+            # 동일한 safe-segment 규칙으로 검증해 구조화된 400을 반환한다 (#200).
+            try:
+                validate_path_segment(run_id_value, field_name="run_id")
+            except ValueError as exc:
+                return ServiceResponse(400, {"error": str(exc)})
+            run_id = run_id_value
         return service.build(spec, run_id=run_id)
 
     if method == "GET" and path.startswith("/artifacts/"):
         run_id = path[len("/artifacts/") :]
         return service.artifacts(run_id)
 
+    if method == "GET" and path == "/builds":
+        limit = 50
+        # 표준 REST 스타일에 맞게 쿼리 파라미터(?limit=N)를 우선 지원한다 (#252).
+        # 기존 소비자 호환을 위해 body의 limit도 계속 받아들인다.
+        query_params = parse_qs(query)
+        if "limit" in query_params:
+            raw_limit = query_params["limit"][-1]
+            try:
+                query_limit = int(raw_limit)
+            except ValueError:
+                return ServiceResponse(400, {"error": "'limit' must be a positive integer"})
+            if query_limit < 1:
+                return ServiceResponse(400, {"error": "'limit' must be a positive integer"})
+            limit = query_limit
+        elif body is not None and "limit" in body:
+            limit_value = body["limit"]
+            if not isinstance(limit_value, int) or isinstance(limit_value, bool) or limit_value < 1:
+                return ServiceResponse(400, {"error": "'limit' must be a positive integer"})
+            limit = limit_value
+        return service.list_builds(limit=limit)
+
     return ServiceResponse(404, {"error": f"not found: {method} {path}"})
 
 
-__all__ = ["BuilderService", "ServiceResponse", "dispatch"]
+__all__ = ["API_CONTRACT_VERSION", "BuilderService", "ServiceResponse", "dispatch"]

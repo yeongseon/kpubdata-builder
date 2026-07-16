@@ -5,6 +5,7 @@ from __future__ import annotations
 import polars as pl
 import pytest
 
+from kpubdata_builder.errors import TabularError
 from kpubdata_builder.spec import JsonValue
 from kpubdata_builder.tabular import (
     CastReport,
@@ -13,6 +14,110 @@ from kpubdata_builder.tabular import (
     validate_required_columns,
 )
 from kpubdata_builder.tabular.convert import records_to_dataframe
+
+
+def test_records_to_dataframe_rejects_heterogeneous_column() -> None:
+    # 한 컬럼에 문자열+숫자가 섞이면 조용히 강제 변환하지 않고 명확히 실패한다 (#187).
+    records: list[dict[str, JsonValue]] = [{"v": 1}, {"v": "two"}]
+
+    with pytest.raises(TabularError, match="heterogeneous column types"):
+        _ = records_to_dataframe(records)
+
+
+def test_records_to_dataframe_allows_numeric_mix_and_nulls() -> None:
+    # int/float 혼합과 null은 호환으로 보고 통과시킨다(거짓 양성 방지) (#187).
+    records: list[dict[str, JsonValue]] = [{"v": 1}, {"v": 2.5}, {"v": None}]
+
+    df = records_to_dataframe(records)
+
+    assert df.height == 3
+
+
+def test_records_to_dataframe_infers_float_beyond_default_window() -> None:
+    # 기본 추론 윈도우(앞쪽 행)를 넘어 처음 등장하는 float가 Int64로 잘려나가지 않고
+    # 전체 레코드를 스캔해 Float64로 추론되어 2.5가 보존되어야 한다 (#216).
+    records: list[dict[str, JsonValue]] = [{"b": 1}] * 150 + [{"b": 2.5}]
+
+    df = records_to_dataframe(records)
+
+    assert df.schema["b"] == pl.Float64
+    assert df["b"].to_list()[-1] == 2.5
+
+
+def test_records_to_dataframe_rejects_large_int_mixed_with_float() -> None:
+    # 2^53을 넘는 정수가 float와 같은 컬럼에 있으면 f64 업캐스트로 반올림되므로 거부 (#198).
+    records: list[dict[str, JsonValue]] = [{"v": 9007199254740993}, {"v": 2.5}]
+
+    with pytest.raises(TabularError, match="precision loss"):
+        _ = records_to_dataframe(records)
+
+
+def test_records_to_dataframe_allows_large_int_only_column() -> None:
+    # float가 섞이지 않은 순수 정수 컬럼은 i64로 정확히 보존되므로 통과한다 (#198).
+    big = 9007199254740993
+    records: list[dict[str, JsonValue]] = [{"v": big}, {"v": 1}]
+
+    df = records_to_dataframe(records)
+
+    assert df["v"].to_list() == [big, 1]
+
+
+def test_records_to_dataframe_rejects_large_int_mixed_with_float_in_nested_list() -> None:
+    # 중첩 list 안에서도 큰 정수+float 혼합은 f64 업캐스트로 반올림되므로 거부 (#198).
+    records: list[dict[str, JsonValue]] = [{"v": [9007199254740993]}, {"v": [2.5]}]
+
+    with pytest.raises(TabularError, match="precision loss"):
+        _ = records_to_dataframe(records)
+
+
+def test_records_to_dataframe_rejects_large_int_mixed_with_float_in_nested_struct() -> None:
+    # 중첩 struct의 동일 필드에 큰 정수+float가 섞이면 거부 (#198).
+    records: list[dict[str, JsonValue]] = [
+        {"v": {"x": 9007199254740993}},
+        {"v": {"x": 2.5}},
+    ]
+
+    with pytest.raises(TabularError, match="precision loss"):
+        _ = records_to_dataframe(records)
+
+
+def test_records_to_dataframe_allows_large_int_and_float_in_separate_struct_fields() -> None:
+    # 서로 다른 struct 필드는 별도 컬럼이므로 큰 정수와 float가 공존해도 안전하다 (#198).
+    big = 9007199254740993
+    records: list[dict[str, JsonValue]] = [{"v": {"i": big, "f": 2.5}}]
+
+    df = records_to_dataframe(records)
+
+    assert df.height == 1
+
+
+def test_records_to_dataframe_detects_nested_list_heterogeneity() -> None:
+    # list[int] vs list[str]는 같은 "list" 카테고리가 아니라 요소 타입까지 구분해 거부 (#199).
+    records: list[dict[str, JsonValue]] = [{"v": [1]}, {"v": ["x"]}]
+
+    with pytest.raises(TabularError, match="heterogeneous column types"):
+        _ = records_to_dataframe(records)
+
+
+def test_records_to_dataframe_detects_nested_struct_heterogeneity() -> None:
+    # struct{x:int} vs struct{x:str}도 필드 타입까지 들여다보고 거부 (#199).
+    records: list[dict[str, JsonValue]] = [{"v": {"x": 1}}, {"v": {"x": "s"}}]
+
+    with pytest.raises(TabularError, match="heterogeneous column types"):
+        _ = records_to_dataframe(records)
+
+
+def test_records_to_dataframe_allows_optional_nested_field() -> None:
+    # 중첩 struct의 선택적 필드(한쪽 null/부재)는 거짓 양성으로 막지 않는다 (#199).
+    records: list[dict[str, JsonValue]] = [
+        {"v": {"x": 1, "y": "a"}},
+        {"v": {"x": 2}},
+        {"v": {"x": 3, "y": None}},
+    ]
+
+    df = records_to_dataframe(records)
+
+    assert df.height == 3
 
 
 def test_records_to_dataframe_converts_raw_records_without_mutating_input() -> None:

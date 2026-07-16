@@ -76,7 +76,36 @@ class TestBuildSilverDataset:
         dataset = build_silver_dataset(bronze, required_columns=("id", "amount"))
 
         assert dataset.validation.ok is False
-        assert any("amount" in problem for problem in dataset.validation.problems)
+        # ValidationProblem 객체로 바뀔었으므로 message 필드를 확인 (#261)
+        assert any("amount" in problem.message for problem in dataset.validation.problems)
+
+    def test_validation_passes_when_dtype_matches(self) -> None:
+        bronze = _bronze(({"id": "1", "amount": 1000},))
+
+        dataset = build_silver_dataset(
+            bronze, casts={"amount": "int"}, column_dtypes={"amount": "int"}
+        )
+
+        assert dataset.validation.ok is True
+        assert dataset.validation.problems == ()
+
+    def test_validation_fails_when_dtype_mismatches(self) -> None:
+        bronze = _bronze(({"id": "1", "amount": 1000},))
+
+        # amount는 바로 읽으면 Int64; Float64를 요구하면 실패해야 한다
+        dataset = build_silver_dataset(bronze, column_dtypes={"amount": "float"})
+
+        assert dataset.validation.ok is False
+        assert any("amount" in p.message for p in dataset.validation.problems)
+
+    def test_validation_reports_missing_column_for_dtype_spec(self) -> None:
+        bronze = _bronze(({"id": "1"},))
+
+        # 'amount' 코럼이 없으면 dtype 검증 실패 메시지를 포함해야 한다
+        dataset = build_silver_dataset(bronze, column_dtypes={"amount": "int"})
+
+        assert dataset.validation.ok is False
+        assert any("amount" in p.message for p in dataset.validation.problems)
 
     def test_preview_respects_limit(self) -> None:
         records = tuple({"n": i} for i in range(10))
@@ -91,6 +120,22 @@ class TestBuildSilverDataset:
         dataset = build_silver_dataset(bronze, casts={"amount": "int"})
 
         assert dataset.table.schema["amount"] == pl.Int64
+
+    def test_cast_data_loss_raises_instead_of_silently_nulling(self) -> None:
+        # 선언된 캐스팅이 값을 null로 떨어뜨리면 조용히 묻지 않고 TabularError로 실패 (#188).
+        from kpubdata_builder.errors import TabularError
+
+        bronze = _bronze(({"id": "1", "amount": "1000"}, {"id": "2", "amount": "oops"}))
+
+        with pytest.raises(TabularError, match="data loss"):
+            _ = build_silver_dataset(bronze, casts={"amount": "int"})
+
+    def test_rejects_negative_preview_limit(self) -> None:
+        # 음수 preview_limit은 df.head(-1)로 새지 않도록 일찍 거부한다 (#190).
+        bronze = _bronze(({"id": "1"},))
+
+        with pytest.raises(ValueError, match="preview_limit"):
+            _ = build_silver_dataset(bronze, preview_limit=-1)
 
 
 class TestPersistSilverDataset:

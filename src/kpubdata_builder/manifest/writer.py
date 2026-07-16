@@ -9,7 +9,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
+import tempfile
 from dataclasses import asdict
 from datetime import timezone
 from pathlib import Path
@@ -29,10 +32,15 @@ def manifest_writer(manifest: BuildManifest, output_path: Path) -> None:
         ManifestError: 디렉터리 생성 또는 파일 기록에 실패한 경우.
     """
     payload = {
+        "schema_version": manifest.schema_version,
         "build_id": manifest.build_id,
         "started_at": manifest.started_at.astimezone(timezone.utc).isoformat(),
         "finished_at": manifest.finished_at.astimezone(timezone.utc).isoformat(),
+        "build_environment": (
+            asdict(manifest.build_environment) if manifest.build_environment is not None else None
+        ),
         "inputs": list(manifest.inputs),
+        "inputs_fingerprint": manifest.inputs_fingerprint,
         "outputs": list(manifest.outputs),
         "warnings": list(manifest.warnings),
         "errors": list(manifest.errors),
@@ -45,7 +53,18 @@ def manifest_writer(manifest: BuildManifest, output_path: Path) -> None:
     serialized = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
     try:
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        _ = output_path.write_text(f"{serialized}\n", encoding="utf-8")
+        # 같은 디렉터리에 임시 파일로 쓴 뒤 os.replace로 원자적 교체한다. truncate-then-write는
+        # 크래시/동시 접근 시 부분·손상된 매니페스트를 남길 수 있다 (#204).
+        fd, tmp_name = tempfile.mkstemp(dir=output_path.parent, prefix=".manifest_", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                _ = handle.write(f"{serialized}\n")
+            os.replace(tmp_name, output_path)
+        except BaseException:
+            # 교체 전 실패 시 임시 파일을 정리한다(이미 교체됐다면 무시).
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_name)
+            raise
     except OSError as exc:
         raise ManifestError(f"Failed to write manifest to {output_path}: {exc}") from exc
 

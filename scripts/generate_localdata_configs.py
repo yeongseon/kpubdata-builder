@@ -25,8 +25,18 @@ LOCALDATA_DATASETS: list[tuple[str, str, str, str]] = [
     ("pharmacy", "localdata-pharmacy", "Pharmacy", "약국"),
     ("dental_clinic", "localdata-dental-clinic", "Dental Clinic", "치과의원"),
     # Accommodation & Tourism
-    ("tourist_accommodation", "localdata-tourist-accommodation", "Tourist Accommodation", "관광숙박업"),
-    ("general_accommodation", "localdata-general-accommodation", "General Accommodation", "일반숙박업"),
+    (
+        "tourist_accommodation",
+        "localdata-tourist-accommodation",
+        "Tourist Accommodation",
+        "관광숙박업",
+    ),
+    (
+        "general_accommodation",
+        "localdata-general-accommodation",
+        "General Accommodation",
+        "일반숙박업",
+    ),
     # Sports & Leisure
     ("fitness_center", "localdata-fitness-center", "Fitness Center", "체력단련장"),
     ("swimming_pool", "localdata-swimming-pool", "Swimming Pool", "수영장"),

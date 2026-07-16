@@ -1,4 +1,9 @@
-"""Transform raw records into a validated Polars DataFrame."""
+"""Transform raw records into a validated Polars DataFrame.
+
+DEPRECATED — legacy publish path (#208). The canonical execution path is the
+medallion orchestrator ``kpubdata_builder.pipeline.run_build``. See
+``docs/ARCHITECTURE.md``.
+"""
 
 from __future__ import annotations
 
@@ -97,10 +102,15 @@ def _apply_filter(df: pl.DataFrame, expr_str: str) -> pl.DataFrame:
         logger.warning("Filter references unknown column '%s', skipping", col)
         return df
 
+    val: int | float | str
     try:
-        val: int | float = int(val_str)
+        val = int(val_str)
     except ValueError:
-        val = float(val_str)
+        try:
+            val = float(val_str)
+        except ValueError:
+            # Treat as string comparison (strip quotes if present)
+            val = val_str.strip("'\"")
 
     ops = {
         ">": pl.col(col) > val,
@@ -196,7 +206,14 @@ def build_variant_dataframes(df: pl.DataFrame, config: dict[str, Any]) -> dict[s
 
         romanize_cols = opts.get("romanize_columns", [])
         if romanize_cols:
-            from kr_building_normalizer import romanize
+            try:
+                from kr_building_normalizer import romanize
+            except ImportError:
+                logger.warning(
+                    "kr-building-name-normalizer 미설치 — romanize_columns 건너뜀. "
+                    "pip install kr-building-name-normalizer 로 설치하세요."
+                )
+                romanize_cols = []
 
             for col in romanize_cols:
                 if col in variant_df.columns:

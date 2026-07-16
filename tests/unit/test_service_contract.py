@@ -1,8 +1,9 @@
-"""Builder Service Contract(#63) OpenAPI 스펙의 구조 검증.
+"""Builder Service Contract(#63, #226) OpenAPI 스펙의 구조 검증.
 
-설치된 OpenAPI validator가 없으므로, 계약이 OpenAPI 3.1이고 API_CONTRACT.md의
-8개 엔드포인트와 표준 오류 스키마를 모두 담는지 구조적으로 검증한다. 실행 중인
-builder dev server 대비 계약 테스트는 service mode(#36) 도입 후 확장한다.
+설치된 OpenAPI validator가 없으므로, 계약이 OpenAPI 3.1이고 BuilderService
+(service/app.py)가 실제로 구현한 동기 라우트와 wire 형태를 모두 담는지 구조적으로
+검증한다. 계약은 이제 구현된 엔드포인트만 기술하며(#226), 한쪽만 바뀌는 조용한
+드리프트를 막기 위해 구현 라우트 ↔ 계약 operationId 매핑을 명시적으로 고정한다.
 """
 
 from __future__ import annotations
@@ -14,16 +15,14 @@ import yaml
 
 _CONTRACT_PATH = Path(__file__).parents[2] / "contract" / "builder-api.yaml"
 
-# (path, method) 형태의 계약 필수 오퍼레이션.
+# (path, method) 형태의 계약 필수 오퍼레이션. BuilderService.dispatch가 실제로
+# 라우팅하는 동기 엔드포인트와 1:1로 대응한다.
 _REQUIRED_OPERATIONS = [
-    ("/datasets", "get"),
-    ("/spec/validate", "post"),
+    ("/version", "get"),
+    ("/validate", "post"),
     ("/preview", "post"),
-    ("/builds", "post"),
-    ("/builds/{id}", "get"),
-    ("/builds/{id}/manifest", "get"),
-    ("/builds/{id}/artifacts", "get"),
-    ("/publish", "post"),
+    ("/build", "post"),
+    ("/artifacts/{run_id}", "get"),
 ]
 
 
@@ -67,23 +66,60 @@ def test_operation_ids_are_unique() -> None:
 def test_defines_standard_error_schema() -> None:
     schemas = _load_contract()["components"]["schemas"]
 
+    # 실제 구현은 단순한 {"error": "<message>"} 형태를 사용한다(#226).
     assert "Error" in schemas
-    error_props = schemas["Error"]["properties"]["error"]["properties"]
-    assert {"code", "message", "details"} <= set(error_props)
+    assert "error" in schemas["Error"]["properties"]
+    assert schemas["Error"]["properties"]["error"]["type"] == "string"
 
 
-def test_build_state_enum_matches_contract() -> None:
-    schemas = _load_contract()["components"]["schemas"]
+def test_service_api_version_matches_contract() -> None:
+    # 코드의 API_CONTRACT_VERSION이 계약 문서의 info.version과 어긋나지 않도록 고정 (#209).
+    from kpubdata_builder.service import API_CONTRACT_VERSION
 
-    assert set(schemas["BuildState"]["enum"]) == {
-        "draft",
-        "validated",
-        "running",
-        "exported",
-        "manifested",
-        "published",
-        "failed",
+    assert str(_load_contract()["info"]["version"]) == API_CONTRACT_VERSION
+
+
+# 계약이 기술하는 모든 오퍼레이션은 BuilderService에 실제로 구현돼 있어야 한다.
+# 구현 경로 이름은 계약과 1:1로 일치한다(#226: aspirational 비동기/publish 라우트 제거).
+_IMPLEMENTED_OPERATIONS = {
+    "getVersion",  # GET /version
+    "validateSpec",  # POST /validate
+    "previewBuild",  # POST /preview
+    "createBuild",  # POST /build
+    "listBuildArtifacts",  # GET /artifacts/{run_id}
+}
+
+
+def _contract_operation_ids() -> set[str]:
+    paths = _load_contract()["paths"]
+    return {
+        operation["operationId"]
+        for methods in paths.values()
+        for operation in methods.values()
+        if isinstance(operation, dict) and "operationId" in operation
     }
+
+
+def test_contract_operations_match_implementation() -> None:
+    # 계약의 오퍼레이션 집합이 구현된 동기 라우트 집합과 정확히 일치해야 한다.
+    # 계약에 미구현 오퍼레이션이 추가되거나 라우트가 사라지면 이 테스트가 깨진다 (#226).
+    assert _contract_operation_ids() == _IMPLEMENTED_OPERATIONS
+
+
+def test_build_responses_pin_wire_status_codes() -> None:
+    # POST /build의 실제 상태 코드(200 성공, 502 부분 실패)를 계약이 고정해야 한다 (#226).
+    build = _load_contract()["paths"]["/build"]["post"]["responses"]
+    assert "200" in build
+    assert "502" in build
+    assert "400" in build
+
+
+def test_build_failure_response_includes_error_summary() -> None:
+    # 502 응답이 human-readable error 요약을 포함하는 것을 계약 수준에서 고정 (#226).
+    schemas = _load_contract()["components"]["schemas"]
+    failure = schemas["BuildFailureResponse"]
+    assert "error" in failure["properties"]
+    assert "error" in failure["required"]
 
 
 def test_referenced_schemas_resolve() -> None:

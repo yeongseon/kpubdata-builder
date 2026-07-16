@@ -1,0 +1,20 @@
+name: 문서 개선
+description: 문서 오류, 누락, 개선 사항을 신고합니다
+title: "[Docs] "
+labels: ["documentation", "type:docs"]
+body:
+  - type: input
+    id: location
+    attributes:
+      label: 문서 위치
+      description: 파일 경로 또는 URL
+      placeholder: "예) ALGORITHM.md, docs/guides/cli-usage.md"
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: 문제 / 개선 제안
+      description: 무엇이 부정확하거나 부족한가요? 어떻게 바뀌면 좋을까요?
+    validations:
+      required: true

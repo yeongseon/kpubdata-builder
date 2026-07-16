@@ -1,4 +1,9 @@
-"""Fetch records from public data APIs with retry/backoff and checkpoint support."""
+"""Fetch records from public data APIs with retry/backoff and checkpoint support.
+
+DEPRECATED — legacy publish path (#208). The canonical execution path is the
+medallion orchestrator ``kpubdata_builder.pipeline.run_build``. See
+``docs/ARCHITECTURE.md``.
+"""
 
 from __future__ import annotations
 

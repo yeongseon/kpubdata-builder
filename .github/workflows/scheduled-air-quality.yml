@@ -1,0 +1,17 @@
+# 대기오염 — every 2 hours append-only
+name: "Scheduled: Air Quality"
+
+on:
+  schedule:
+    - cron: "15 */2 * * *"
+  workflow_dispatch:
+
+jobs:
+  air-quality:
+    uses: ./.github/workflows/publish-dataset.yml
+    with:
+      mode: ""
+      config: scripts/configs/air_quality.yaml
+    secrets:
+      KPUBDATA_DATAGO_API_KEY: ${{ secrets.KPUBDATA_DATAGO_API_KEY }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}

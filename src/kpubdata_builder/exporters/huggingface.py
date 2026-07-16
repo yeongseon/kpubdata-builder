@@ -16,14 +16,17 @@
 from __future__ import annotations
 
 import json
+import shutil
+import tempfile
 from pathlib import Path
 
-import polars as pl
 import yaml
 
 from ..artifact import ArtifactDataset
 from ..errors import ExportError
 from ..spec import ExportTarget
+from ..stages._atomic import atomic_replace_dir
+from ..stages._path_safety import safe_output_path
 from ..tabular.convert import records_to_dataframe
 from .base import BaseExporter, ExportResult
 
@@ -48,8 +51,11 @@ def _write_data_file(artifact: ArtifactDataset, data_dir: Path, fmt: str) -> Pat
     if fmt == "parquet":
         records_to_dataframe(list(artifact.records)).write_parquet(data_path)
     else:
+        # allow_nan=False: NaN/Infinity는 비표준 JSON 토큰이 되므로 조용히 기록하지 않고
+        # ValueError로 실패시킨다 (#217).
         content = "\n".join(
-            json.dumps(record, ensure_ascii=False, sort_keys=True) for record in artifact.records
+            json.dumps(record, ensure_ascii=False, sort_keys=True, allow_nan=False)
+            for record in artifact.records
         )
         _ = data_path.write_text(f"{content}\n" if content else "", encoding="utf-8")
     return data_path
@@ -119,21 +125,50 @@ class HuggingFaceExporter(BaseExporter):
             ExportError: 지원하지 않는 형식이거나 파일 쓰기에 실패한 경우.
         """
         fmt = _resolve_format(target)
-        hf_dir = output_dir / target.output_path
-        data_dir = hf_dir / "data"
+        # 사용자 제어 output_path가 build 워크스페이스를 벗어나지 못하게 한다 (#210).
+        hf_dir = safe_output_path(output_dir, target.output_path)
+        hf_dir.parent.mkdir(parents=True, exist_ok=True)
+
+        # 레이아웃을 임시 디렉터리에 전부 쓴 뒤 atomic하게 교체한다. in-place 갱신은
+        # 포맷 변경(JSONL→Parquet) 재실행 시 이전 shard 파일을 남겨 레이아웃이 spec과
+        # 불일치하게 만든다 (#203).
+        tmp_dir = Path(tempfile.mkdtemp(dir=hf_dir.parent, prefix=".hf_tmp_"))
         try:
+            data_dir = tmp_dir / "data"
             data_dir.mkdir(parents=True, exist_ok=True)
             data_path = _write_data_file(artifact, data_dir, fmt)
-            readme_path = hf_dir / "README.md"
+            readme_path = tmp_dir / "README.md"
             _ = readme_path.write_text(_render_card(artifact), encoding="utf-8")
-            infos_path = hf_dir / "dataset_infos.json"
+            infos_path = tmp_dir / "dataset_infos.json"
             _ = infos_path.write_text(
-                json.dumps(_dataset_infos(artifact), ensure_ascii=False, indent=2, sort_keys=True)
+                json.dumps(
+                    _dataset_infos(artifact),
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=True,
+                    allow_nan=False,
+                )
                 + "\n",
                 encoding="utf-8",
             )
-        except (OSError, pl.exceptions.PolarsError) as exc:
+            total_size = sum(path.stat().st_size for path in (data_path, readme_path, infos_path))
+            atomic_replace_dir(tmp_dir, hf_dir)
+        except ExportError:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            raise
+        except ValueError:
+            # allow_nan=False가 NaN/Infinity에 대해 던지는 ValueError는 비표준 JSON
+            # 토큰 거부 계약(#217)이므로 ExportError로 감싸지 않고 그대로 전파한다.
+            # (단, 임시 디렉터리는 정리한다.)
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            raise
+        except Exception as exc:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
             raise ExportError(f"Failed to export Hugging Face layout to {hf_dir}: {exc}") from exc
+        except BaseException:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            raise
 
-        total_size = sum(path.stat().st_size for path in (data_path, readme_path, infos_path))
+        # HF exporter returns the layout directory (not a single file) since it
+        # produces multiple files. Consumers should use output_path as a directory.
         return ExportResult(output_path=hf_dir, file_size=total_size, format=self.name)

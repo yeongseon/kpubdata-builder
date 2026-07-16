@@ -144,6 +144,58 @@ def test_run_build_uses_alias_as_source_key(tmp_path: Path) -> None:
     assert (tmp_path / "run1" / "gold" / "trades" / "table.parquet").exists()
 
 
+def test_run_build_card_uses_alias_as_source_identity(tmp_path: Path) -> None:
+    # #225: alias가 설정된 경우 dataset card의 sources 항목도 output_key(alias)를 사용해야
+    # manifest의 inputs 필드와 일치해야 한다.
+    spec = _spec(SourceRef(provider="datago", dataset="apt_trade", alias="trades"))
+    client = _FakeClient({"datago.apt_trade": [{"id": "1", "amount": 1000}]})
+
+    result = run_build(spec, client=client, output_root=tmp_path, run_id="run1")
+
+    readme = tmp_path / "run1" / "gold" / "trades" / "README.md"
+    assert readme.exists()
+    text = readme.read_text(encoding="utf-8")
+    # card는 alias(output_key)를 source 식별자로 사용해야 한다.
+    assert "- trades" in text
+    # fetch_key(provider.dataset)는 card에 나타나지 않아야 한다.
+    assert "- datago.apt_trade" not in text
+
+    # manifest inputs도 alias를 사용한다 — 두 곳이 일치해야 한다.
+    import json
+    from typing import cast
+
+    manifest = cast(dict[str, object], json.loads(result.manifest_path.read_text(encoding="utf-8")))
+    assert "trades" in cast(list[str], manifest["inputs"])
+
+
+def test_run_build_redacts_path_from_unexpected_exception(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # #225: 예상치 못한 예외(OS 오류 등)의 절대 경로가 클라이언트에 노출되지 않아야 한다.
+    # #246: 상세 정보는 warnings.warn이 아닌 logger.error로 기록해야 한다.
+    spec = _spec(SourceRef(provider="datago", dataset="apt_trade"))
+    client = _FakeClient({"datago.apt_trade": [{"id": "1"}]})
+
+    def _fail_with_path(*_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("failed: /absolute/path/to/file.json")
+
+    monkeypatch.setattr(orchestrator, "build_gold_package", _fail_with_path)
+
+    import logging
+
+    with caplog.at_level(logging.ERROR, logger="kpubdata_builder.pipeline.orchestrator"):
+        result = run_build(spec, client=client, output_root=tmp_path, run_id="run1")
+
+    outcome = result.outcomes[0]
+    assert outcome.status == "failed"
+    # 클라이언트에게 돌아가는 error 메시지에는 절대 경로가 없어야 한다.
+    assert "/absolute/path" not in (outcome.error or "")
+    # 상세 정보는 logger.error로만 기록된다 (#246).
+    assert any("/absolute/path" in r.getMessage() for r in caplog.records)
+
+
 def test_run_build_records_failure_when_source_missing(tmp_path: Path) -> None:
     spec = _spec(SourceRef(provider="datago", dataset="missing"))
     client = _FakeClient({"datago.apt_trade": [{"id": "1"}]})
@@ -190,6 +242,47 @@ def test_run_build_preserves_partial_artifacts_when_later_stage_fails(
     assert str(tmp_path / "run1" / "silver" / "datago.apt_trade" / "preview.json") in outputs
     assert str(tmp_path / "run1" / "gold" / "datago.apt_trade" / "table.parquet") not in outputs
 
+
+def test_run_build_fails_source_when_silver_validation_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 검증 실패한 Silver 데이터셋은 Gold로 흘러가지 않고 소스가 실패 처리되어야 한다 (#189).
+    import dataclasses
+
+    from kpubdata_builder.stages.silver import build_silver_dataset as real_build
+    from kpubdata_builder.stages.silver.models import ValidationResult
+    from kpubdata_builder.stages.silver.validate import ValidationProblem
+
+    def _invalid_silver(*args: object, **kwargs: object) -> object:
+        dataset = real_build(*args, **kwargs)  # type: ignore[arg-type]
+        return dataclasses.replace(
+            dataset,
+            validation=ValidationResult(
+                ok=False,
+                problems=(
+                    ValidationProblem(
+                        code="synthetic_failure",
+                        field=None,
+                        message="synthetic validation failure",
+                    ),
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(orchestrator, "build_silver_dataset", _invalid_silver)
+
+    spec = _spec(SourceRef(provider="datago", dataset="apt_trade"))
+    client = _FakeClient({"datago.apt_trade": [{"id": "1"}]})
+
+    result = run_build(spec, client=client, output_root=tmp_path, run_id="run1")
+
+    assert result.status == "failed"
+    outcome = result.outcomes[0]
+    assert outcome.status == "failed"
+    assert "synthetic validation failure" in (outcome.error or "")
+    # Gold 단계까지 가지 않는다.
+    assert "gold" not in outcome.stages_completed
+    assert not (tmp_path / "run1" / "gold" / "datago.apt_trade").exists()
 
 
 def test_run_build_writes_schema_summaries_to_manifest(tmp_path: Path) -> None:
@@ -242,3 +335,23 @@ def test_run_build_rejects_unsafe_run_id(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="run_id"):
         _ = run_build(spec, client=client, output_root=tmp_path, run_id="../escape")
+
+
+def test_run_build_validates_spec_before_running(tmp_path: Path) -> None:
+    # 잘못된 spec(소스 없음)은 단계 진입 전 fail-fast로 거부되어야 한다 (#212).
+    from kpubdata_builder.errors import ValidationError
+
+    bad_spec = BuildSpec(
+        dataset_id="apt_trade",
+        title="Apartment Trades",
+        description="seoul apartment trades",
+        sources=(),
+        exports=(ExportTarget(kind="jsonl", output_path="data.jsonl"),),
+    )
+    client = _FakeClient({"datago.apt_trade": [{"id": "1"}]})
+
+    with pytest.raises(ValidationError, match="at least one source"):
+        _ = run_build(bad_spec, client=client, output_root=tmp_path, run_id="run1")
+
+    # fail-fast: manifest나 워크스페이스가 생성되지 않는다.
+    assert not (tmp_path / "run1").exists()

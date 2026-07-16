@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
+import os
+import tempfile
 from pathlib import Path
 
 from ..artifact import ArtifactDataset
@@ -27,7 +30,15 @@ class MarkdownExporter(BaseExporter):
         destination = ensure_output_dir(output_dir, target.output_path)
         content = _render_markdown(artifact)
         try:
-            _ = destination.write_text(content, encoding="utf-8")
+            fd, tmp_name = tempfile.mkstemp(dir=destination.parent, suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(content)
+                os.replace(tmp_name, destination)
+            except BaseException:
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp_name)
+                raise
         except OSError as exc:
             raise ExportError(
                 f"Failed to export Markdown artifact to {destination}: {exc}"
@@ -59,11 +70,15 @@ def _title_section(artifact: ArtifactDataset) -> list[str]:
 
 
 def _column_names(artifact: ArtifactDataset) -> list[str]:
-    """스키마의 컬럼명을 반환하고, 없으면 첫 레코드의 키로 대체한다."""
+    """스키마의 컬럼명을 반환하고, 없으면 모든 레코드의 키를 합산한다."""
     if artifact.schema:
         return list(artifact.schema.keys())
     if artifact.records:
-        return list(artifact.records[0].keys())
+        columns: dict[str, None] = {}
+        for record in artifact.records:
+            for key in record:
+                columns.setdefault(key, None)
+        return list(columns.keys())
     return []
 
 
@@ -115,4 +130,4 @@ def _format_cell(value: object) -> str:
     """마크다운 테이블 셀 값을 안전하게 문자열로 변환한다."""
     if value is None:
         return ""
-    return str(value).replace("|", "\\|").replace("\n", " ")
+    return str(value).replace("|", "\\|").replace("\r", " ").replace("\n", " ")

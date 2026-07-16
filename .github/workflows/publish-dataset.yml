@@ -39,18 +39,21 @@ on:
         type: string
         default: "--local-only"
 
+permissions:
+  contents: read
+
 jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # v8.3.2
 
       - name: Install dependencies
-        run: uv sync --extra dev --extra publish
+        run: uv sync --extra dev --extra publish --no-sources
 
       - name: Publish dataset (atomic, guarded by secrets)
         env:
@@ -63,4 +66,17 @@ jobs:
             echo "::notice::KPUBDATA_DATAGO_API_KEY 미설정 — 라이브 실행을 건너뜁니다(no-op)."
             exit 0
           fi
+          # 라이브 퍼블리시(--local-only/--dry-run 이 아닌 모드)는 HF_TOKEN 이 필요하다.
+          # 빌드를 모두 수행한 뒤 업로드에서 뒤늦게 실패(late failure)하지 않도록
+          # 실행 전에 토큰 존재 여부를 먼저 확인한다 (#171).
+          case " ${MODE} " in
+            *" --local-only "*|*" --dry-run "*)
+              ;;
+            *)
+              if [ -z "${HF_TOKEN}" ]; then
+                echo "::notice::HF_TOKEN 미설정 — 라이브 퍼블리시를 건너뜁니다(no-op)."
+                exit 0
+              fi
+              ;;
+          esac
           uv run python scripts/publish_to_hf.py "${CONFIG}" ${MODE}

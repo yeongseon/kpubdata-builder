@@ -10,11 +10,15 @@ import pytest
 
 from kpubdata_builder import ManifestError
 from kpubdata_builder.manifest import (
+    MANIFEST_SCHEMA_VERSION,
+    BuildEnvironment,
     BuildManifest,
     SchemaSummary,
     build_schema_summary,
     build_source_provenance,
+    capture_build_environment,
     compute_data_checksum,
+    compute_inputs_fingerprint,
     manifest_writer,
     write_manifest,
 )
@@ -51,14 +55,19 @@ def test_manifest_writer_wraps_io_failures(tmp_path: Path, monkeypatch: pytest.M
     )
     output_path = tmp_path / "manifest.json"
 
-    def raise_io_error(self: Path, data: str, *, encoding: str) -> int:
-        del self, data, encoding
+    # 매니페스트 쓰기는 이제 temp 파일 + os.replace로 원자적이다 (#204). atomic 교체
+    # 단계의 OSError가 ManifestError로 감싸지는지 검증한다.
+    def raise_io_error(src: object, dst: object) -> None:
+        del src, dst
         raise OSError("disk full")
 
-    monkeypatch.setattr(Path, "write_text", raise_io_error)
+    monkeypatch.setattr("os.replace", raise_io_error)
 
     with pytest.raises(ManifestError):
         manifest_writer(manifest, output_path)
+
+    # 실패 시 임시 파일을 남기지 않는다.
+    assert list(tmp_path.glob(".manifest_*.tmp")) == []
 
 
 # --- schema summary tests (#11) ---
@@ -198,6 +207,101 @@ def test_manifest_writer_provenance_defaults_to_empty_list(tmp_path: Path) -> No
 
     payload = json.loads(output_path.read_text(encoding="utf-8"))
     assert payload["provenance"] == []
+
+
+# --- schema version & build environment tests (#211) ---
+
+
+def test_manifest_defaults_to_current_schema_version() -> None:
+    manifest = BuildManifest(
+        build_id="build-1",
+        started_at=datetime(2026, 5, 26, 1, 0, 0, tzinfo=timezone.utc),
+        finished_at=datetime(2026, 5, 26, 1, 0, 0, tzinfo=timezone.utc),
+    )
+    assert manifest.schema_version == MANIFEST_SCHEMA_VERSION
+
+
+def test_manifest_writer_emits_schema_version(tmp_path: Path) -> None:
+    manifest = BuildManifest(
+        build_id="build-1",
+        started_at=datetime(2026, 5, 26, 1, 0, 0, tzinfo=timezone.utc),
+        finished_at=datetime(2026, 5, 26, 1, 0, 0, tzinfo=timezone.utc),
+    )
+    output_path = tmp_path / "manifest.json"
+
+    manifest_writer(manifest, output_path)
+
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == MANIFEST_SCHEMA_VERSION
+
+
+def test_capture_build_environment_reports_python_and_builder_version() -> None:
+    env = capture_build_environment()
+    # builder는 설치되어 있으므로 실제 버전을, kpubdata도 의존성이므로 버전 문자열을 가진다.
+    assert env.python_version[0].isdigit()
+    assert env.builder_version != ""
+    assert env.kpubdata_version != ""
+
+
+def test_manifest_writer_serializes_build_environment(tmp_path: Path) -> None:
+    manifest = BuildManifest(
+        build_id="build-1",
+        started_at=datetime(2026, 5, 26, 1, 0, 0, tzinfo=timezone.utc),
+        finished_at=datetime(2026, 5, 26, 1, 0, 0, tzinfo=timezone.utc),
+        build_environment=BuildEnvironment(
+            python_version="3.12.3", kpubdata_version="0.5.0", builder_version="0.1.0"
+        ),
+    )
+    output_path = tmp_path / "manifest.json"
+
+    manifest_writer(manifest, output_path)
+
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["build_environment"] == {
+        "python_version": "3.12.3",
+        "kpubdata_version": "0.5.0",
+        "builder_version": "0.1.0",
+    }
+
+
+def test_manifest_writer_build_environment_defaults_to_null(tmp_path: Path) -> None:
+    manifest = BuildManifest(
+        build_id="build-1",
+        started_at=datetime(2026, 5, 26, 1, 0, 0, tzinfo=timezone.utc),
+        finished_at=datetime(2026, 5, 26, 1, 0, 0, tzinfo=timezone.utc),
+    )
+    output_path = tmp_path / "manifest.json"
+
+    manifest_writer(manifest, output_path)
+
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["build_environment"] is None
+
+
+def test_compute_inputs_fingerprint_is_order_independent_and_reproducible() -> None:
+    p1 = build_source_provenance(
+        provider="datago",
+        dataset="apt_trade",
+        fetched_at=datetime(2026, 5, 26, 1, 0, 0, tzinfo=timezone.utc),
+        records=[{"id": "1"}],
+        params={},
+    )
+    p2 = build_source_provenance(
+        provider="datago",
+        dataset="rent",
+        fetched_at=datetime(2026, 5, 26, 1, 0, 0, tzinfo=timezone.utc),
+        records=[{"id": "2"}],
+        params={},
+    )
+
+    fp_ab = compute_inputs_fingerprint([p1, p2])
+    fp_ba = compute_inputs_fingerprint([p2, p1])
+
+    assert fp_ab is not None
+    assert fp_ab.startswith("sha256:")
+    assert fp_ab == fp_ba  # 소스 순서와 무관
+    assert compute_inputs_fingerprint([]) is None
+    assert compute_inputs_fingerprint([p1]) != fp_ab  # 입력 집합이 다르면 지문도 다름
 
 
 # --- serialization contract tests (#7) ---

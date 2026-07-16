@@ -74,23 +74,43 @@ def persist_bronze_artifact(
 
     ensure_within(output_root, bronze_dir, label="bronze directory")
 
-    bronze_dir.mkdir(parents=True, exist_ok=True)
+    # Atomic write: write to temp dir, then rename to final location
+    import shutil
+    import tempfile
 
-    with records_path.open("w", encoding="utf-8") as f:
-        for record in artifact.raw_records:
-            f.write(json.dumps(record, ensure_ascii=False, sort_keys=True))
-            f.write("\n")
+    from .._atomic import atomic_replace_dir
 
-    metadata = _metadata_for_artifact(
-        artifact,
-        records_path=records_path,
-        metadata_path=metadata_path,
-        bronze_dir=bronze_dir,
-    )
-    metadata_path.write_text(
-        json.dumps(metadata, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    parent = bronze_dir.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    tmp_dir = Path(tempfile.mkdtemp(dir=parent, prefix=f".{artifact_id}_tmp_"))
+    try:
+        tmp_records = tmp_dir / "raw_records.jsonl"
+        tmp_metadata = tmp_dir / "metadata.json"
+
+        with tmp_records.open("w", encoding="utf-8") as f:
+            for record in artifact.raw_records:
+                # allow_nan=False: NaN/Infinity는 비표준 JSON 토큰이 되므로 조용히 기록하지
+                # 않고 ValueError로 실패시킨다 (#201).
+                f.write(json.dumps(record, ensure_ascii=False, sort_keys=True, allow_nan=False))
+                f.write("\n")
+
+        metadata = _metadata_for_artifact(
+            artifact,
+            records_path=records_path,
+            metadata_path=metadata_path,
+            bronze_dir=bronze_dir,
+        )
+        tmp_metadata.write_text(
+            json.dumps(metadata, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False)
+            + "\n",
+            encoding="utf-8",
+        )
+
+        # Atomic swap: 기존 디렉터리가 있어도 데이터 유실 없이 교체한다 (#180).
+        atomic_replace_dir(tmp_dir, bronze_dir)
+    except BaseException:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        raise
 
     return BronzePersistResult(
         bronze_dir=bronze_dir,
