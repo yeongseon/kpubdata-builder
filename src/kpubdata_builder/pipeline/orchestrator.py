@@ -185,8 +185,8 @@ def _run_source_pipeline(
                 (column.name, column.dtype, column.nullable) for column in silver.schema.columns
             ),
             sample_rows=silver.preview.rows,
-            license=context.spec.metadata.get("license", ""),
-            version=context.spec.metadata.get("version", ""),
+            license=str(context.spec.metadata.get("license", "")),
+            version=str(context.spec.metadata.get("version", "")),
         )
         card_path = gold_paths.gold_dir / "README.md"
         _ = card_path.write_text(render_dataset_card(card), encoding="utf-8")
