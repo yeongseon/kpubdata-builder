@@ -14,9 +14,7 @@ from __future__ import annotations
 
 from .artifact import ArtifactDataset
 from .errors import (
-    AssemblyError,
     BuildError,
-    ExecutionError,
     ExportError,
     ManifestError,
     SpecLoadError,
@@ -33,14 +31,12 @@ __all__ = [
     "BuildError",
     "BuildManifest",
     "BuildSpec",
-    "ExecutionError",
     "ExportError",
     "ManifestError",
     "ExportTarget",
     "SourceRef",
     "SpecLoadError",
     "ValidationError",
-    "AssemblyError",
     "__version__",
     "manifest_writer",
     "validate_spec",

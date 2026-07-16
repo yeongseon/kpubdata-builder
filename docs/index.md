@@ -141,8 +141,7 @@ graph TD
     ROOT --> P[publishers/]
     ROOT --> S[spec.py]
     ROOT --> V[validator.py]
-    ROOT --> EX[executor.py]
-    ROOT --> A[assembler.py]
+    ROOT --> PL[pipeline/orchestrator.py]
     ROOT --> ART[artifact.py]
     ROOT --> M[manifest.py]
 
@@ -159,8 +158,8 @@ src/kpubdata_builder/
 ├── publishers/      # 결과물 업로드 (Hugging Face, GitHub 등)
 ├── spec.py          # 빌드 기획서(BuildSpec) 정의
 ├── validator.py     # 기획서 및 데이터 검증 로직
-├── executor.py      # kpubdata를 사용하여 실제 데이터 수집
-├── assembler.py     # 전체 빌드 과정을 조율하는 지휘자
+├── pipeline/
+│   └── orchestrator.py  # Bronze→Silver→Gold 파이프라인 진입점 (run_build)
 ├── artifact.py      # 생성된 결과물 모델
 └── manifest.py      # 빌드 명세서 생성 로직
 ```

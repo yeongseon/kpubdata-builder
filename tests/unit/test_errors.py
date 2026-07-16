@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 from kpubdata_builder import (
-    AssemblyError,
     BuildError,
-    ExecutionError,
     ExportError,
     ManifestError,
     SpecLoadError,
@@ -17,8 +15,6 @@ def test_all_builder_errors_inherit_from_build_error() -> None:
     # 모든 공개 예외가 BuildError 기반 계층에 속하는지 확인한다.
     assert issubclass(SpecLoadError, BuildError)
     assert issubclass(ValidationError, BuildError)
-    assert issubclass(ExecutionError, BuildError)
-    assert issubclass(AssemblyError, BuildError)
     assert issubclass(ExportError, BuildError)
     assert issubclass(ManifestError, BuildError)
 
