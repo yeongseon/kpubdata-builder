@@ -96,7 +96,7 @@ class BuildSpec:
     sources: tuple[SourceRef, ...]
     exports: tuple[ExportTarget, ...]
     transforms: tuple[str, ...] = ()
-    metadata: dict[str, str] = field(default_factory=dict)
+    metadata: dict[str, JsonValue] = field(default_factory=dict)
     publish: bool = False
     splits: SplitSpec | None = None
 
