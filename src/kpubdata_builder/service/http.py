@@ -90,7 +90,14 @@ def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
             # dispatch()에서 예상치 못한 예외가 발생하면 연결을 끊는 대신 JSON 500을
             # 반환한다. 상세 정보는 서버 로그에만 기록하고 클라이언트에는 누설하지 않는다 (#218).
             try:
-                response = dispatch(service, method, path, body, query=split.query)
+                response = dispatch(
+                    service,
+                    method,
+                    path,
+                    body,
+                    query=split.query,
+                    api_key=self.headers.get("X-API-Key"),
+                )
             except Exception:
                 _logger.error(
                     "Unhandled exception in dispatch: %s %s\n%s",
@@ -109,7 +116,7 @@ def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
             allow_origin = os.environ.get(_CORS_ALLOW_ORIGIN_ENV, _DEFAULT_CORS_ALLOW_ORIGIN)
             self.send_header("Access-Control-Allow-Origin", allow_origin)
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, X-API-Key")
             self.send_header("Access-Control-Max-Age", "86400")
 
         def _write(self, status_code: int, body: dict[str, JsonValue]) -> None:
