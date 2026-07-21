@@ -511,14 +511,14 @@ class TestHttpRobustness:
         assert handler_cls.timeout == _SOCKET_TIMEOUT_SECONDS
         assert handler_cls.timeout > 0
 
-    def test_serve_uses_threading_http_server(self, tmp_path: Path) -> None:
-        # serve()가 ThreadingHTTPServer를 사용해야 느린 클라이언트가 서버 전체를
-        # 멈추지 않는다 (#219).
+    def test_serve_uses_bounded_threading_http_server(self, tmp_path: Path) -> None:
+        # serve()가 BoundedThreadingHTTPServer를 사용해야 느린 클라이언트가 서버
+        # 전체를 멈추지 않으면서도(#219) 동시 처리 스레드 수에 상한이 걸린다 (#253).
         import contextlib
         import unittest.mock
         from http.server import ThreadingHTTPServer
 
-        from kpubdata_builder.service.http import serve
+        from kpubdata_builder.service.http import BoundedThreadingHTTPServer, serve
 
         created_servers: list[object] = []
         original_init = ThreadingHTTPServer.__init__
@@ -538,7 +538,87 @@ class TestHttpRobustness:
             serve(_service(tmp_path), host="127.0.0.1", port=0)
 
         assert len(created_servers) == 1
-        assert isinstance(created_servers[0], ThreadingHTTPServer)
+        assert isinstance(created_servers[0], BoundedThreadingHTTPServer)
+
+    def test_serve_passes_max_workers_to_executor(self, tmp_path: Path) -> None:
+        from kpubdata_builder.service.http import BoundedThreadingHTTPServer, make_handler
+
+        server = BoundedThreadingHTTPServer(
+            ("127.0.0.1", 0), make_handler(_service(tmp_path)), max_workers=3
+        )
+        try:
+            assert server._executor._max_workers == 3
+        finally:
+            server.server_close()
+
+    def test_bounded_server_limits_concurrent_processing(self, tmp_path: Path) -> None:
+        # 동시 처리 스레드 수가 max_workers로 상한이 걸려야 한다 (#253): 워커 수보다
+        # 많은 클라이언트가 동시에 접속해도 실제 동시 처리량은 max_workers를 넘지 않는다.
+        import time
+        import unittest.mock
+
+        from kpubdata_builder.service.app import ServiceResponse
+        from kpubdata_builder.service.http import BoundedThreadingHTTPServer, make_handler
+
+        max_workers = 2
+        num_clients = 4
+        server = BoundedThreadingHTTPServer(
+            ("127.0.0.1", 0), make_handler(_service(tmp_path)), max_workers=max_workers
+        )
+        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        server_thread.start()
+        base_url = f"http://{server.server_address[0]}:{server.server_address[1]}"
+
+        lock = threading.Lock()
+        concurrent_count = 0
+        max_seen = 0
+        release = threading.Event()
+
+        def _slow_dispatch(*args: object, **kwargs: object) -> ServiceResponse:
+            nonlocal concurrent_count, max_seen
+            with lock:
+                concurrent_count += 1
+                max_seen = max(max_seen, concurrent_count)
+            release.wait(timeout=5.0)
+            with lock:
+                concurrent_count -= 1
+            return ServiceResponse(200, {"service": "kpubdata-builder", "api_version": "1.0.0"})
+
+        results: list[int] = []
+
+        def _get() -> None:
+            with urllib.request.urlopen(f"{base_url}/version", timeout=5.0) as resp:
+                results.append(resp.status)
+
+        try:
+            with unittest.mock.patch(
+                "kpubdata_builder.service.http.dispatch", side_effect=_slow_dispatch
+            ):
+                client_threads = [threading.Thread(target=_get) for _ in range(num_clients)]
+                for t in client_threads:
+                    t.start()
+
+                # 워커 풀이 상한(max_workers)까지 채워질 때까지 능동적으로 대기한다.
+                deadline = time.monotonic() + 5.0
+                while time.monotonic() < deadline:
+                    with lock:
+                        if concurrent_count >= max_workers:
+                            break
+                    time.sleep(0.02)
+
+                with lock:
+                    observed = max_seen
+
+                release.set()
+                for t in client_threads:
+                    t.join(timeout=5.0)
+        finally:
+            server.shutdown()
+            server.server_close()
+            server_thread.join(timeout=1.0)
+
+        assert observed == max_workers
+        assert len(results) == num_clients
 
     def test_oversized_body_content_length_returns_413_http(
         self, http_server: tuple[str, HTTPServer, threading.Thread]
