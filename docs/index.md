@@ -41,25 +41,29 @@ KPubData Builder는 이 모든 과정을 하나의 파이프라인(자동화된 
 
 ## 빌드 파이프라인 흐름
 
-데이터가 처리되는 전체 과정은 다음과 같습니다:
+Builder는 단순 선형 ETL이 아니라 **Medallion Architecture**(Bronze → Silver → Gold)를 따릅니다. 데이터가 처리되는 전체 과정은 다음과 같습니다:
 
 ```mermaid
 graph LR
-BS["BuildSpec<br/>(기획서 작성)"] --> V["Validate<br/>(검증)"]
-V --> E["Execute<br/>(데이터 수집)"]
-E --> EX["Export<br/>(형식 변환)"]
+BS["BuildSpec<br/>(기획서)"] --> B["Bronze<br/>(원시 수집)"]
+B --> S["Silver<br/>(Polars 표 변환·검증)"]
+S --> G["Gold<br/>(패키징)"]
+G --> EX["Export<br/>(형식 변환)"]
 EX --> M["Manifest<br/>(결과 기록)"]
 ```
 
 ```text
-[BuildSpec 기획서] → [Validate 검증] → [Execute 데이터 수집] → [Export 형식 변환] → [Manifest 결과 기록]
+[BuildSpec 기획서] → [Bronze 원시 수집] → [Silver Polars 표 변환·검증] → [Gold 패키징] → [Export 형식 변환] → [Manifest 결과 기록]
 ```
 
 1. **BuildSpec**: [YAML](https://ko.wikipedia.org/wiki/YAML)(들여쓰기로 구조를 표현하는 설정 파일) 형태로 "어떤 데이터를 가져와서 어떤 형식으로 내보낼지" 기획합니다.
-2. **Validate**: 기획서에 오류가 없는지 자동으로 확인합니다. 문제가 있으면 빌드를 시작하기 전에 알려줍니다.
-3. **Execute**: `kpubdata`를 사용하여 실제 공공데이터 [API](https://ko.wikipedia.org/wiki/API)에서 데이터를 수집합니다.
-4. **Export**: 수집된 데이터를 Markdown, JSONL, Parquet, CSV 등 원하는 형식으로 변환합니다.
-5. **Manifest**: 빌드 결과에 대한 상세 기록(버전, 생성일, 포함 항목 수 등)을 자동으로 생성합니다.
+2. **Bronze**: `kpubdata`를 통해 실제 공공데이터 [API](https://ko.wikipedia.org/wiki/API)에서 원시 데이터를 수집하고 소스 스냅샷·provenance를 남깁니다.
+3. **Silver**: Bronze 산출물을 [Polars](https://pola.rs/) 단일 엔진으로 표(table) 형태로 변환하고, 스키마 검증·통계 계산·미리보기를 생성합니다.
+4. **Gold**: Silver 결과를 분할·내보내기 준비가 된 패키지로 조립합니다.
+5. **Export**: Gold 패키지를 Markdown, JSONL, Parquet, CSV 등 원하는 형식으로 변환합니다.
+6. **Manifest**: 빌드 결과에 대한 상세 기록(버전, 생성일, 포함 항목 수 등)을 자동으로 생성합니다.
+
+> Bronze/Silver/Gold 단계는 사용자가 BuildSpec에 직접 입력하는 필드가 아니라, Builder orchestrator가 내부적으로 관리하는 실행 단계입니다.
 
 ## 설치 방법
 
@@ -88,39 +92,48 @@ kpubdata-builder validate spec.yaml
 코드에서 직접 빌드 과정을 제어할 수도 있습니다:
 
 ```python
-from kpubdata_builder import Assembler, BuildSpec
+from pathlib import Path
 
-# YAML 기획서 불러오기
-spec = BuildSpec.from_yaml("spec.yaml")
+from kpubdata_builder.service import BuilderService
 
-# 빌드 실행
-assembler = Assembler(spec)
-result = assembler.run()
+# BuilderService 구성 (client_factory는 kpubdata Client를 반환)
+service = BuilderService(
+    output_root=Path("./build"),
+    client_factory=lambda: my_kpubdata_client,
+)
 
-# 결과물 확인
-for artifact in result.artifacts:
-    print(artifact.path, artifact.format)
+# YAML 기획서 문자열로 빌드 실행
+result = service.build(Path("spec.yaml").read_text(encoding="utf-8"))
 
-# 매니페스트(빌드 기록) 확인
-print(result.manifest)
+# 결과 확인: build()는 ServiceResponse(status_code, body)를 반환한다
+print(result.status_code)          # 예: 200(성공) / 502(소스 fetch 실패)
+print(result.body["run_id"])       # 실행 식별자
+print(result.body["manifest"])     # 생성된 manifest.json 경로
+print(result.body["outcomes"])     # 소스별 단계(bronze/silver/gold) 결과
 ```
 
 ### 빌드 기획서 예시 (spec.yaml)
 
 ```yaml
-# 어떤 데이터를 가져올지
-source:
-  dataset: datago.village_fcst
-  params:
-    base_date: "20250401"
-    nx: "55"
-    ny: "127"
+# 어떤 데이터를 가져올지 (sources는 복수 리스트)
+dataset_id: weather-village-forecast
+title: "동네예보 데이터셋"
+description: "기상청 동네예보 서비스에서 수집한 기상 예보 데이터"
 
-# 어떤 형식으로 내보낼지
+sources:
+  - provider: datago
+    dataset: village_fcst
+    params:
+      base_date: "20250401"
+      nx: 55
+      ny: 127
+
+# 어떤 형식으로 내보낼지 (export는 kind로 형식을 지정)
 exports:
-  - format: markdown
-  - format: csv
-  - format: jsonl
+  - kind: markdown
+    output_path: artifacts/weather_report.md
+  - kind: jsonl
+    output_path: out/weather.jsonl
 ```
 
 ## 지원 내보내기 형식
@@ -137,32 +150,36 @@ exports:
 
 ```mermaid
 graph TD
-    ROOT[src/kpubdata_builder/] --> E[exporters/]
+    ROOT[src/kpubdata_builder/] --> PL[pipeline/]
+    ROOT --> ST[stages/]
+    ROOT --> TB[tabular/]
+    ROOT --> E[exporters/]
     ROOT --> P[publishers/]
-    ROOT --> S[spec.py]
-    ROOT --> V[validator.py]
-    ROOT --> EX[executor.py]
-    ROOT --> A[assembler.py]
-    ROOT --> ART[artifact.py]
-    ROOT --> M[manifest.py]
+    ROOT --> S[spec/]
+    ROOT --> M[manifest/]
+    ROOT --> SVC[service/]
 
+    PL --> ORCH[orchestrator.py]
+    ST --> BR[bronze/]
+    ST --> SI[silver/]
+    ST --> GO[gold/]
+    TB --> PO[polars_engine.py]
     E --> ME[markdown.py]
     E --> JE[jsonl.py]
     E --> PE[parquet.py]
-
     P --> HP[huggingface.py]
 ```
 
 ```text
 src/kpubdata_builder/
+├── pipeline/        # 메달리온 단계 흐름 제어 (orchestrator)
+├── stages/          # bronze/silver/gold 단계 구현
+├── tabular/         # Polars 기반 표 처리 엔진
 ├── exporters/       # 데이터 형식 변환 (Markdown, JSONL 등)
-├── publishers/      # 결과물 업로드 (Hugging Face, GitHub 등)
-├── spec.py          # 빌드 기획서(BuildSpec) 정의
-├── validator.py     # 기획서 및 데이터 검증 로직
-├── executor.py      # kpubdata를 사용하여 실제 데이터 수집
-├── assembler.py     # 전체 빌드 과정을 조율하는 지휘자
-├── artifact.py      # 생성된 결과물 모델
-└── manifest.py      # 빌드 명세서 생성 로직
+├── publishers/      # 결과물 업로드 (Hugging Face, Kaggle 등)
+├── spec/            # 빌드 기획서(BuildSpec) 모델·검증
+├── manifest/        # 빌드 명세서 생성 로직
+└── service/         # BuilderService 및 HTTP 서비스 진입점
 ```
 
 ---
