@@ -283,6 +283,50 @@ class TestDispatch:
         assert "run_id" in str(resp.body.get("error", ""))
 
 
+class TestApiKeyAuth:
+    """API 키 인증(#248): X-API-Key 검증."""
+
+    def test_auth_skipped_when_env_unset(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # KPUBDATA_BUILDER_API_KEY 미설정 시 인증 없이 통과한다(로컬 개발 편의).
+        monkeypatch.delenv("KPUBDATA_BUILDER_API_KEY", raising=False)
+        resp = dispatch(_service(tmp_path), "GET", "/version", None)
+        assert resp.status_code == 200
+
+    def test_rejects_missing_api_key_when_configured(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("KPUBDATA_BUILDER_API_KEY", "secret")
+        resp = dispatch(_service(tmp_path), "GET", "/version", None)
+        assert resp.status_code == 401
+        assert resp.body == {"error": "unauthorized"}
+
+    def test_rejects_wrong_api_key_when_configured(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("KPUBDATA_BUILDER_API_KEY", "secret")
+        resp = dispatch(_service(tmp_path), "GET", "/version", None, api_key="wrong")
+        assert resp.status_code == 401
+
+    def test_accepts_matching_api_key(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("KPUBDATA_BUILDER_API_KEY", "secret")
+        resp = dispatch(_service(tmp_path), "GET", "/version", None, api_key="secret")
+        assert resp.status_code == 200
+
+    def test_build_route_requires_api_key_when_configured(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # /build처럼 비용이 큰 엔드포인트도 예외 없이 보호돼야 한다.
+        monkeypatch.setenv("KPUBDATA_BUILDER_API_KEY", "secret")
+        resp = dispatch(
+            _service(tmp_path), "POST", "/build", {"spec": VALID_SPEC_YAML, "run_id": "auth1"}
+        )
+        assert resp.status_code == 401
+
+
 class TestBuildFailureResponseCode:
     def test_failed_build_returns_502(self, tmp_path: Path) -> None:
         # 소스 fetch가 실패하면 status=failed + 502 — 매니페스트는 partial 정책으로 남는다.
@@ -448,7 +492,7 @@ class TestHttpAdapter:
             assert response.headers["Access-Control-Allow-Origin"] == "*"
             assert "POST" in response.headers["Access-Control-Allow-Methods"]
             assert "OPTIONS" in response.headers["Access-Control-Allow-Methods"]
-            assert response.headers["Access-Control-Allow-Headers"] == "Content-Type"
+            assert response.headers["Access-Control-Allow-Headers"] == "Content-Type, X-API-Key"
             assert response.headers["Access-Control-Max-Age"] == "86400"
 
     def test_response_includes_cors_header(
@@ -469,6 +513,29 @@ class TestHttpAdapter:
         base_url, _, _ = http_server
         with urllib.request.urlopen(f"{base_url}/version", timeout=2.0) as response:
             assert response.headers["Access-Control-Allow-Origin"] == "http://localhost:5173"
+
+    def test_missing_api_key_returns_401_when_configured(
+        self,
+        http_server: tuple[str, HTTPServer, threading.Thread],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # 어댑터가 X-API-Key 헤더를 dispatch로 전달해야 한다 (#248).
+        monkeypatch.setenv("KPUBDATA_BUILDER_API_KEY", "secret")
+        base_url, _, _ = http_server
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            urllib.request.urlopen(f"{base_url}/version", timeout=2.0)
+        assert exc_info.value.code == 401
+
+    def test_valid_api_key_header_is_accepted(
+        self,
+        http_server: tuple[str, HTTPServer, threading.Thread],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("KPUBDATA_BUILDER_API_KEY", "secret")
+        base_url, _, _ = http_server
+        req = urllib.request.Request(f"{base_url}/version", headers={"X-API-Key": "secret"})
+        with urllib.request.urlopen(req, timeout=2.0) as response:
+            assert response.status == 200
 
 
 class TestHttpRobustness:

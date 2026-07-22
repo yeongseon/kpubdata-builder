@@ -13,6 +13,9 @@ servers:
   - url: http://localhost:8000
     description: 로컬 builder 개발 서버
 
+security:
+  - ApiKeyAuth: []
+
 paths:
   /version:
     get:
@@ -25,6 +28,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/VersionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
 
   /validate:
     post:
@@ -49,6 +54,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
 
   /preview:
     post:
@@ -75,6 +82,8 @@ paths:
                 oneOf:
                   - $ref: "#/components/schemas/Error"
                   - $ref: "#/components/schemas/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
 
   /build:
     post:
@@ -101,6 +110,8 @@ paths:
                 oneOf:
                   - $ref: "#/components/schemas/Error"
                   - $ref: "#/components/schemas/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "502":
           description: >-
             하나 이상의 소스 fetch/stage 실패. upstream 소스 의존 실패이며 매니페스트는
@@ -129,6 +140,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "404":
           description: 해당 run을 찾을 수 없음
           content:
@@ -137,6 +150,23 @@ paths:
                 $ref: "#/components/schemas/Error"
 
 components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: >-
+        서버에 KPUBDATA_BUILDER_API_KEY가 설정된 경우 필수. 미설정 시(로컬 개발 기본값)
+        인증 없이 모든 요청이 허용된다 (#248).
+
+  responses:
+    Unauthorized:
+      description: X-API-Key가 누락되었거나 서버에 설정된 키와 일치하지 않음
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
   parameters:
     RunId:
       name: run_id

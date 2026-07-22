@@ -13,7 +13,9 @@ Studio 같은 외부 UI가 Builder를 호출할 수 있도록 validate/preview/b
 
 from __future__ import annotations
 
+import hmac
 import json
+import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,6 +36,24 @@ from ..tabular import DEFAULT_PREVIEW_LIMIT
 # (test_service_contract가 강제), 응답에 실어 Studio 같은 소비자가 하위 호환을
 # 협상할 수 있게 한다 (#209).
 API_CONTRACT_VERSION = "1.0.0"
+
+# 서버가 요구하는 API 키. 환경변수로만 주입하며, 미설정 시 인증을 건너뛴다(로컬 개발
+# 편의를 위한 기본값으로 CORS 기본 오리진 정책과 동일한 접근). /build가 비용이 큰
+# 외부 API 호출과 파일 시스템 쓰기를 유발하므로, 프로덕션 배포 시 반드시 설정해야
+# 한다 (#248).
+_API_KEY_ENV = "KPUBDATA_BUILDER_API_KEY"
+
+
+def _verify_api_key(api_key: str | None) -> bool:
+    """요청의 X-API-Key를 서버에 설정된 키와 비교한다 (#248).
+
+    KPUBDATA_BUILDER_API_KEY가 설정되지 않으면 인증을 건너뛴다. 설정된 경우
+    타이밍 공격을 막기 위해 hmac.compare_digest로 비교한다.
+    """
+    expected = os.environ.get(_API_KEY_ENV)
+    if not expected:
+        return True
+    return api_key is not None and hmac.compare_digest(api_key, expected)
 
 
 @dataclass(frozen=True)
@@ -250,8 +270,17 @@ def dispatch(
     path: str,
     body: Mapping[str, JsonValue] | None,
     query: str = "",
+    *,
+    api_key: str | None = None,
 ) -> ServiceResponse:
-    """(method, path)를 BuilderService 연산으로 라우팅한다."""
+    """(method, path)를 BuilderService 연산으로 라우팅한다.
+
+    라우팅 전에 X-API-Key를 검증한다 (#248). KPUBDATA_BUILDER_API_KEY가
+    설정되지 않으면 인증을 건너뛴다.
+    """
+    if not _verify_api_key(api_key):
+        return ServiceResponse(401, {"error": "unauthorized"})
+
     if method == "GET" and path == "/version":
         return service.version()
 
