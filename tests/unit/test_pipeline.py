@@ -338,15 +338,27 @@ def test_run_build_rejects_unsafe_run_id(tmp_path: Path) -> None:
 
 
 def test_run_build_executes_sources_concurrently(tmp_path: Path) -> None:
-    # 소스별 fetch가 순차 실행되면 총 시간이 소스 수 * delay만큼 걸린다. 스레드 풀로
-    # 동시 실행되면 총 소요 시간이 delay 1~2회 분량에 가까워야 한다 (#247).
+    # 동시에 진행 중인 fetch 수를 직접 관찰해 병렬 실행을 검증한다 (#247).
+    # wall-clock 임계값 대신 concurrency counter를 쓰는 이유: CI 러너마다 성능 편차가
+    # 커서 시간 기반 assert는 느린 러너에서 flaky해진다(느린 러너에서 실측된 회귀:
+    # 순차 실행이 아닌데도 elapsed가 임계값을 넘어 실패).
+    import threading
     import time
 
-    delay = 0.2
+    lock = threading.Lock()
+    concurrent_count = 0
+    max_seen = 0
+    release = threading.Event()
 
-    class _SlowClient(_FakeClient):
+    class _BlockingClient(_FakeClient):
         def dataset(self, source_key: str) -> _FakeDataset:
-            time.sleep(delay)
+            nonlocal concurrent_count, max_seen
+            with lock:
+                concurrent_count += 1
+                max_seen = max(max_seen, concurrent_count)
+            release.wait(timeout=5.0)
+            with lock:
+                concurrent_count -= 1
             return super().dataset(source_key)
 
     spec = _spec(
@@ -354,18 +366,35 @@ def test_run_build_executes_sources_concurrently(tmp_path: Path) -> None:
         SourceRef(provider="datago", dataset="b"),
         SourceRef(provider="datago", dataset="c"),
     )
-    client = _SlowClient(
+    client = _BlockingClient(
         {"datago.a": [{"id": "1"}], "datago.b": [{"id": "1"}], "datago.c": [{"id": "1"}]}
     )
 
-    started = time.monotonic()
-    result = run_build(spec, client=client, output_root=tmp_path, run_id="run-parallel")
-    elapsed = time.monotonic() - started
+    results: list[BuildResult] = []
 
-    assert result.status == "ok"
-    assert len(result.outcomes) == 3
-    # 순차 실행이면 3 * delay(0.6s) 이상 걸린다. 병렬 실행이면 2 * delay(0.4s) 미만이어야 한다.
-    assert elapsed < delay * 2
+    def _run() -> None:
+        results.append(run_build(spec, client=client, output_root=tmp_path, run_id="run-parallel"))
+
+    runner_thread = threading.Thread(target=_run)
+    runner_thread.start()
+    try:
+        # 3개 소스 모두 동시에 fetch를 블로킹할 때까지 능동적으로 대기한다.
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            with lock:
+                if concurrent_count >= 3:
+                    break
+            time.sleep(0.02)
+
+        with lock:
+            observed = max_seen
+    finally:
+        release.set()
+        runner_thread.join(timeout=5.0)
+
+    assert observed == 3
+    assert results[0].status == "ok"
+    assert len(results[0].outcomes) == 3
 
 
 def test_run_build_preserves_source_order_in_manifest_with_multiple_sources(
