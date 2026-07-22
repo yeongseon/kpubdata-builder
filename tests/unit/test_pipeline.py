@@ -337,6 +337,65 @@ def test_run_build_rejects_unsafe_run_id(tmp_path: Path) -> None:
         _ = run_build(spec, client=client, output_root=tmp_path, run_id="../escape")
 
 
+def test_run_build_executes_sources_concurrently(tmp_path: Path) -> None:
+    # 소스별 fetch가 순차 실행되면 총 시간이 소스 수 * delay만큼 걸린다. 스레드 풀로
+    # 동시 실행되면 총 소요 시간이 delay 1~2회 분량에 가까워야 한다 (#247).
+    import time
+
+    delay = 0.2
+
+    class _SlowClient(_FakeClient):
+        def dataset(self, source_key: str) -> _FakeDataset:
+            time.sleep(delay)
+            return super().dataset(source_key)
+
+    spec = _spec(
+        SourceRef(provider="datago", dataset="a"),
+        SourceRef(provider="datago", dataset="b"),
+        SourceRef(provider="datago", dataset="c"),
+    )
+    client = _SlowClient(
+        {"datago.a": [{"id": "1"}], "datago.b": [{"id": "1"}], "datago.c": [{"id": "1"}]}
+    )
+
+    started = time.monotonic()
+    result = run_build(spec, client=client, output_root=tmp_path, run_id="run-parallel")
+    elapsed = time.monotonic() - started
+
+    assert result.status == "ok"
+    assert len(result.outcomes) == 3
+    # 순차 실행이면 3 * delay(0.6s) 이상 걸린다. 병렬 실행이면 2 * delay(0.4s) 미만이어야 한다.
+    assert elapsed < delay * 2
+
+
+def test_run_build_preserves_source_order_in_manifest_with_multiple_sources(
+    tmp_path: Path,
+) -> None:
+    # 스레드 풀 완료 순서가 뒤바뀌어도 manifest의 inputs/outcomes는 spec.sources
+    # 순서를 유지해 결정적이어야 한다 (#247: executor.map은 제출 순서로 결과를 반환).
+    spec = _spec(
+        SourceRef(provider="datago", dataset="a"),
+        SourceRef(provider="datago", dataset="b"),
+        SourceRef(provider="datago", dataset="c"),
+    )
+    client = _FakeClient(
+        {"datago.a": [{"id": "1"}], "datago.b": [{"id": "1"}], "datago.c": [{"id": "1"}]}
+    )
+
+    result = run_build(spec, client=client, output_root=tmp_path, run_id="run-order")
+
+    assert result.status == "ok"
+    assert [o.source_key for o in result.outcomes] == [
+        "datago.a",
+        "datago.b",
+        "datago.c",
+    ]
+    manifest = cast(
+        dict[str, JsonValue], json.loads(result.manifest_path.read_text(encoding="utf-8"))
+    )
+    assert manifest["inputs"] == ["datago.a", "datago.b", "datago.c"]
+
+
 def test_run_build_validates_spec_before_running(tmp_path: Path) -> None:
     # 잘못된 spec(소스 없음)은 단계 진입 전 fail-fast로 거부되어야 한다 (#212).
     from kpubdata_builder.errors import ValidationError
