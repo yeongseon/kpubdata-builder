@@ -1,6 +1,6 @@
 """빌더 파이프라인 실패를 위한 오류 계층.
 
-이 모듈은 BuildSpec 로드, 검증, 실행, 조립, 내보내기, 매니페스트 작성처럼
+이 모듈은 BuildSpec 로드, 검증, 내보내기, 매니페스트 작성처럼
 파이프라인의 주요 단계별 실패를 구분하기 위한 예외 타입을 정의한다.
 
 주요 클래스:
@@ -34,14 +34,6 @@ class ValidationError(BuildError):
     def __init__(self, problems: list[str]) -> None:
         self.problems = problems
         super().__init__(f"Validation failed: {'; '.join(problems)}")
-
-
-class ExecutionError(BuildError):
-    """소스 실행 또는 실행 준비 과정이 실패했음을 나타낸다."""
-
-
-class AssemblyError(BuildError):
-    """조립 단계에서 필요한 소스 결합을 완료하지 못했음을 나타낸다."""
 
 
 class ExportError(BuildError):
@@ -89,10 +81,7 @@ class DatasetValidationError(BuildError):
 
 
 __all__ = [
-    "AssemblyError",
     "BuildError",
-    "DatasetValidationError",
-    "ExecutionError",
     "ExportError",
     "ManifestError",
     "PathTraversalError",
@@ -100,4 +89,5 @@ __all__ = [
     "SpecLoadError",
     "TabularError",
     "ValidationError",
+    "DatasetValidationError",
 ]
