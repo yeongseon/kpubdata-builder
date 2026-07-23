@@ -1,7 +1,7 @@
 # ADR 0005 — API 계약 단일 소스 & 코드 생성 전략
 
 - 상태: 승인됨(Accepted)
-- 관련 이슈: #310, #209, #241, kpubdata-studio#85, kpubdata-studio#103
+- 관련 이슈: #311, #209, #241, kpubdata-studio#85, kpubdata-studio#103
 - 관련 문서: [API_CONTRACT.md](../../API_CONTRACT.md), `contract/builder-api.yaml`
 
 ## 결정 (승인됨)
