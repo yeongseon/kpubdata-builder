@@ -1,7 +1,7 @@
 # ADR 0004 — Plugin Exporter API 계약 안정화
 
 - 상태: 승인됨(Accepted)
-- 관련 이슈: #311
+- 관련 이슈: #310
 - 관련 문서: [EXPORT_MODEL.md](../../EXPORT_MODEL.md), [ARCHITECTURE.md](../../ARCHITECTURE.md)
 
 ## 결정 (승인됨)
