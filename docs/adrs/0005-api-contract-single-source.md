@@ -1,8 +1,20 @@
 # ADR 0005 — API 계약 단일 소스 & 코드 생성 전략
 
-- 상태: 제안됨(Proposed)
+- 상태: 승인됨(Accepted)
 - 관련 이슈: #310, #209, #241, kpubdata-studio#85, kpubdata-studio#103
 - 관련 문서: [API_CONTRACT.md](../../API_CONTRACT.md), `contract/builder-api.yaml`
+
+## 결정 (승인됨)
+
+권고안(대안 B, OpenAPI SSOT + 점진 도입)을 **조건부 채택**한다. `contract/builder-api.yaml`을 SSOT로 승격하되, 다음을 강제한다.
+
+1. **SSOT는 구현된 엔드포인트만 포함**한다. 계획된(async 등) 엔드포인트는 codegen·커버리지 테스트에서 제외한다(ADR 0002와 정합).
+2. **1단계**: 경로/메서드 커버리지 대조 테스트(yaml operation ↔ `dispatch` 양방향). **이후 단계**에서 상태코드 + 응답 스키마 대조까지 확장.
+3. **인증 스키마를 OpenAPI에 표현**한다(`X-API-Key` securityScheme). 이미 구현된 `GET /builds`·인증을 yaml/API_CONTRACT.md에 반영(#241 잔여).
+4. **Studio zod 검증은 오류 응답(에러 바디)도 검증**해야 한다(#103). Builder는 yaml만 안정적으로 유지.
+5. 프레임워크 교체(대안 C)는 채택하지 않는다. 표준 라이브러리 `http.server` 기반의 결정성·무외부의존을 유지한다.
+
+> 근거: SSOT가 호출 가능한 진실과 일치해야(contract honesty) 드리프트를 CI에서 차단할 수 있다. 이 ADR이 시퀀싱상 가장 먼저(0005 → 0006 → 0004 → 0003 → 0002) 수행된다.
 
 ## 배경
 

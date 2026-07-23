@@ -1,8 +1,19 @@
 # ADR 0004 — Plugin Exporter API 계약 안정화
 
-- 상태: 제안됨(Proposed)
+- 상태: 승인됨(Accepted)
 - 관련 이슈: #311
 - 관련 문서: [EXPORT_MODEL.md](../../EXPORT_MODEL.md), [ARCHITECTURE.md](../../ARCHITECTURE.md)
+
+## 결정 (승인됨)
+
+권고안(대안 C, 하이브리드)을 **채택**한다. 명시적 레지스트리 + 공개 `register_exporter(kind, factory)` API, entry points는 후속. 다음 사항을 구현 계약으로 명문화한다.
+
+1. **중복 등록은 기본적으로 거부**한다(같은 kind 재등록 시 명시적 오류). 덮어쓰기는 명시적 옵션으로만 허용.
+2. **전역 가변 상태(module-level mutable registry)를 피한다.** 테스트 간 등록 누수(leakage)를 막기 위해 레지스트리는 인스턴스/컨텍스트로 관리하거나 테스트에서 초기화 가능해야 한다.
+3. **factory 시그니춘를 형식화**한다: `factory(config) -> BaseExporter` 형태로 입력·반환 타입과 `export()` 계약(생성된 `Artifact` 목록 반환)을 EXPORT_MODEL.md에 명시.
+4. **exporter 오류 동작을 명문화**한다: 예외 규약 + 부분출력 금지(원자성) 또는 명시적 partial 표기. entry points 자동 발견은 신뢰 경계 검토 후 별도 ADR로 분리.
+
+> 근거: 전역 가변 상태 제거와 중복 등록 거부는 AGENTS.md '결정적 동작 우선'과 정합한다.
 
 ## 배경
 
