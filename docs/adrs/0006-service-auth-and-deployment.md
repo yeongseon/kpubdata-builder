@@ -1,8 +1,19 @@
 # ADR 0006 — 서비스 인증 & 배포(Docker) 스토리
 
-- 상태: 제안됨(Proposed)
+- 상태: 승인됨(Accepted)
 - 관련 이슈: #312, #237, #248, #253
 - 관련 문서: [API_CONTRACT.md](../../API_CONTRACT.md), [ARCHITECTURE.md](../../ARCHITECTURE.md)
+
+## 결정 (승인됨)
+
+권고안을 **수정 채택**한다. 정적 API 키 유지는 OK이나, 배포/보안 기본값을 **fail-closed**로 강제한다.
+
+1. **Docker는 fail-closed**로 동작한다: API 키가 설정되지 않았거나 명시적 dev-mode 플래그가 없으면 **기동을 거부하거나 인증 없는 요청을 차단**한다. '키 미설정=인증 생략'은 로컸 개발 편의 전용이며 컨테이너에 누출되지 않게 한다.
+2. **CORS는 default-deny**: `KPUBDATA_BUILDER_ALLOWED_ORIGINS` env로 명시적 허용 오리진만 허가. `X-API-Key` 사용을 위한 **`OPTIONS` 프리플라이트 처리** 필요.
+3. **아티팩트 서빙 경로 안전 검토**: `GET /artifacts/{run_id}` 경로 트래버설(path traversal)·MIME 처리를 점검한다.
+4. Dockerfile(`uv sync --no-sources`, 진입점 `serve`)는 권고대로 채택. compose·키 로테이션·스코프는 후속 이슈.
+
+> 근거: 보안 기본값은 안전 측(fail-closed, default-deny)으로 두어야 운영 사고를 막는다. 시퀀싱상 0005 다음(0006)으로 수행한다.
 
 ## 배경
 
