@@ -13,6 +13,7 @@ Studio 같은 외부 UI가 Builder를 호출할 수 있도록 validate/preview/b
 
 from __future__ import annotations
 
+import heapq
 import hmac
 import json
 import os
@@ -218,13 +219,13 @@ class BuilderService:
         if not self._output_root.exists():
             return ServiceResponse(200, {"builds": []})
 
-        candidates = sorted(
+        candidates = heapq.nlargest(
+            limit,
             (d for d in self._output_root.iterdir() if d.is_dir()),
             key=lambda p: p.stat().st_mtime,
-            reverse=True,
         )
         builds: list[JsonValue] = []
-        for run_dir in candidates[:limit]:
+        for run_dir in candidates:
             manifest_path = run_dir / "manifest.json"
             if not manifest_path.exists():
                 continue
