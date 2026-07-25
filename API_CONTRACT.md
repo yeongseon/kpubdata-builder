@@ -50,6 +50,7 @@ Builder는 두 가지 실행 모델을 가집니다.
 | `/preview` | `POST` | 샘플 실행 및 소스별 스키마 preview | 동기식 |
 | `/build` | `POST` | 빌드 실행 (동기; 계약은 비동기 `/builds` 지향) | 동기식(현재) |
 | `/artifacts/{run_id}` | `GET` | 실행 워크스페이스 산출물 목록 조회 | 동기식 |
+| `/builds` | `GET` | 빌드 이력 목록 조회 (최신 수정 시각 기준 내림차순) | 동기식 |
 
 ## 5. 엔드포인트 상세
 
@@ -215,6 +216,44 @@ BuildSpec을 실행 전에 검증합니다. body의 `spec` 키에 YAML 문자열
 ```json
 {
   "error": "run not found: my-run-001"
+}
+```
+
+### 5.6 `GET /builds`
+
+빌드 이력 목록을 최신 수정 시각 기준 내림차순으로 반환합니다. `output_root` 아래의 디렉터리를 스캔해 `manifest.json`이 있는 실행만 포함합니다.
+
+#### 요청
+
+**쿼리 파라미터**:
+- `limit` (선택): 반환할 최대 빌드 수. 기본값은 50이며, 1 이상의 정수여야 합니다.
+
+#### 응답 `200`
+
+```json
+{
+  "builds": [
+    {
+      "run_id": "my-run-002",
+      "status": "ok",
+      "started_at": "2025-04-01T10:30:00Z",
+      "finished_at": "2025-04-01T10:32:15Z"
+    },
+    {
+      "run_id": "my-run-001",
+      "status": "failed",
+      "started_at": "2025-04-01T09:00:00Z",
+      "finished_at": "2025-04-01T09:01:30Z"
+    }
+  ]
+}
+```
+
+#### 응답 `400`
+
+```json
+{
+  "error": "'limit' must be a positive integer"
 }
 ```
 
