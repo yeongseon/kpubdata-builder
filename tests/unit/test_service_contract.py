@@ -164,6 +164,7 @@ def test_referenced_schemas_resolve() -> None:
 # 계약 커버리지 테스트 1단계: 경로/메서드 양방향 검증 (#317)
 # =============================================================================
 
+
 def _extract_yaml_operations() -> dict[tuple[str, str], dict[str, Any]]:
     """YAML에서 (path, method) -> operation 매핑을 추출한다."""
     contract = _load_contract()
@@ -363,8 +364,7 @@ def test_response_schemas_have_required_fields() -> None:
         responses = operation.get("responses", {})
         if "200" not in responses:
             raise AssertionError(
-                f"{method} {path} (operationId: {operation_id})에 "
-                f"200 응답이 누락되었습니다"
+                f"{method} {path} (operationId: {operation_id})에 200 응답이 누락되었습니다"
             )
 
         response_200 = responses["200"]
