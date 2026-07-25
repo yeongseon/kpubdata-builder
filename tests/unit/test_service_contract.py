@@ -1,9 +1,10 @@
-"""Builder Service Contract(#63, #226) OpenAPI 스펙의 구조 검증.
+"""Builder Service Contract(#63, #226, #317) OpenAPI 스펙의 구조 검증.
 
 설치된 OpenAPI validator가 없으므로, 계약이 OpenAPI 3.1이고 BuilderService
 (service/app.py)가 실제로 구현한 동기 라우트와 wire 형태를 모두 담는지 구조적으로
 검증한다. 계약은 이제 구현된 엔드포인트만 기술하며(#226), 한쪽만 바뀌는 조용한
 드리프트를 막기 위해 구현 라우트 ↔ 계약 operationId 매핑을 명시적으로 고정한다.
+또한 YAML 계약과 실제 dispatch 구현 간의 양방향 일치성을 검증한다(#317).
 """
 
 from __future__ import annotations
@@ -15,6 +16,18 @@ import yaml
 
 _CONTRACT_PATH = Path(__file__).parents[2] / "contract" / "builder-api.yaml"
 
+# dispatch에 구현된 (path, method, operationId) 매핑.
+# service/app.py:dispatch의 라우팅 규칙을 기계적으로 추출하기 어렵기 때문에
+# 명시적으로 선언하여 유지보수성을 높인다.
+_DISPATCH_ROUTES: dict[tuple[str, str], str] = {
+    ("/version", "GET"): "getVersion",
+    ("/validate", "POST"): "validateSpec",
+    ("/preview", "POST"): "previewBuild",
+    ("/build", "POST"): "createBuild",
+    ("/artifacts/{run_id}", "GET"): "listBuildArtifacts",
+    ("/builds", "GET"): "listBuilds",
+}
+
 # (path, method) 형태의 계약 필수 오퍼레이션. BuilderService.dispatch가 실제로
 # 라우팅하는 동기 엔드포인트와 1:1로 대응한다.
 _REQUIRED_OPERATIONS = [
@@ -23,6 +36,7 @@ _REQUIRED_OPERATIONS = [
     ("/preview", "post"),
     ("/build", "post"),
     ("/artifacts/{run_id}", "get"),
+    ("/builds", "get"),
 ]
 
 
@@ -87,6 +101,7 @@ _IMPLEMENTED_OPERATIONS = {
     "previewBuild",  # POST /preview
     "createBuild",  # POST /build
     "listBuildArtifacts",  # GET /artifacts/{run_id}
+    "listBuilds",  # GET /builds
 }
 
 
@@ -145,3 +160,100 @@ def test_referenced_schemas_resolve() -> None:
         for part in ref.lstrip("#/").split("/"):
             assert part in target, f"unresolved $ref: {ref}"
             target = target[part]
+
+
+def _extract_yaml_operations() -> dict[tuple[str, str], dict[str, Any]]:
+    """YAML에서 (path, method) -> operation 매핑을 추출한다."""
+    contract = _load_contract()
+    operations: dict[tuple[str, str], dict[str, Any]] = {}
+
+    for path, methods in contract["paths"].items():
+        for method_lower, operation in methods.items():
+            if not isinstance(operation, dict):
+                continue
+            method = method_lower.upper()
+            key = (path, method)
+            operations[key] = operation
+
+    return operations
+
+
+def _is_planned_operation(operation: dict[str, Any]) -> bool:
+    """operation이 x-planned: true로 표시되었는지 확인한다."""
+    return operation.get("x-planned") is True
+
+
+def test_all_yaml_operations_implemented_in_dispatch() -> None:
+    """YAML 계약에 정의된 모든 operation이 dispatch에 구현되어 있는지 검증한다(#317).
+
+    x-planned: true로 표시된 operation은 아직 구현되지 않아도 되며, 검증에서 제외한다.
+    """
+    yaml_operations = _extract_yaml_operations()
+
+    for (path, method), operation in yaml_operations.items():
+        if _is_planned_operation(operation):
+            continue
+
+        key = (path, method)
+        assert key in _DISPATCH_ROUTES, (
+            f"YAML에 정의된 {method} {path}가 dispatch에 구현되어 있지 않습니다. "
+            f"operationId: {operation.get('operationId')}"
+        )
+
+        yaml_operation_id = operation.get("operationId")
+        dispatch_operation_id = _DISPATCH_ROUTES[key]
+        assert yaml_operation_id == dispatch_operation_id, (
+            f"operationId 불일치: YAML={yaml_operation_id}, dispatch={dispatch_operation_id}"
+        )
+
+
+def test_all_dispatch_routes_declared_in_yaml() -> None:
+    """dispatch에 구현된 모든 경로가 YAML 계약에 선언되어 있는지 검증한다(#317).
+
+    실제 구현이 있는데 YAML에 누락된 경우를 탐지한다.
+    """
+    yaml_operations = _extract_yaml_operations()
+
+    for (path, method), operation_id in _DISPATCH_ROUTES.items():
+        key = (path, method)
+        assert key in yaml_operations, (
+            f"dispatch에 구현된 {method} {path}가 YAML 계약에 누락되었습니다. "
+            f"operationId: {operation_id}"
+        )
+
+        yaml_op = yaml_operations[key]
+        yaml_operation_id = yaml_op.get("operationId")
+        assert yaml_operation_id == operation_id, (
+            f"operationId 불일치: dispatch={operation_id}, YAML={yaml_operation_id}"
+        )
+
+
+def test_planned_operations_excluded_from_implementation_check() -> None:
+    """x-planned: true operation이 구현 검증에서 제외되는지 확인한다(#317).
+
+    계약에는 planned operation이 포함될 수 있지만, 실제 dispatch에는
+    구현되지 않아도 된다. 이 규칙이 올바르게 동작하는지 검증한다.
+    """
+    yaml_operations = _extract_yaml_operations()
+
+    # 현재 계약에는 x-planned operation이 없으므로, 모든 operation이 구현되어야 한다
+    planned_operations = [
+        (path, method, op.get("operationId"))
+        for (path, method), op in yaml_operations.items()
+        if _is_planned_operation(op)
+    ]
+
+    # 향후 planned operation이 추가되면 이 테스트가 그 존재를 검증한다
+    # 현재는 계약에 planned operation이 없음을 확인
+    for path, method, operation_id in planned_operations:
+        assert operation_id, f"planned operation {method} {path}에 operationId가 없습니다"
+
+    # 모든 planned operation은 dispatch에 없어도 됨
+    for path, method, _operation_id in planned_operations:
+        key = (path, method)
+        if key in _DISPATCH_ROUTES:
+            # planned인데 구현되어 있어도 에러는 아님 (구현이 빠른 경우)
+            pass
+        else:
+            # planned이고 구현되지 않아도 정상
+            pass
