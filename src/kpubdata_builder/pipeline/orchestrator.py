@@ -17,6 +17,7 @@ Export 단계 연결은 stage-aware exporter 도입(#28/v0.2) 시점으로 연�
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -44,6 +45,11 @@ from ..stages.silver.persist import persist_silver_dataset
 from .context import BuildContext
 
 logger = logging.getLogger(__name__)
+
+# 소스를 동시에 실행할 최대 스레드 수. 소스별 fetch/stage는 대부분 네트워크 I/O로
+# 대기하므로 순차 실행 시 총 소요 시간이 소스 수에 비례해 늘어난다. 소스 수만큼
+# 무제한으로 스레드를 만들지 않도록 상한을 둔다 (#247).
+_MAX_PARALLEL_SOURCES = 4
 
 
 @dataclass(frozen=True)
@@ -106,20 +112,39 @@ def _record_output_paths(outputs: list[str], *paths: Path) -> None:
     outputs.extend(str(path) for path in paths)
 
 
+@dataclass(frozen=True)
+class _SourcePipelineResult:
+    """단일 소스 파이프라인 실행의 로컬 결과.
+
+    여러 소스를 스레드 풀로 동시에 실행할 때(#247), _run_source_pipeline이 공유
+    가변 상태(outputs/row_counts/schema_summaries/provenance)를 직접 건드리지
+    않고 자신의 결과만 반환하게 한다. 병합은 run_build에서 모든 스레드가 끝난
+    뒤 단일 스레드로 수행한다.
+    """
+
+    outcome: SourceBuildOutcome
+    output_paths: tuple[str, ...] = ()
+    row_count: int | None = None
+    schema_summary: SchemaSummary | None = None
+    provenance_entry: SourceProvenance | None = None
+
+
 def _run_source_pipeline(
     source: SourceRef,
     *,
     client: SourceClient,
     context: BuildContext,
-    outputs: list[str],
-    row_counts: dict[str, int],
-    schema_summaries: dict[str, SchemaSummary],
-    provenance: list[SourceProvenance],
-) -> SourceBuildOutcome:
-    """한 소스를 Bronze → Silver → Gold로 실행하고 산출물을 저장한다."""
+) -> _SourcePipelineResult:
+    """한 소스를 Bronze → Silver → Gold로 실행하고 산출물을 저장한다.
+
+    공유 가변 컨테이너를 인자로 받는 대신 결과를 로컬로 모아 반환하므로,
+    여러 소스에 대해 동시에(스레드 풀에서) 안전하게 호출할 수 있다 (#247).
+    """
     fetch_key = _fetch_source_key(source)
     output_key = _output_source_key(source)
     completed: list[str] = []
+    outputs: list[str] = []
+    provenance_entry: SourceProvenance | None = None
     try:
         bronze = build_bronze_artifact(
             client, source_key=fetch_key, fetch_params=dict(source.params)
@@ -130,14 +155,14 @@ def _run_source_pipeline(
         )
         completed.append("bronze")
         _record_output_paths(outputs, bronze_paths.records_path, bronze_paths.metadata_path)
-        provenance.append(
-            build_source_provenance(
-                provider=source.provider,
-                dataset=source.dataset,
-                fetched_at=bronze.fetched_at,
-                records=bronze.raw_records,
-                params=source.params,
-            )
+        # bronze 성공 직후 확정한다: 이후 단계가 실패해도(부분 실패) provenance는 남는다
+        # (병렬화 이전 shared list에 즉시 append하던 것과 동일한 동작을 유지) (#247).
+        provenance_entry = build_source_provenance(
+            provider=source.provider,
+            dataset=source.dataset,
+            fetched_at=bronze.fetched_at,
+            records=bronze.raw_records,
+            params=source.params,
         )
 
         silver = build_silver_dataset(bronze)
@@ -185,19 +210,24 @@ def _run_source_pipeline(
                 (column.name, column.dtype, column.nullable) for column in silver.schema.columns
             ),
             sample_rows=silver.preview.rows,
-            license=context.spec.metadata.get("license", ""),
-            version=context.spec.metadata.get("version", ""),
+            license=str(context.spec.metadata.get("license", "")),
+            version=str(context.spec.metadata.get("version", "")),
         )
         card_path = gold_paths.gold_dir / "README.md"
         _ = card_path.write_text(render_dataset_card(card), encoding="utf-8")
         _record_output_paths(outputs, card_path)
 
-        row_counts[output_key] = silver.statistics.row_count
-        schema_summaries[output_key] = build_schema_summary(
+        schema_summary = build_schema_summary(
             (column.name, column.dtype, column.nullable) for column in silver.schema.columns
         )
-        return SourceBuildOutcome(
-            source_key=output_key, status="ok", stages_completed=tuple(completed)
+        return _SourcePipelineResult(
+            outcome=SourceBuildOutcome(
+                source_key=output_key, status="ok", stages_completed=tuple(completed)
+            ),
+            output_paths=tuple(outputs),
+            row_count=silver.statistics.row_count,
+            schema_summary=schema_summary,
+            provenance_entry=provenance_entry,
         )
     except Exception as exc:  # stage 실패를 결과로 변환하여 매니페스트에 기록
         # 검증 오류(ValidationError, DatasetValidationError)는 파일시스템 경로를
@@ -215,11 +245,15 @@ def _run_source_pipeline(
                 exc_info=exc,
             )
             error_msg = f"pipeline failed for source {output_key!r}"
-        return SourceBuildOutcome(
-            source_key=output_key,
-            status="failed",
-            stages_completed=tuple(completed),
-            error=error_msg,
+        return _SourcePipelineResult(
+            outcome=SourceBuildOutcome(
+                source_key=output_key,
+                status="failed",
+                stages_completed=tuple(completed),
+                error=error_msg,
+            ),
+            output_paths=tuple(outputs),
+            provenance_entry=provenance_entry,
         )
 
 
@@ -250,22 +284,32 @@ def run_build(
     validate_spec(spec)
     context = BuildContext.create(spec, output_root=output_root, run_id=run_id)
 
+    def _worker(source: SourceRef) -> _SourcePipelineResult:
+        return _run_source_pipeline(source, client=client, context=context)
+
+    # 소스별 fetch/stage는 대부분 네트워크 I/O 대기이므로 스레드 풀로 동시에 실행해
+    # 총 소요 시간을 줄인다 (#247). executor.map은 완료 순서가 아니라 spec.sources
+    # 순서로 결과를 반환하므로 이후 병합 결과(매니페스트)가 결정적으로 유지된다.
+    max_workers = min(len(spec.sources), _MAX_PARALLEL_SOURCES)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        results = list(executor.map(_worker, spec.sources))
+
+    outcomes = tuple(result.outcome for result in results)
+
+    # 모든 소스 실행이 끝난 뒤 단일 스레드에서 병합한다 — 스레드 간 공유 가변
+    # 상태가 없으므로 이 단계는 병렬화 이전과 동일하게 안전하다 (#247).
     outputs: list[str] = []
     row_counts: dict[str, int] = {}
     schema_summaries: dict[str, SchemaSummary] = {}
     provenance: list[SourceProvenance] = []
-    outcomes = tuple(
-        _run_source_pipeline(
-            source,
-            client=client,
-            context=context,
-            outputs=outputs,
-            row_counts=row_counts,
-            schema_summaries=schema_summaries,
-            provenance=provenance,
-        )
-        for source in spec.sources
-    )
+    for result in results:
+        outputs.extend(result.output_paths)
+        if result.row_count is not None:
+            row_counts[result.outcome.source_key] = result.row_count
+        if result.schema_summary is not None:
+            schema_summaries[result.outcome.source_key] = result.schema_summary
+        if result.provenance_entry is not None:
+            provenance.append(result.provenance_entry)
 
     errors = tuple(
         f"{outcome.source_key}: {outcome.error}"

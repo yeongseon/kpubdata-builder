@@ -337,6 +337,94 @@ def test_run_build_rejects_unsafe_run_id(tmp_path: Path) -> None:
         _ = run_build(spec, client=client, output_root=tmp_path, run_id="../escape")
 
 
+def test_run_build_executes_sources_concurrently(tmp_path: Path) -> None:
+    # 동시에 진행 중인 fetch 수를 직접 관찰해 병렬 실행을 검증한다 (#247).
+    # wall-clock 임계값 대신 concurrency counter를 쓰는 이유: CI 러너마다 성능 편차가
+    # 커서 시간 기반 assert는 느린 러너에서 flaky해진다(느린 러너에서 실측된 회귀:
+    # 순차 실행이 아닌데도 elapsed가 임계값을 넘어 실패).
+    import threading
+    import time
+
+    lock = threading.Lock()
+    concurrent_count = 0
+    max_seen = 0
+    release = threading.Event()
+
+    class _BlockingClient(_FakeClient):
+        def dataset(self, source_key: str) -> _FakeDataset:
+            nonlocal concurrent_count, max_seen
+            with lock:
+                concurrent_count += 1
+                max_seen = max(max_seen, concurrent_count)
+            release.wait(timeout=5.0)
+            with lock:
+                concurrent_count -= 1
+            return super().dataset(source_key)
+
+    spec = _spec(
+        SourceRef(provider="datago", dataset="a"),
+        SourceRef(provider="datago", dataset="b"),
+        SourceRef(provider="datago", dataset="c"),
+    )
+    client = _BlockingClient(
+        {"datago.a": [{"id": "1"}], "datago.b": [{"id": "1"}], "datago.c": [{"id": "1"}]}
+    )
+
+    results: list[BuildResult] = []
+
+    def _run() -> None:
+        results.append(run_build(spec, client=client, output_root=tmp_path, run_id="run-parallel"))
+
+    runner_thread = threading.Thread(target=_run)
+    runner_thread.start()
+    try:
+        # 3개 소스 모두 동시에 fetch를 블로킹할 때까지 능동적으로 대기한다.
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            with lock:
+                if concurrent_count >= 3:
+                    break
+            time.sleep(0.02)
+
+        with lock:
+            observed = max_seen
+    finally:
+        release.set()
+        runner_thread.join(timeout=5.0)
+
+    assert observed == 3
+    assert results[0].status == "ok"
+    assert len(results[0].outcomes) == 3
+
+
+def test_run_build_preserves_source_order_in_manifest_with_multiple_sources(
+    tmp_path: Path,
+) -> None:
+    # 스레드 풀 완료 순서가 뒤바뀌어도 manifest의 inputs/outcomes는 spec.sources
+    # 순서를 유지해 결정적이어야 한다 (#247: executor.map은 제출 순서로 결과를 반환).
+    spec = _spec(
+        SourceRef(provider="datago", dataset="a"),
+        SourceRef(provider="datago", dataset="b"),
+        SourceRef(provider="datago", dataset="c"),
+    )
+    client = _FakeClient(
+        {"datago.a": [{"id": "1"}], "datago.b": [{"id": "1"}], "datago.c": [{"id": "1"}]}
+    )
+
+    result = run_build(spec, client=client, output_root=tmp_path, run_id="run-order")
+
+    assert result.status == "ok"
+    assert [o.source_key for o in result.outcomes] == [
+        "datago.a",
+        "datago.b",
+        "datago.c",
+    ]
+    manifest = cast(
+        dict[str, JsonValue], json.loads(result.manifest_path.read_text(encoding="utf-8"))
+    )
+    assert manifest["inputs"] == ["datago.a", "datago.b", "datago.c"]
+
+
 def test_run_build_validates_spec_before_running(tmp_path: Path) -> None:
     # 잘못된 spec(소스 없음)은 단계 진입 전 fail-fast로 거부되어야 한다 (#212).
     from kpubdata_builder.errors import ValidationError

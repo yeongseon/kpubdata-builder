@@ -120,13 +120,13 @@ def _parse_string_list(value: object, *, field_name: str) -> tuple[str, ...]:
     return tuple(cast(str, item) for item in items)
 
 
-def _parse_string_dict(value: object, *, field_name: str) -> dict[str, str]:
+def _parse_string_dict(value: object, *, field_name: str) -> dict[str, JsonValue]:
     """문자열 키/값 매핑을 검증하고 새 dict로 복사한다."""
     if not isinstance(value, dict):
         raise TypeError(f"{field_name} must be a mapping")
 
     raw_mapping = cast(dict[object, object], value)
-    parsed: dict[str, str] = {}
+    parsed: dict[str, JsonValue] = {}
     for key, item in raw_mapping.items():
         if not isinstance(key, str) or not isinstance(item, str):
             raise TypeError(f"{field_name} entries must be string pairs")

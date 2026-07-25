@@ -14,8 +14,10 @@ import json
 import logging
 import os
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import cast
+from socket import socket as _socket
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 from ..spec import JsonValue
@@ -28,6 +30,11 @@ _MAX_BODY_BYTES = 10 * 1024 * 1024  # 10 MiB
 # 소켓 읽기 타임아웃(초). 느린 클라이언트/slowloris 공격이 스레드를 무한 점거하지 않도록
 # 한다 (#219). ThreadingHTTPServer를 사용하더라도 각 연결 스레드가 여기서 해제된다.
 _SOCKET_TIMEOUT_SECONDS = 30.0
+
+# 동시에 요청을 처리할 수 있는 최대 스레드 수. ThreadingHTTPServer는 연결마다 새
+# 스레드(스레드당 스택 ~8MB)를 무제한으로 만들기 때문에, 수백~수천 개의 동시 연결만으로
+# 메모리가 고갈될 수 있다 (#253). 고정 크기 스레드 풀로 상한을 둔다.
+_DEFAULT_MAX_WORKERS = 10
 
 # CORS 허용 Origin. 기본값은 로컬 개발 편의를 위해 모든 오리진(`*`)이지만, 환경변수로
 # 특정 오리진(예: http://localhost:5173)만 허용하도록 제한할 수 있다 (#254 보안 강화).
@@ -90,7 +97,14 @@ def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
             # dispatch()에서 예상치 못한 예외가 발생하면 연결을 끊는 대신 JSON 500을
             # 반환한다. 상세 정보는 서버 로그에만 기록하고 클라이언트에는 누설하지 않는다 (#218).
             try:
-                response = dispatch(service, method, path, body, query=split.query)
+                response = dispatch(
+                    service,
+                    method,
+                    path,
+                    body,
+                    query=split.query,
+                    api_key=self.headers.get("X-API-Key"),
+                )
             except Exception:
                 _logger.error(
                     "Unhandled exception in dispatch: %s %s\n%s",
@@ -109,7 +123,7 @@ def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
             allow_origin = os.environ.get(_CORS_ALLOW_ORIGIN_ENV, _DEFAULT_CORS_ALLOW_ORIGIN)
             self.send_header("Access-Control-Allow-Origin", allow_origin)
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, X-API-Key")
             self.send_header("Access-Control-Max-Age", "86400")
 
         def _write(self, status_code: int, body: dict[str, JsonValue]) -> None:
@@ -141,22 +155,66 @@ def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
     return _Handler
 
 
-def serve(service: BuilderService, *, host: str = "127.0.0.1", port: int = 8000) -> None:
+class BoundedThreadingHTTPServer(ThreadingHTTPServer):
+    """동시 처리 스레드 수가 제한된 ThreadingHTTPServer (#253).
+
+    ThreadingHTTPServer는 연결마다 새 스레드를 무제한으로 생성해, 악의적이거나
+    비정상적인 클라이언트가 다수의 동시 연결을 열면 스레드/메모리 고갈로 서비스가
+    중단될 수 있다. 요청 처리를 고정 크기 ThreadPoolExecutor에 위임해 동시
+    처리량에 상한을 둔다.
+    """
+
+    daemon_threads = True
+
+    def __init__(
+        self,
+        *args: Any,
+        max_workers: int = _DEFAULT_MAX_WORKERS,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self._executor = ThreadPoolExecutor(
+            max_workers=max_workers, thread_name_prefix="kpubdata-http"
+        )
+
+    def process_request(
+        self, request: _socket | tuple[bytes, _socket], client_address: Any
+    ) -> None:
+        # 새 스레드를 직접 만드는 대신 고정 크기 풀에 위임한다. 풀이 가득 차면
+        # 초과 요청은 스레드를 점유하지 않고 풀 큐에서 대기한다.
+        self._executor.submit(self.process_request_thread, request, client_address)
+
+    def server_close(self) -> None:
+        super().server_close()
+        self._executor.shutdown(wait=False, cancel_futures=True)
+
+
+def serve(
+    service: BuilderService,
+    *,
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    max_workers: int = _DEFAULT_MAX_WORKERS,
+) -> None:
     """BuilderService를 블로킹 HTTP 서버로 제공한다.
 
-    단일 스레드 HTTPServer 대신 ThreadingHTTPServer를 사용하여 느린 클라이언트가
-    서버 전체를 멈추지 않도록 한다 (#219).
+    단일 스레드 HTTPServer 대신 BoundedThreadingHTTPServer를 사용하여 느린
+    클라이언트가 서버 전체를 멈추지 않으면서도 (#219), 동시 처리 스레드 수에
+    상한을 두어 DoS를 방지한다 (#253).
 
     매개변수:
         service: 노출할 BuilderService.
         host: 바인딩 호스트.
         port: 바인딩 포트.
+        max_workers: 동시에 요청을 처리할 최대 스레드 수.
     """
-    server = ThreadingHTTPServer((host, port), make_handler(service))
+    server = BoundedThreadingHTTPServer(
+        (host, port), make_handler(service), max_workers=max_workers
+    )
     try:
         server.serve_forever()
     finally:
         server.server_close()
 
 
-__all__ = ["make_handler", "serve"]
+__all__ = ["BoundedThreadingHTTPServer", "make_handler", "serve"]
