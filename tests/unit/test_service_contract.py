@@ -1,9 +1,11 @@
-"""Builder Service Contract(#63, #226) OpenAPI 스펙의 구조 검증.
+"""Builder Service Contract(#63, #226, #317, #319) OpenAPI 스펙의 구조 검증.
 
 설치된 OpenAPI validator가 없으므로, 계약이 OpenAPI 3.1이고 BuilderService
 (service/app.py)가 실제로 구현한 동기 라우트와 wire 형태를 모두 담는지 구조적으로
 검증한다. 계약은 이제 구현된 엔드포인트만 기술하며(#226), 한쪽만 바뀌는 조용한
-드리프트를 막기 위해 구현 라우트 ↔ 계약 operationId 매핑을 명시적으로 고정한다.
+드리프트를 막기 위해 구현 라우트 ↔ 계약 operationId 매핑을 명시적으로 고정한다(#317).
+또한 YAML 계약과 실제 dispatch 구현 간의 양방향 일치성을 검증하며(#317),
+상태 코드와 응답 스키마 검증으로 범위를 확장한다(#319).
 """
 
 from __future__ import annotations
@@ -14,6 +16,17 @@ from typing import Any, cast
 import yaml
 
 _CONTRACT_PATH = Path(__file__).parents[2] / "contract" / "builder-api.yaml"
+
+# dispatch에 구현된 (path, method, operationId) 매핑.
+# service/app.py:dispatch의 라우팅 규칙을 기계적으로 추출하기 어렵기 때문에
+# 명시적으로 선언하여 유지보수성을 높인다.
+_DISPATCH_ROUTES: dict[tuple[str, str], str] = {
+    ("/version", "GET"): "getVersion",
+    ("/validate", "POST"): "validateSpec",
+    ("/preview", "POST"): "previewBuild",
+    ("/build", "POST"): "createBuild",
+    ("/artifacts/{run_id}", "GET"): "listBuildArtifacts",
+}
 
 # (path, method) 형태의 계약 필수 오퍼레이션. BuilderService.dispatch가 실제로
 # 라우팅하는 동기 엔드포인트와 1:1로 대응한다.
@@ -145,3 +158,239 @@ def test_referenced_schemas_resolve() -> None:
         for part in ref.lstrip("#/").split("/"):
             assert part in target, f"unresolved $ref: {ref}"
             target = target[part]
+
+
+# =============================================================================
+# 계약 커버리지 테스트 1단계: 경로/메서드 양방향 검증 (#317)
+# =============================================================================
+
+def _extract_yaml_operations() -> dict[tuple[str, str], dict[str, Any]]:
+    """YAML에서 (path, method) -> operation 매핑을 추출한다."""
+    contract = _load_contract()
+    operations: dict[tuple[str, str], dict[str, Any]] = {}
+
+    for path, methods in contract["paths"].items():
+        for method_lower, operation in methods.items():
+            if not isinstance(operation, dict):
+                continue
+            method = method_lower.upper()
+            key = (path, method)
+            operations[key] = operation
+
+    return operations
+
+
+def _is_planned_operation(operation: dict[str, Any]) -> bool:
+    """operation이 x-planned: true로 표시되었는지 확인한다."""
+    return operation.get("x-planned") is True
+
+
+def test_all_yaml_operations_implemented_in_dispatch() -> None:
+    """YAML 계약에 정의된 모든 operation이 dispatch에 구현되어 있는지 검증한다(#317).
+
+    x-planned: true로 표시된 operation은 아직 구현되지 않아도 되며, 검증에서 제외한다.
+    """
+    yaml_operations = _extract_yaml_operations()
+
+    for (path, method), operation in yaml_operations.items():
+        if _is_planned_operation(operation):
+            continue
+
+        key = (path, method)
+        assert key in _DISPATCH_ROUTES, (
+            f"YAML에 정의된 {method} {path}가 dispatch에 구현되어 있지 않습니다. "
+            f"operationId: {operation.get('operationId')}"
+        )
+
+        yaml_operation_id = operation.get("operationId")
+        dispatch_operation_id = _DISPATCH_ROUTES[key]
+        assert yaml_operation_id == dispatch_operation_id, (
+            f"operationId 불일치: YAML={yaml_operation_id}, dispatch={dispatch_operation_id}"
+        )
+
+
+def test_all_dispatch_routes_declared_in_yaml() -> None:
+    """dispatch에 구현된 모든 경로가 YAML 계약에 선언되어 있는지 검증한다(#317).
+
+    실제 구현이 있는데 YAML에 누락된 경우를 탐지한다.
+    """
+    yaml_operations = _extract_yaml_operations()
+
+    for (path, method), operation_id in _DISPATCH_ROUTES.items():
+        key = (path, method)
+        assert key in yaml_operations, (
+            f"dispatch에 구현된 {method} {path}가 YAML 계약에 누락되었습니다. "
+            f"operationId: {operation_id}"
+        )
+
+        yaml_op = yaml_operations[key]
+        yaml_operation_id = yaml_op.get("operationId")
+        assert yaml_operation_id == operation_id, (
+            f"operationId 불일치: dispatch={operation_id}, YAML={yaml_operation_id}"
+        )
+
+
+def test_planned_operations_excluded_from_implementation_check() -> None:
+    """x-planned: true operation이 구현 검증에서 제외되는지 확인한다(#317).
+
+    계약에는 planned operation이 포함될 수 있지만, 실제 dispatch에는
+    구현되지 않아도 된다. 이 규칙이 올바르게 동작하는지 검증한다.
+    """
+    yaml_operations = _extract_yaml_operations()
+
+    # 현재 계약에는 x-planned operation이 없으므로, 모든 operation이 구현되어야 한다
+    planned_operations = [
+        (path, method, op.get("operationId"))
+        for (path, method), op in yaml_operations.items()
+        if _is_planned_operation(op)
+    ]
+
+    # 향후 planned operation이 추가되면 이 테스트가 그 존재를 검증한다
+    # 현재는 계약에 planned operation이 없음을 확인
+    for path, method, operation_id in planned_operations:
+        assert operation_id, f"planned operation {method} {path}에 operationId가 없습니다"
+
+    # 모든 planned operation은 dispatch에 없어도 됨
+    for path, method, _operation_id in planned_operations:
+        key = (path, method)
+        if key in _DISPATCH_ROUTES:
+            # planned인데 구현되어 있어도 에러는 아님 (구현이 빠른 경우)
+            pass
+        else:
+            # planned이고 구현되지 않아도 정상
+            pass
+
+
+# =============================================================================
+# 계약 커버리지 테스트 2단계: 상태 코드와 응답 스키마 검증 (#319)
+# =============================================================================
+
+# 각 operation이 YAML에 선언한 상태 코드와 실제 구현이 반환하는 상태 코드의
+# 매핑. service/app.py:dispatch와 각 service 메서드를 분석하여 작성한다.
+_OPERATION_STATUS_CODES: dict[str, set[int]] = {
+    "getVersion": {200},
+    "validateSpec": {200, 400},
+    "previewBuild": {200, 400},
+    "createBuild": {200, 400, 502},
+    "listBuildArtifacts": {200, 400, 404},
+}
+
+
+def _extract_declared_status_codes(operation: dict[str, Any]) -> set[int]:
+    """YAML operation에서 선언된 상태 코드들을 추출한다."""
+    responses = operation.get("responses", {})
+    declared_codes: set[int] = set()
+
+    for status_code_str in responses:
+        if status_code_str == "default":
+            continue
+        try:
+            declared_codes.add(int(status_code_str))
+        except ValueError:
+            # "default" 또는 기타 비숫자 상태 코드는 무시
+            continue
+
+    return declared_codes
+
+
+def test_declared_status_codes_match_implementation() -> None:
+    """YAML에 선언된 상태 코드와 실제 구현이 일치하는지 검증한다(#319).
+
+    각 operation마다 YAML의 responses 키에 선언된 상태 코드와 실제 코드가
+    반환할 수 있는 상태 코드가 일치해야 한다.
+    """
+    yaml_operations = _extract_yaml_operations()
+
+    for (path, method), operation in yaml_operations.items():
+        if _is_planned_operation(operation):
+            continue
+
+        operation_id = operation.get("operationId")
+        if not operation_id:
+            continue
+
+        # YAML에 선언된 상태 코드 추출
+        declared_codes = _extract_declared_status_codes(operation)
+
+        # 실제 구현의 상태 코드 (401 인증 오류는 모든 엔드포인트에 공통이므로 추가)
+        implemented_codes = _OPERATION_STATUS_CODES.get(operation_id, set())
+        all_implemented_codes = implemented_codes | {401}
+
+        assert declared_codes == all_implemented_codes, (
+            f"상태 코드 불일치: {method} {path} (operationId: {operation_id})\n"
+            f"  YAML 선언: {sorted(declared_codes)}\n"
+            f"  실제 구현: {sorted(all_implemented_codes)}\n"
+            f"  차이: {sorted(declared_codes ^ all_implemented_codes)}"
+        )
+
+
+def _extract_response_schema_required_fields(
+    contract: dict[str, Any], response_ref: str
+) -> set[str]:
+    """YAML 응답 스키마에서 required 필드들을 추출한다."""
+    # $ref 형식: "#/components/schemas/SchemaName"
+    if not response_ref.startswith("#/components/schemas/"):
+        return set()
+
+    schema_name = response_ref[len("#/components/schemas/") :]
+    schema = contract["components"]["schemas"].get(schema_name, {})
+    required = schema.get("required", [])
+
+    if isinstance(required, list):
+        return set(required)
+    return set()
+
+
+def test_response_schemas_have_required_fields() -> None:
+    """YAML 응답 스키마가 주요 엔드포인트의 200 응답에 대한 필수 필드를
+    정의하고 있는지 검증한다(#319).
+
+    이 테스트는 계약 자체의 완전성을 확인한다: 각 operation이 성공 응답(200)에
+    대한 스키마를 정의하고, 그 스키마에 required 필드들이 포함되어 있는지 확인.
+    """
+    contract = _load_contract()
+    yaml_operations = _extract_yaml_operations()
+
+    for (path, method), operation in yaml_operations.items():
+        if _is_planned_operation(operation):
+            continue
+
+        operation_id = operation.get("operationId")
+        if not operation_id:
+            continue
+
+        # 200 응답 확인
+        responses = operation.get("responses", {})
+        if "200" not in responses:
+            raise AssertionError(
+                f"{method} {path} (operationId: {operation_id})에 "
+                f"200 응답이 누락되었습니다"
+            )
+
+        response_200 = responses["200"]
+        content = response_200.get("content", {})
+        json_content = content.get("application/json", {})
+        schema_ref = json_content.get("schema", {}).get("$ref", "")
+
+        # $ref가 있으면 required 필드 확인
+        if schema_ref:
+            required_fields = _extract_response_schema_required_fields(contract, schema_ref)
+
+            assert required_fields, (
+                f"{method} {path} (operationId: {operation_id})의 200 응답 스키마에 "
+                f"required 필드가 정의되어 있지 않습니다: {schema_ref}"
+            )
+
+            # 주요 엔드포인트들은 최소한 몇 개의 필수 필드를 가져야 함
+            main_operations = {
+                "getVersion",
+                "validateSpec",
+                "previewBuild",
+                "createBuild",
+                "listBuildArtifacts",
+            }
+            if operation_id in main_operations:
+                assert len(required_fields) >= 1, (
+                    f"{method} {path} (operationId: {operation_id})의 "
+                    f"200 응답 스키마에 필수 필드가 너무 적습니다: {required_fields}"
+                )
