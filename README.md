@@ -89,6 +89,137 @@ build/{run_id}/
 
 자세한 규칙은 [BOUNDARY.md](./BOUNDARY.md)를 참고하세요.
 
+## 배포 및 설정 가이드
+
+### 환경변수
+
+| 변수명 | 설명 | 기본값 | 필수 여부 |
+| :--- | :--- | :--- | :--- |
+| `KPUBDATA_BUILDER_API_KEY` | API 인증 키 (X-API-Key 헤더로 전송) | 없음 | 프로덕션 권장 |
+| `KPUBDATA_BUILDER_ALLOWED_ORIGINS` | CORS 허용 오리진 (쉼표로 구분) | 없음 | 선택사항 |
+
+**보안 정책**:
+- **로컬 개발**: `KPUBDATA_BUILDER_API_KEY` 미설정 시 인증을 건너뜁니다 (편의성).
+- **프로덕션**: 반드시 API 키를 설정하고 `X-API-Key` 헤더를 통한 인증을 사용하세요.
+- **fail-closed**: Docker 컨테이너는 보안 기본값을 안전 측으로 유지합니다 (ADR 0006).
+
+### CLI 인자
+
+#### 전역 인자
+
+| 인자 | 설명 | 기본값 |
+| :--- | :--- | :--- |
+| `--version` | 버전 정보 표시 | - |
+
+#### validate 명령
+
+BuildSpec YAML 파일의 유효성을 검사합니다.
+
+| 인자 | 설명 | 필수 여부 |
+| :--- | :--- | :--- |
+| `spec` | BuildSpec YAML 파일 경로 | 필수 |
+
+```bash
+kpubdata-builder validate specs/weather.yaml
+```
+
+#### preview 명령
+
+BuildSpec을 실행하지 않고 스키마와 샘플 데이터만 미리볼 수 있습니다.
+
+| 인자 | 설명 | 기본값 | 필수 여부 |
+| :--- | :--- | :--- | :--- |
+| `spec` | BuildSpec YAML 파일 경로 | - | 필수 |
+| `--limit` | 소스별 샘플 최대 행 수 | 5 | 선택 |
+
+```bash
+kpubdata-builder preview specs/weather.yaml --limit 10
+```
+
+#### build 명령
+
+BuildSpec을 통해 Medallion 파이프라인을 실행합니다.
+
+| 인자 | 설명 | 기본값 | 필수 여부 |
+| :--- | :--- | :--- | :--- |
+| `spec` | BuildSpec YAML 파일 경로 | - | 필수 |
+| `--output-dir` | 실행 워크스페이스 루트 디렉터리 | `build` | 선택 |
+| `--run-id` | 실행 식별자 (없으면 타임스탬프 생성) | 자동 생성 | 선택 |
+
+```bash
+kpubdata-builder build specs/weather.yaml --output-dir ./dist/weather
+```
+
+#### publish 명령
+
+빌드 결과물을 로컬 또는 원격 저장소로 게시합니다.
+
+| 인자 | 설명 | 필수 여부 |
+| :--- | :--- | :--- |
+| `spec` | BuildSpec YAML 파일 경로 | 필수 |
+| `--target` | 게시 대상 (`local`, `huggingface`, `kaggle`) | 선택 (기본값: `local`) |
+| `--destination` | 로컬 디렉터리 경로 또는 원격 repo id | 필수 |
+| `--artifacts-dir` | 게시할 파일이 있는 디렉터리 | 필수 |
+| `--public` | Kaggle 데이터셋을 공개로 생성 | 선택 |
+
+```bash
+# 로컬 디렉터리로 게시
+kpubdata-builder publish specs/weather.yaml --target local --destination ./out --artifacts-dir ./dist/weather/run-001
+
+# Hugging Face에 게시
+kpubdata-builder publish specs/weather.yaml --target huggingface --destination my-org/my-dataset --artifacts-dir ./dist/weather/run-001
+
+# Kaggle에 공개 데이터셋으로 게시
+kpubdata-builder publish specs/weather.yaml --target kaggle --destination my-username/my-dataset --artifacts-dir ./dist/weather/run-001 --public
+```
+
+#### serve 명령
+
+Builder HTTP 서비스를 실행합니다 (Studio 연동용).
+
+| 인자 | 설명 | 기본값 | 필수 여부 |
+| :--- | :--- | :--- | :--- |
+| `--host` | 바인딩 호스트 | `127.0.0.1` | 선택 |
+| `--port` | 바인딩 포트 | `8000` | 선택 |
+| `--output-dir` | 실행 워크스페이스 루트 디렉터리 | `build` | 선택 |
+
+```bash
+kpubdata-builder serve --host 0.0.0.0 --port 8000 --output-dir ./dist
+```
+
+### HTTP 서비스 배포 (Docker)
+
+> **Dockerfile과 docker-compose는 ADR 0006 (#312) 후속 작업으로 계획 중입니다.**
+
+현재는 다음과 같이 서비스를 실행할 수 있습니다:
+
+```bash
+# 로컬 개발 환경
+export KPUBDATA_BUILDER_API_KEY="dev-key"
+kpubdata-builder serve --host 127.0.0.1 --port 8000
+
+# 프로덕션 환경 (API 키 필수)
+export KPUBDATA_BUILDER_API_KEY="${PROD_API_KEY}"
+kpubdata-builder serve --host 0.0.0.0 --port 8000 --output-dir /data/builds
+```
+
+### API 인증
+
+모든 HTTP 엔드포인트는 `X-API-Key` 헤더를 통한 인증을 지원합니다:
+
+```bash
+curl -X POST http://localhost:8000/validate \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-api-key" \
+  -d '{"spec": "dataset_id: test\n..."}'
+```
+
+인증 실패 시 `401 Unauthorized` 응답이 반환됩니다.
+
+자세한 내용은 [ADR 0006 — 서비스 인증 & 배포(Docker) 스토리](./docs/adrs/0006-service-auth-and-deployment.md)와 [API_CONTRACT.md](./API_CONTRACT.md)를 참고하세요.
+
+---
+
 ## 빠른 시작
 
 > **의존성 설치 참고 (kpubdata 해석 전략):** 로컬 개발에서는 `../kpubdata` 형제 디렉터리를 editable checkout으로 사용하고, CI/배포에서는 `uv sync --no-sources`로 PyPI 릴리스를 설치합니다. 자세한 내용은 [CONTRIBUTING.md의 Step 3-1](./CONTRIBUTING.md#step-3-1-의존성-해석-전략-dependency-resolution-strategy)을 참고하세요.
