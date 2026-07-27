@@ -189,19 +189,43 @@ kpubdata-builder serve --host 0.0.0.0 --port 8000 --output-dir ./dist
 
 ### HTTP 서비스 배포 (Docker)
 
-> **Dockerfile과 docker-compose는 ADR 0006 (#312) 후속 작업으로 계획 중입니다.**
-
-현재는 다음과 같이 서비스를 실행할 수 있습니다:
+#### Docker 이미지 빌드
 
 ```bash
-# 로컬 개발 환경
-export KPUBDATA_BUILDER_API_KEY="dev-key"
-kpubdata-builder serve --host 127.0.0.1 --port 8000
-
-# 프로덕션 환경 (API 키 필수)
-export KPUBDATA_BUILDER_API_KEY="${PROD_API_KEY}"
-kpubdata-builder serve --host 0.0.0.0 --port 8000 --output-dir /data/builds
+docker build -t kpubdata-builder:latest .
 ```
+
+#### 컨테이너 실행
+
+```bash
+# 기본 실행 (API 키 필수)
+docker run -d \
+  -p 8000:8000 \
+  -e KPUBDATA_BUILDER_API_KEY="your-api-key" \
+  -v /data/builds:/data/builds \
+  kpubdata-builder:latest
+
+# 환경변수 설정
+docker run -d \
+  -p 8000:8000 \
+  -e KPUBDATA_BUILDER_API_KEY="your-api-key" \
+  -e KPUBDATA_BUILDER_PORT=8000 \
+  -e KPUBDATA_BUILDER_OUTPUT_ROOT=/data/builds \
+  -e KPUBDATA_BUILDER_ALLOWED_ORIGINS="http://localhost:3000,https://studio.example.com" \
+  -v $(pwd)/data:/data/builds \
+  kpubdata-builder:latest
+```
+
+#### 환경변수
+
+| 변수 | 설명 | 기본값 | 필수 여부 |
+| :--- | :--- | :--- | :--- |
+| `KPUBDATA_BUILDER_API_KEY` | API 인증 키 | 없음 | Docker에서 필수 |
+| `KPUBDATA_BUILDER_PORT` | HTTP 포트 | `8000` | 선택 |
+| `KPUBDATA_BUILDER_OUTPUT_ROOT` | 빌드 산출물 디렉터리 | `./data/builds` | 선택 |
+| `KPUBDATA_BUILDER_ALLOWED_ORIGINS` | 허용 CORS 오리진 (쉼표로 구분) | 없음 | 선택 |
+
+> **보안 주의**: Docker 배포에서는 `KPUBDATA_BUILDER_API_KEY` 설정이 필수입니다. 로컬 개발에서만 키 미설정 시 인증을 생략합니다 (fail-closed).
 
 ### API 인증
 
