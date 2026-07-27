@@ -93,7 +93,7 @@ uv sync --extra dev --extra publish --no-sources
 
 #### 핀 범위(`>=0.5.0,<0.6`)를 이렇게 설정한 이유
 
-`kpubdata-builder`는 `kpubdata` 0.5.x의 API(`Client.dataset(...).list` 등)에 의존합니다. 0.6 이상은 호환성 정책이 확정되지 않아 현재로서는 허용하지 않습니다. 호환 정책이 확정되면 상한을 올릴 예정입니다 (관련 이슈: #213).
+`kpubdata-builder`는 `kpubdata` 0.5.x의 API(`Client.dataset(...).list` 등)에 의존합니다. 0.6 이상은 호환성 정책이 확정되지 않아 현재로서는 허용하지 않습니다. 호환 정책이 확정되면 상한을 올릴 예정입니다 (관련 이슈: #213, 자세한 내용은 [ADR 0007](adrs/0007-kpubdata-version-compatibility-policy.md) 참조).
 
 #### 요약
 
