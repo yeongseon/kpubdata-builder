@@ -100,6 +100,7 @@ _IMPLEMENTED_OPERATIONS = {
     "previewBuild",  # POST /preview
     "createBuild",  # POST /build
     "listBuildArtifacts",  # GET /artifacts/{run_id}
+    "listBuilds",  # GET /builds
 }
 
 
