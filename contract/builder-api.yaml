@@ -175,6 +175,11 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+<<<<<<< HEAD
+=======
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+>>>>>>> origin/main
 
 components:
   securitySchemes:
