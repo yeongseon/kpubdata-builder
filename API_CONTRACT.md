@@ -19,8 +19,11 @@ Builder는 두 가지 실행 모델을 가집니다.
 
 원칙:
 
-- **검증과 preview는 동기식**으로 제공 가능합니다.
-- **실제 build와 publish는 비동기식**으로 모델링하는 것을 기본값으로 둡니다.
+- **검증, preview, build는 동기식**으로 제공합니다.
+- 비동기 build 모델(`POST /builds` / `GET /builds/{run_id}`)은 후속 ADR에서 구현 예정입니다.
+
+> **결정 기록**: ADR 0002에서 v0.4는 동기 `POST /build`만 유지하기로 결정했습니다.
+> 비동기 job 모델은 상태 머신·취소·멱등성 등 시맨틱을 완비한 뒤 별도 이슈에서 구현합니다.
 
 추가 방향:
 
@@ -48,7 +51,7 @@ Builder는 두 가지 실행 모델을 가집니다.
 | `/version` | `GET` | Builder API 계약 버전 조회 | 동기식 |
 | `/validate` | `POST` | BuildSpec 검증 | 동기식 |
 | `/preview` | `POST` | 샘플 실행 및 소스별 스키마 preview | 동기식 |
-| `/build` | `POST` | 빌드 실행 (동기; 계약은 비동기 `/builds` 지향) | 동기식(현재) |
+| `/build` | `POST` | 빌드 실행 (동기식) | 동기식 |
 | `/artifacts/{run_id}` | `GET` | 실행 워크스페이스 산출물 목록 조회 | 동기식 |
 | `/builds` | `GET` | 빌드 이력 목록 조회 (최신 수정 시각 기준 내림차순) | 동기식 |
 
@@ -282,10 +285,10 @@ BuildSpec을 실행 전에 검증합니다. body의 `spec` 키에 YAML 문자열
 | :--- | :--- | :--- |
 | `validateSpec` | 구현됨 | `POST /validate` (동기) |
 | `previewBuild` | 구현됨 | `POST /preview` (동기) |
-| `createBuild` | 구현됨 | `POST /build` (동기; 계약은 비동기 `POST /builds` 지향) |
+| `createBuild` | 구현됨 | `POST /build` (동기) |
 | `listBuildArtifacts` | 구현됨 | `GET /artifacts/{run_id}` |
 | `listDatasets` | 계획(planned)/미구현 | — |
-| `getBuild` | 계획(planned)/미구현 | — |
+| `getBuild` | 계획(planned)/미구현 — 비동기 job 모델 | `GET /builds/{run_id}` (후속 ADR) |
 | `getBuildManifest` | 계획(planned)/미구현 | — |
 | `publishArtifacts` | 계획(planned)/미구현 | — |
 | (메타) | 구현됨 | `GET /version` → `{service, api_version}` |
