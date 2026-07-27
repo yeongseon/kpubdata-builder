@@ -1,20 +1,11 @@
-<<<<<<< HEAD
-"""Builder Service Contract(#63, #226, #317) OpenAPI 스펙의 구조 검증.
-=======
 """Builder Service Contract(#63, #226, #317, #319) OpenAPI 스펙의 구조 검증.
->>>>>>> origin/main
 
 설치된 OpenAPI validator가 없으므로, 계약이 OpenAPI 3.1이고 BuilderService
 (service/app.py)가 실제로 구현한 동기 라우트와 wire 형태를 모두 담는지 구조적으로
 검증한다. 계약은 이제 구현된 엔드포인트만 기술하며(#226), 한쪽만 바뀌는 조용한
-<<<<<<< HEAD
-드리프트를 막기 위해 구현 라우트 ↔ 계약 operationId 매핑을 명시적으로 고정한다.
-또한 YAML 계약과 실제 dispatch 구현 간의 양방향 일치성을 검증한다(#317).
-=======
 드리프트를 막기 위해 구현 라우트 ↔ 계약 operationId 매핑을 명시적으로 고정한다(#317).
 또한 YAML 계약과 실제 dispatch 구현 간의 양방향 일치성을 검증하며(#317),
 상태 코드와 응답 스키마 검증으로 범위를 확장한다(#319).
->>>>>>> origin/main
 """
 
 from __future__ import annotations
@@ -35,10 +26,7 @@ _DISPATCH_ROUTES: dict[tuple[str, str], str] = {
     ("/preview", "POST"): "previewBuild",
     ("/build", "POST"): "createBuild",
     ("/artifacts/{run_id}", "GET"): "listBuildArtifacts",
-<<<<<<< HEAD
     ("/builds", "GET"): "listBuilds",
-=======
->>>>>>> origin/main
 }
 
 # (path, method) 형태의 계약 필수 오퍼레이션. BuilderService.dispatch가 실제로
@@ -175,14 +163,11 @@ def test_referenced_schemas_resolve() -> None:
             target = target[part]
 
 
-<<<<<<< HEAD
-=======
 # =============================================================================
 # 계약 커버리지 테스트 1단계: 경로/메서드 양방향 검증 (#317)
 # =============================================================================
 
 
->>>>>>> origin/main
 def _extract_yaml_operations() -> dict[tuple[str, str], dict[str, Any]]:
     """YAML에서 (path, method) -> operation 매핑을 추출한다."""
     contract = _load_contract()
@@ -278,8 +263,6 @@ def test_planned_operations_excluded_from_implementation_check() -> None:
         else:
             # planned이고 구현되지 않아도 정상
             pass
-<<<<<<< HEAD
-=======
 
 
 # =============================================================================
@@ -294,6 +277,7 @@ _OPERATION_STATUS_CODES: dict[str, set[int]] = {
     "previewBuild": {200, 400},
     "createBuild": {200, 400, 502},
     "listBuildArtifacts": {200, 400, 404},
+    "listBuilds": {200, 400},
 }
 
 
@@ -414,4 +398,3 @@ def test_response_schemas_have_required_fields() -> None:
                     f"{method} {path} (operationId: {operation_id})의 "
                     f"200 응답 스키마에 필수 필드가 너무 적습니다: {required_fields}"
                 )
->>>>>>> origin/main
