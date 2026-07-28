@@ -562,33 +562,15 @@ wheels = [
 [[package]]
 name = "kpubdata"
 version = "0.5.0"
-source = { editable = "../kpubdata" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
     { name = "typing-extensions", marker = "python_full_version < '3.11'" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "build", marker = "extra == 'dev'", specifier = ">=1.2,<2" },
-    { name = "httpx", specifier = ">=0.27,<1" },
-    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1,<2" },
-    { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.5,<10" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10,<2" },
-    { name = "pandas", marker = "extra == 'pandas'", specifier = ">=2.2,<3" },
-    { name = "pandas-stubs", marker = "extra == 'dev'", specifier = ">=2.2,<3" },
-    { name = "pydantic", marker = "extra == 'validation'", specifier = ">=2.7,<3" },
-    { name = "pykrx", marker = "extra == 'dev'", specifier = ">=1.0.45,<2" },
-    { name = "pykrx", marker = "extra == 'krx'", specifier = ">=1.0.45,<2" },
-    { name = "pymdown-extensions", marker = "extra == 'docs'", specifier = ">=10,<11" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.2,<9" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5,<6" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5,<1" },
-    { name = "typing-extensions", marker = "python_full_version < '3.11'", specifier = ">=4.10" },
-    { name = "xmltodict", marker = "extra == 'dev'", specifier = ">=0.13,<1" },
-    { name = "xmltodict", marker = "extra == 'xml'", specifier = ">=0.13,<1" },
+sdist = { url = "https://files.pythonhosted.org/packages/e9/58/2f0a8d1b4ec6cd8152f951ffc5849c64628b10a0ee81f890ea3c97ba8fda/kpubdata-0.5.0.tar.gz", hash = "sha256:89e9b60afdc4c2f129b17207dc16c8531fbfdd1d7ef2048e4a1e0282c24c4905", size = 434771, upload-time = "2026-04-27T15:36:01.894Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2f/88/47574191c71ca22a840cfde858854f908c62f3b0609a2c8a98b554b96b65/kpubdata-0.5.0-py3-none-any.whl", hash = "sha256:e0c5d49bdd6abd5a4138f2d3945bd39ff0c3db926f6050ad17a009854192cf67", size = 104145, upload-time = "2026-04-27T15:36:00.024Z" },
 ]
-provides-extras = ["xml", "pandas", "krx", "validation", "mcp", "dev", "docs"]
 
 [[package]]
 name = "kpubdata-builder"
@@ -630,22 +612,22 @@ publish = [
 [package.metadata]
 requires-dist = [
     { name = "build", marker = "extra == 'dev'", specifier = ">=1.2,<2" },
-    { name = "huggingface-hub", marker = "extra == 'huggingface'", specifier = ">=0.23,<1" },
-    { name = "huggingface-hub", marker = "extra == 'publish'", specifier = ">=0.23,<1" },
+    { name = "huggingface-hub", marker = "extra == 'huggingface'", specifier = ">=0.23,<2" },
+    { name = "huggingface-hub", marker = "extra == 'publish'", specifier = ">=0.23,<2" },
     { name = "kaggle", marker = "extra == 'publish'", specifier = ">=1.6,<2" },
-    { name = "kpubdata", editable = "../kpubdata" },
+    { name = "kpubdata", specifier = ">=0.5.0,<0.6" },
     { name = "mkdocs", marker = "extra == 'docs'", specifier = ">=1.6,<2" },
     { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9,<10" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10,<2" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10,<3" },
     { name = "polars", specifier = ">=1.0,<2" },
-    { name = "pyarrow", marker = "extra == 'parquet'", specifier = ">=15,<18" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.2,<9" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5,<6" },
+    { name = "pyarrow", marker = "extra == 'parquet'", specifier = ">=15,<26" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.2,<10" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5,<8" },
     { name = "pyyaml", specifier = ">=6.0,<7" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5,<1" },
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
-    { name = "typing-extensions", specifier = ">=4.5" },
-    { name = "xmltodict", marker = "extra == 'publish'", specifier = ">=0.13,<1" },
+    { name = "typing-extensions", specifier = ">=4.5,<5" },
+    { name = "xmltodict", marker = "extra == 'publish'", specifier = ">=0.13,<2" },
 ]
 provides-extras = ["docs", "parquet", "huggingface", "publish", "dev"]
 
