@@ -179,23 +179,27 @@ class TestRebuildIndex:
         # 가짜 manifest 파일들 생성
         (tmp_path / "run1").mkdir()
         (tmp_path / "run1" / "manifest.json").write_text(
-            json.dumps({
-                "run_id": "run1",
-                "status": "ok",
-                "started_at": "2025-01-01T10:00:00Z",
-                "finished_at": "2025-01-01T10:05:00Z",
-            })
+            json.dumps(
+                {
+                    "run_id": "run1",
+                    "status": "ok",
+                    "started_at": "2025-01-01T10:00:00Z",
+                    "finished_at": "2025-01-01T10:05:00Z",
+                }
+            )
         )
 
         (tmp_path / "run2").mkdir()
         (tmp_path / "run2" / "manifest.json").write_text(
-            json.dumps({
-                "run_id": "run2",
-                "status": "failed",
-                "errors": ["test error"],
-                "started_at": "2025-01-01T11:00:00Z",
-                "finished_at": "2025-01-01T11:05:00Z",
-            })
+            json.dumps(
+                {
+                    "run_id": "run2",
+                    "status": "failed",
+                    "errors": ["test error"],
+                    "started_at": "2025-01-01T11:00:00Z",
+                    "finished_at": "2025-01-01T11:05:00Z",
+                }
+            )
         )
 
         # manifest 없는 디렉터리
@@ -227,12 +231,14 @@ class TestRebuildIndex:
         # manifest 파일 생성
         (tmp_path / "new").mkdir()
         (tmp_path / "new" / "manifest.json").write_text(
-            json.dumps({
-                "run_id": "new",
-                "status": "ok",
-                "started_at": "2025-01-01T11:00:00Z",
-                "finished_at": "2025-01-01T11:05:00Z",
-            })
+            json.dumps(
+                {
+                    "run_id": "new",
+                    "status": "ok",
+                    "started_at": "2025-01-01T11:00:00Z",
+                    "finished_at": "2025-01-01T11:05:00Z",
+                }
+            )
         )
 
         count = rebuild_index(tmp_path)
@@ -248,11 +254,13 @@ class TestRebuildIndex:
         """손상된 manifest는 건너뛴다."""
         (tmp_path / "good").mkdir()
         (tmp_path / "good" / "manifest.json").write_text(
-            json.dumps({
-                "status": "ok",
-                "started_at": "2025-01-01T10:00:00Z",
-                "finished_at": "2025-01-01T10:05:00Z",
-            })
+            json.dumps(
+                {
+                    "status": "ok",
+                    "started_at": "2025-01-01T10:00:00Z",
+                    "finished_at": "2025-01-01T10:05:00Z",
+                }
+            )
         )
 
         (tmp_path / "bad").mkdir()

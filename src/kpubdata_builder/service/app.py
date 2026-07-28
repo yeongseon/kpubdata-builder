@@ -251,9 +251,7 @@ class BuilderService:
                     }
                     for entry in entries
                 ]
-                return ServiceResponse(
-                    200, {"builds": cast(list[JsonValue], index_builds)}
-                )
+                return ServiceResponse(200, {"builds": cast(list[JsonValue], index_builds)})
         except Exception:
             # 인덱스 조회 실패 시 폴백
             pass
