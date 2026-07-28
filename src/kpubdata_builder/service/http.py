@@ -60,6 +60,11 @@ def _get_allowed_origins() -> frozenset[str]:
     return frozenset(origins)
 
 
+def _clear_cors_cache() -> None:
+    """테스트용: CORS 허용 오리진 캐시를 비운다 (#322)."""
+    _get_allowed_origins.cache_clear()
+
+
 def _is_origin_allowed(request_origin: str | None, allowed: frozenset[str]) -> bool:
     """요청 오리진이 허용 목록에 있는지 확인한다 (#322).
 
