@@ -762,3 +762,94 @@ class TestHttpRobustness:
         status, body = captured[0]
         assert status == 400
         assert "incomplete" in str(body.get("error", ""))
+
+
+class TestArtifactFileServing:
+    """아티팩트 파일 서빙 기능 테스트 (#323)."""
+
+    def test_serves_existing_file(self, tmp_path: Path) -> None:
+        from kpubdata_builder.service import FileResponse
+
+        service = _service(tmp_path)
+        dispatch(service, "POST", "/build", {"spec": VALID_SPEC_YAML, "run_id": "run1"})
+
+        resp = service.serve_artifact_file("run1", "manifest.json")
+        assert isinstance(resp, FileResponse)
+        assert resp.status_code == 200
+        assert resp.filename == "manifest.json"
+        assert resp.file_path.exists()
+
+    def test_returns_404_for_nonexistent_file(self, tmp_path: Path) -> None:
+        service = _service(tmp_path)
+        dispatch(service, "POST", "/build", {"spec": VALID_SPEC_YAML, "run_id": "run1"})
+
+        resp = service.serve_artifact_file("run1", "nonexistent.csv")
+        assert isinstance(resp, ServiceResponse)
+        assert resp.status_code == 404
+        assert "not found" in str(resp.body.get("error", ""))
+
+    def test_returns_404_for_nonexistent_run(self, tmp_path: Path) -> None:
+        service = _service(tmp_path)
+
+        resp = service.serve_artifact_file("nope", "manifest.json")
+        assert isinstance(resp, ServiceResponse)
+        assert resp.status_code == 404
+        assert "run not found" in str(resp.body.get("error", ""))
+
+    def test_blocks_path_traversal_with_dot_dot(self, tmp_path: Path) -> None:
+        service = _service(tmp_path)
+        dispatch(service, "POST", "/build", {"spec": VALID_SPEC_YAML, "run_id": "run1"})
+
+        resp = service.serve_artifact_file("run1", "../run2/manifest.json")
+        assert isinstance(resp, ServiceResponse)
+        assert resp.status_code == 400
+        assert "safe" in str(resp.body.get("error", "")).lower()
+
+    def test_blocks_path_traversal_with_absolute_path(self, tmp_path: Path) -> None:
+        service = _service(tmp_path)
+        dispatch(service, "POST", "/build", {"spec": VALID_SPEC_YAML, "run_id": "run1"})
+
+        resp = service.serve_artifact_file("run1", "/etc/passwd")
+        assert isinstance(resp, ServiceResponse)
+        assert resp.status_code == 400
+        assert "safe" in str(resp.body.get("error", "")).lower()
+
+    def test_returns_400_for_directory_not_file(self, tmp_path: Path) -> None:
+        service = _service(tmp_path)
+        dispatch(service, "POST", "/build", {"spec": VALID_SPEC_YAML, "run_id": "run1"})
+
+        # out 디렉터리는 빌드로 생성되므로 존재함
+        (tmp_path / "run1" / "subdir").mkdir()
+
+        resp = service.serve_artifact_file("run1", "subdir")
+        assert isinstance(resp, ServiceResponse)
+        assert resp.status_code == 400
+        assert "not a file" in str(resp.body.get("error", ""))
+
+    def test_serve_artifact_file_route(self, tmp_path: Path) -> None:
+        from kpubdata_builder.service import FileResponse
+
+        service = _service(tmp_path)
+        dispatch(service, "POST", "/build", {"spec": VALID_SPEC_YAML, "run_id": "run1"})
+
+        resp = dispatch(service, "GET", "/artifacts/run1/manifest.json", None)
+        assert isinstance(resp, FileResponse)
+        assert resp.status_code == 200
+        assert resp.filename == "manifest.json"
+
+    def test_mime_type_detection(self, tmp_path: Path) -> None:
+        from kpubdata_builder.service.http import _get_mime_type
+
+        # 명시적 매핑
+        assert _get_mime_type(tmp_path / "data.parquet") == "application/vnd.apache.parquet"
+        assert _get_mime_type(tmp_path / "data.csv") == "text/csv"
+        assert _get_mime_type(tmp_path / "data.json") == "application/json"
+        assert _get_mime_type(tmp_path / "data.txt") == "text/plain"
+
+        # mimetypes 라이브러리 (fallback)
+        assert _get_mime_type(tmp_path / "data.html") == "text/html"
+        assert _get_mime_type(tmp_path / "data.xml") == "application/xml"
+
+        # 알 수 없는 확장자 → 기본값
+        assert _get_mime_type(tmp_path / "data.unknown") == "application/octet-stream"
+        assert _get_mime_type(tmp_path / "data") == "application/octet-stream"

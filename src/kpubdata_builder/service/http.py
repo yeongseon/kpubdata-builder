@@ -12,16 +12,18 @@ from __future__ import annotations
 
 import json
 import logging
+import mimetypes
 import os
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from socket import socket as _socket
 from typing import Any, cast
 from urllib.parse import urlsplit
 
 from ..spec import JsonValue
-from .app import BuilderService, dispatch
+from .app import BuilderService, FileResponse, dispatch
 
 # 단일 요청이 메모리를 고갈시키거나 단일 스레드 서버를 멈추게 하지 않도록 body 크기를
 # 제한한다. spec YAML 요청에 충분하면서도 남용을 막는 보수적 상한 (#186).
@@ -41,7 +43,46 @@ _DEFAULT_MAX_WORKERS = 10
 _CORS_ALLOW_ORIGIN_ENV = "KPUBDATA_BUILDER_CORS_ALLOW_ORIGIN"
 _DEFAULT_CORS_ALLOW_ORIGIN = "*"
 
+# MIME 타입 기본값 (#323). mimetypes.guess_type이 None을 반환할 때 사용.
+_DEFAULT_MIME_TYPE = "application/octet-stream"
+
+# 일반적인 데이터셋 파일 확장자에 대한 명시적 MIME 타입 매핑.
+# mimetypes 라이브러리가 부정확하거나 누락된 경우에 대비해 보수적인 기본값을 둔다.
+_EXPLICIT_MIME_TYPES: dict[str, str] = {
+    ".parquet": "application/vnd.apache.parquet",
+    ".csv": "text/csv",
+    ".json": "application/json",
+    ".geojson": "application/geo+json",
+    ".geojsonl": "application/geo+jsonl",
+    ".ndjson": "application/x-ndjson",
+    ".txt": "text/plain",
+    ".md": "text/markdown",
+    ".html": "text/html",
+    ".xml": "application/xml",
+    ".yaml": "text/yaml",
+    ".yml": "text/yaml",
+}
+
 _logger = logging.getLogger(__name__)
+
+
+def _get_mime_type(file_path: Path) -> str:
+    """파일 경로에서 MIME 타입을 추론한다 (#323).
+
+    명시적 매핑을 우선 확인하고, 없으면 mimetypes 라이브러리를 사용한다.
+    그래도 None이 반환되면 기본값(application/octet-stream)을 사용한다.
+
+    매개변수:
+        file_path: MIME 타입을 추론할 파일 경로.
+
+    반환값:
+        MIME 타입 문자열.
+    """
+    suffix = file_path.suffix.lower()
+    if suffix in _EXPLICIT_MIME_TYPES:
+        return _EXPLICIT_MIME_TYPES[suffix]
+    guessed = mimetypes.guess_type(file_path.name)[0]
+    return guessed if guessed else _DEFAULT_MIME_TYPE
 
 
 def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
@@ -114,7 +155,11 @@ def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
                 )
                 self._write(500, {"error": "internal server error"})
                 return
-            self._write(response.status_code, response.body)
+            # FileResponse인지 ServiceResponse인지 확인하여 분기 처리 (#323)
+            if isinstance(response, FileResponse):
+                self._write_file(response)
+            else:
+                self._write(response.status_code, response.body)
 
         def _send_cors_headers(self) -> None:
             # 로컬 개발 도구로서 Studio 등 브라우저 클라이언트의 크로스오리진 요청을
@@ -134,6 +179,30 @@ def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
             self._send_cors_headers()
             self.end_headers()
             _ = self.wfile.write(payload)
+
+        def _write_file(self, response: FileResponse) -> None:
+            """파일 응답을 작성한다 (#323).
+
+            파일 내용을 읽어 MIME 타입과 함께 전송한다. Content-Disposition
+            헤더를 추가하여 브라우저가 다운로드로 처리하도록 한다.
+            """
+            try:
+                content = response.file_path.read_bytes()
+            except OSError as exc:
+                _logger.error("Failed to read file %s: %s", response.file_path, exc)
+                self._write(500, {"error": "failed to read file"})
+                return
+
+            mime_type = _get_mime_type(response.file_path)
+            filename = response.filename
+
+            self.send_response(response.status_code)
+            self.send_header("Content-Type", f"{mime_type}; charset=utf-8")
+            self.send_header("Content-Length", str(len(content)))
+            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+            self._send_cors_headers()
+            self.end_headers()
+            _ = self.wfile.write(content)
 
         def do_GET(self) -> None:  # noqa: N802 - http.server 규약
             self._dispatch("GET")
