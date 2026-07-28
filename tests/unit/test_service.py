@@ -521,7 +521,9 @@ class TestHttpAdapter:
         monkeypatch.delenv("KPUBDATA_BUILDER_ALLOWED_ORIGINS", raising=False)
         base_url, _, _ = http_server
         # Origin 헤더를 포함한 요청 (크로스-오리진으로 간주)
-        req = urllib.request.Request(f"{base_url}/version", headers={"Origin": "http://localhost:5173"})
+        req = urllib.request.Request(
+            f"{base_url}/version", headers={"Origin": "http://localhost:5173"}
+        )
         with urllib.request.urlopen(req, timeout=2.0) as response:
             # default-deny이므로 CORS 헤더가 없어야 함
             assert "Access-Control-Allow-Origin" not in response.headers
@@ -535,7 +537,9 @@ class TestHttpAdapter:
         monkeypatch.setenv("KPUBDATA_BUILDER_ALLOWED_ORIGINS", "http://localhost:5173")
         base_url, _, _ = http_server
         # Origin 헤더를 포함한 요청
-        req = urllib.request.Request(f"{base_url}/version", headers={"Origin": "http://localhost:5173"})
+        req = urllib.request.Request(
+            f"{base_url}/version", headers={"Origin": "http://localhost:5173"}
+        )
         with urllib.request.urlopen(req, timeout=2.0) as response:
             assert response.headers["Access-Control-Allow-Origin"] == "http://localhost:5173"
 
@@ -572,9 +576,7 @@ class TestHttpAdapter:
         monkeypatch.setenv("KPUBDATA_BUILDER_ALLOWED_ORIGINS", "http://localhost:5173")
         base_url, _, _ = http_server
         # 허용되지 않은 오리진으로 요청
-        req = urllib.request.Request(
-            f"{base_url}/version", headers={"Origin": "http://evil.com"}
-        )
+        req = urllib.request.Request(f"{base_url}/version", headers={"Origin": "http://evil.com"})
         with urllib.request.urlopen(req, timeout=2.0) as response:
             # 허용되지 않은 오리진이므로 CORS 헤더가 없어야 함
             assert "Access-Control-Allow-Origin" not in response.headers
