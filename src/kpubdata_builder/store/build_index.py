@@ -8,10 +8,16 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal, cast
+
+if TYPE_CHECKING:
+    _BaseConn = sqlite3.Connection
+else:
+    _BaseConn = object
 
 # 스키마 버전: 인덱스 구조 변경 시 증가
 SCHEMA_VERSION = 1
@@ -57,7 +63,7 @@ class BuildIndex:
         """스레드 로컬 연결을 반환한다 (lazy initialization)."""
         if not hasattr(self._local, "conn"):
             self._local.conn = self._connect()
-        return self._local.conn
+        return cast(sqlite3.Connection, self._local.conn)
 
     def _connect(self) -> sqlite3.Connection:
         """새 SQLite 연결을 생성하고 설정한다."""
@@ -73,7 +79,7 @@ class BuildIndex:
         """데이터베이스 스키마를 초기화한다."""
         with self._transaction():
             self._conn.execute(
-                f"""
+                """
                 CREATE TABLE IF NOT EXISTS schema_version (
                     version INTEGER PRIMARY KEY,
                     applied_at TEXT DEFAULT (datetime('now'))
@@ -108,10 +114,12 @@ class BuildIndex:
                 self._conn.execute(
                     f"INSERT INTO schema_version (version) VALUES ({SCHEMA_VERSION})"
                 )
-                self._conn.execute("DELETE FROM schema_version WHERE version != ?", (SCHEMA_VERSION,))
+                self._conn.execute(
+                    "DELETE FROM schema_version WHERE version != ?", (SCHEMA_VERSION,)
+                )
 
     @contextmanager
-    def _transaction(self):
+    def _transaction(self) -> Iterator[None]:
         """트랜잭션 컨텍스트 매니저."""
         try:
             yield
@@ -174,7 +182,7 @@ class BuildIndex:
         return [
             BuildEntry(
                 run_id=row[0],
-                status=row[1],  # type: ignore[assignment]
+                status=cast(Literal["ok", "failed"], row[1]),
                 started_at=row[2],
                 finished_at=row[3],
                 spec_digest=row[4],
@@ -205,7 +213,7 @@ class BuildIndex:
             return None
         return BuildEntry(
             run_id=row[0],
-            status=row[1],  # type: ignore[assignment]
+            status=cast(Literal["ok", "failed"], row[1]),
             started_at=row[2],
             finished_at=row[3],
             spec_digest=row[4],

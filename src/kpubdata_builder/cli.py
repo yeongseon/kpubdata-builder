@@ -386,7 +386,7 @@ def _run_rebuild_index(output_dir: str) -> int:
     반환값:
         int: 성공 시 0, 실패 시 1.
     """
-    from ..store import rebuild_index
+    from .store import rebuild_index
 
     output_root = Path(output_dir)
     print(f"rebuilding build index from {output_root}...", flush=True)

@@ -5,9 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
-from kpubdata_builder.store import BuildIndex, rebuild_index, SCHEMA_VERSION
+from kpubdata_builder.store import SCHEMA_VERSION, BuildIndex, rebuild_index
 
 
 class TestBuildIndex:
