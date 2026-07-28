@@ -15,6 +15,7 @@ import logging
 import os
 import traceback
 from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from socket import socket as _socket
 from typing import Any, cast
@@ -36,12 +37,45 @@ _SOCKET_TIMEOUT_SECONDS = 30.0
 # 메모리가 고갈될 수 있다 (#253). 고정 크기 스레드 풀로 상한을 둔다.
 _DEFAULT_MAX_WORKERS = 10
 
-# CORS 허용 Origin. 기본값은 로컬 개발 편의를 위해 모든 오리진(`*`)이지만, 환경변수로
-# 특정 오리진(예: http://localhost:5173)만 허용하도록 제한할 수 있다 (#254 보안 강화).
-_CORS_ALLOW_ORIGIN_ENV = "KPUBDATA_BUILDER_CORS_ALLOW_ORIGIN"
-_DEFAULT_CORS_ALLOW_ORIGIN = "*"
+# CORS 허용 Origin 목록 (#322). default-deny 정책: 환경변수 미설정 시 모든 크로스오리진
+# 요청을 거부한다. 콤마로 구분된 오리진 목록을 받는다 (예:
+# KPUBDATA_BUILDER_ALLOWED_ORIGINS=http://localhost:5173,https://studio.example.com).
+_ALLOWED_ORIGINS_ENV = "KPUBDATA_BUILDER_ALLOWED_ORIGINS"
 
 _logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=1)
+def _get_allowed_origins() -> frozenset[str]:
+    """환경변수에서 허용된 오리진 목록을 파싱한다 (#322).
+
+    Returns:
+        허용된 오리진의 frozenset. 환경변수 미설정 시 빈 frozenset (default-deny).
+    """
+    env_value = os.environ.get(_ALLOWED_ORIGINS_ENV, "")
+    if not env_value:
+        return frozenset()
+    # 콤마로 구분된 오리진 목록을 파싱하고 공백을 제거한다.
+    origins = [origin.strip() for origin in env_value.split(",") if origin.strip()]
+    return frozenset(origins)
+
+
+def _is_origin_allowed(request_origin: str | None, allowed: frozenset[str]) -> bool:
+    """요청 오리진이 허용 목록에 있는지 확인한다 (#322).
+
+    Same-origin 요청(오리진이 None인 경우)은 항상 허용한다.
+
+    Args:
+        request_origin: 요청의 Origin 헤더값.
+        allowed: 허용된 오리진 목록.
+
+    Returns:
+        오리진이 허용되면 True, 아니면 False.
+    """
+    if request_origin is None:
+        # Same-origin 요청 (브라우저가 Origin 헤더를 보내지 않는 경우)
+        return True
+    return request_origin in allowed
 
 
 def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
@@ -116,22 +150,32 @@ def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
                 return
             self._write(response.status_code, response.body)
 
-        def _send_cors_headers(self) -> None:
-            # 로컬 개발 도구로서 Studio 등 브라우저 클라이언트의 크로스오리진 요청을
-            # 허용한다 (#254). 기본값은 `*`이며, 환경변수로 특정 오리진만
-            # 허용하도록 제한해 공격 표면을 줄일 수 있다.
-            allow_origin = os.environ.get(_CORS_ALLOW_ORIGIN_ENV, _DEFAULT_CORS_ALLOW_ORIGIN)
-            self.send_header("Access-Control-Allow-Origin", allow_origin)
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type, X-API-Key")
-            self.send_header("Access-Control-Max-Age", "86400")
+        def _send_cors_headers(self, origin: str | None = None) -> None:
+            """CORS 헤더를 전송한다 (#322).
+
+            Args:
+                origin: 요청의 Origin 헤더값. None이면 same-origin으로 간주한다.
+            """
+            allowed = _get_allowed_origins()
+            # Same-origin이거나 허용 목록에 있으면 CORS 헤더를 보낸다.
+            if _is_origin_allowed(origin, allowed):
+                if origin is not None:
+                    # 크로스오리진 요청이면 허용된 오리진을 명시한다.
+                    self.send_header("Access-Control-Allow-Origin", origin)
+                    self.send_header("Access-Control-Allow-Credentials", "true")
+                else:
+                    # Same-origin 요청이면 특정 오리진 제한 없이 허용한다.
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+                self.send_header("Access-Control-Allow-Headers", "Content-Type, X-API-Key")
+                self.send_header("Access-Control-Max-Age", "86400")
 
         def _write(self, status_code: int, body: dict[str, JsonValue]) -> None:
             payload = json.dumps(body, ensure_ascii=False, default=str).encode("utf-8")
             self.send_response(status_code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(payload)))
-            self._send_cors_headers()
+            self._send_cors_headers(origin=self.headers.get("Origin"))
             self.end_headers()
             _ = self.wfile.write(payload)
 
@@ -142,10 +186,10 @@ def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
             self._dispatch("POST")
 
         def do_OPTIONS(self) -> None:  # noqa: N802 - http.server 규약
-            # CORS preflight 요청에 응답한다 (#254). body 없이 204로 허용 헤더만 반환한다.
+            # CORS preflight 요청에 응답한다 (#322). body 없이 204로 허용 헤더만 반환한다.
             self.send_response(204)
             self.send_header("Content-Length", "0")
-            self._send_cors_headers()
+            self._send_cors_headers(origin=self.headers.get("Origin"))
             self.end_headers()
 
         def log_message(self, format: str, *args: object) -> None:

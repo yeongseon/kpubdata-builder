@@ -271,69 +271,40 @@ BuildSpec을 실행 전에 검증합니다. body의 `spec` 키에 YAML 문자열
 | `kpubdata-builder preview spec.yaml` | `POST /preview` |
 | `kpubdata-builder build spec.yaml` | `POST /build` |
 
-## 8. 구현 현황과 Studio 향 계획
+## 8. CORS 정책
 
-본 계약(`contract/builder-api.yaml`, info.version)은 단일 소스이며, 코드의
-`kpubdata_builder.service.API_CONTRACT_VERSION`과 일치해야 합니다
-(`test_service_contract`가 강제). 소비자는 `GET /version`으로 계약 버전을 먼저
-확인할 수 있고, `POST /validate`·`POST /build` 응답에도 `api_version`이 실립니다.
+브라우저 클라이언트(Studio 등)와의 연동을 위한 크로스-오리진 요청 정책입니다 (#322).
 
-| 계약 operationId | 상태 | 현재 구현 경로 |
-| :--- | :--- | :--- |
-| `validateSpec` | 구현됨 | `POST /validate` (동기) |
-| `previewBuild` | 구현됨 | `POST /preview` (동기) |
-| `createBuild` | 구현됨 | `POST /build` (동기; 계약은 비동기 `POST /builds` 지향) |
-| `listBuildArtifacts` | 구현됨 | `GET /artifacts/{run_id}` |
-| `listDatasets` | 계획(planned)/미구현 | — |
-| `getBuild` | 계획(planned)/미구현 | — |
-| `getBuildManifest` | 계획(planned)/미구현 | — |
-| `publishArtifacts` | 계획(planned)/미구현 | — |
-| (메타) | 구현됨 | `GET /version` → `{service, api_version}` |
+### 8.1 Default-Deny
 
-### Studio 향 에러 봉투 (계획/미구현)
+- 기본 정책은 **default-deny**입니다: 환경변수 미설정 시 모든 크로스-오리진 요청을 거부합니다.
+- Same-origin 요청(브라우저가 Origin 헤더를 보내지 않는 경우)은 항상 허용됩니다.
 
-Studio 연동을 위해 향후 구조화된 에러 봉투 형식을 도입할 예정입니다.
-현재는 미구현이며, 아래는 목표 형태입니다.
+### 8.2 허용 오리진 설정
 
-```json
-{
-  "error": {
-    "code": "INVALID_BUILD_SPEC",
-    "message": "sources must not be empty",
-    "details": [
-      {"field": "sources", "reason": "missing"}
-    ]
-  }
-}
+`KPUBDATA_BUILDER_ALLOWED_ORIGINS` 환경변수로 허용할 오리진을 콤마로 구분하여 설정합니다.
+
+```bash
+# 단일 오리진 허용
+export KPUBDATA_BUILDER_ALLOWED_ORIGINS=http://localhost:5173
+
+# 복수 오리진 허용
+export KPUBDATA_BUILDER_ALLOWED_ORIGINS=http://localhost:5173,https://studio.example.com
 ```
 
-이 형식은 Studio와의 교차 레포 조율이 필요한 후속 작업에서 활성화될 예정입니다.
+### 8.3 Preflight 요청
 
-## 9. Python API — BuilderService
+`OPTIONS` 메서드로 preflight 요청을 지원합니다. 허용된 오리진에 대해 다음 헤더를 응답합니다:
 
-Python 코드에서 직접 사용하는 경우 `BuilderService`를 통해 HTTP 없이 같은 로직을 호출할 수 있습니다.
+- `Access-Control-Allow-Methods: GET, POST, OPTIONS`
+- `Access-Control-Allow-Headers: Content-Type, X-API-Key`
+- `Access-Control-Max-Age: 86400` (24시간)
 
-```python
-from pathlib import Path
-from kpubdata_builder.service import BuilderService
+### 8.4 인증 헤더
 
-service = BuilderService(
-    output_root=Path("./dist"),
-    client_factory=lambda: my_kpubdata_client,
-)
+`X-API-Key` 커스텀 헤더를 사용한 인증은 preflight 요청에서 허용 목록에 포함되어야 합니다.
 
-# 검증
-response = service.validate(spec_yaml_str)
-# response.status_code: 200 (valid) 또는 400 (error/invalid)
-# response.body: {"status": "valid", ...} 또는 {"status": "invalid", "problems": [...]}
-
-# 빌드
-response = service.build(spec_yaml_str, run_id="my-run-001")
-# response.status_code: 200 (ok) 또는 502 (failed)
-# response.body: {"status": "ok"|"failed", "outcomes": [...], ...}
-```
-
-## 10. 관련 문서
+## 9. 관련 문서
 
 | 문서 | 설명 |
 | :--- | :--- |
