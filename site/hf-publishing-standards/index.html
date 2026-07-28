@@ -1,0 +1,3678 @@
+
+<!doctype html>
+<html lang="ko" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://yeongseon.github.io/kpubdata-builder/hf-publishing-standards/">
+      
+      
+        <link rel="prev" href="../publishing/">
+      
+      
+        <link rel="next" href="../lessons-learned/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>HuggingFace 퍼블리싱 표준 - KPubData Builder</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="teal">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#_1" class="md-skip">
+          콘텐츠로 이동
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="상단/헤더">
+    <a href=".." title="KPubData Builder" class="md-header__button md-logo" aria-label="KPubData Builder" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            KPubData Builder
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              HuggingFace 퍼블리싱 표준
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+    
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="검색" placeholder="검색" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="검색">
+        
+        <button type="reset" class="md-search__icon md-icon" title="지우기" aria-label="지우기" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            검색 초기화
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/yeongseon/kpubdata-builder" title="저장소로 이동" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    yeongseon/kpubdata-builder
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="탭" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../vision/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  비전
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../guides/cli-usage/" class="md-tabs__link">
+          
+  
+  
+  사용 가이드
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../ARCHITECTURE/" class="md-tabs__link">
+          
+  
+  
+  아키텍처
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../publishing/" class="md-tabs__link">
+          
+  
+  
+  퍼블리싱
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../CONTRIBUTING/" class="md-tabs__link">
+          
+  
+  
+  개발 가이드
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../PRD/" class="md-tabs__link">
+          
+  
+  
+  프로젝트
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../adrs/" class="md-tabs__link">
+          
+  
+  
+  ADR
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="네비게이션" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="KPubData Builder" class="md-nav__button md-logo" aria-label="KPubData Builder" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    KPubData Builder
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/yeongseon/kpubdata-builder" title="저장소로 이동" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    yeongseon/kpubdata-builder
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../vision/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    비전
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    사용 가이드
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    사용 가이드
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guides/cli-usage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI 사용 가이드
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../API_CONTRACT/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API 규약
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../DOMAIN_MODEL/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    도메인 모델
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../EXPORT_MODEL/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    내보내기 모델
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guides/error-handling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    에러 처리
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_6" id="__nav_3_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    예제
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    예제
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../examples/seoul-apt-trade/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    서울 아파트 실거래가
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    아키텍처
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    아키텍처
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ARCHITECTURE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    시스템 구조
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../BOUNDARY/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    경계 규칙
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../BUILD_SPEC/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BuildSpec 계약
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../BUILD_STATE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    빌드 상태 머신
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ALGORITHM/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    빌드 알고리즘 명세
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../FEATURE_FLOWS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    기능 처리 흐름
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    퍼블리싱
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    퍼블리싱
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../publishing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    퍼블리싱 가이드
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    HuggingFace 퍼블리싱 표준
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    HuggingFace 퍼블리싱 표준
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="목차">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      목차
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. 목적 및 범위
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. 데이터셋 네이밍 컨벤션
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. 데이터셋 네이밍 컨벤션">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hf-repo-id" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HF Repo ID 형식
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        규칙
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        예시
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. 법적 요건 및 라이선스
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. 법적 요건 및 라이선스">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        법적 근거
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#huggingface" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        공공누리 → HuggingFace 라이선스 매핑
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        퍼블리싱 전 법적 확인 사항
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        출처표시 필수 문구
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        선례
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. 언어 규칙
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4. 언어 규칙">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        컬럼 설명 작성 패턴
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-dataset-card" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Dataset Card 필수 섹션
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. Dataset Card 필수 섹션">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#51-yaml-front-matter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.1 YAML Front Matter (필수)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#52" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.2 본문 섹션 (필수)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#53-dataset-description" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.3 Dataset Description 작성 가이드
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#54-citation-bibtex" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.4 Citation BibTeX 템플릿
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. 데이터 품질 기준
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="6. 데이터 품질 기준">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        최소 요건
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        필수 처리
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_11" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        시계열 데이터 추가 기준
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-config-yaml" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Config YAML 작성 규칙
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="7. Config YAML 작성 규칙">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fetch_params" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        fetch_params
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#column_mapping" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        column_mapping
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#features" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        features
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#license" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        license
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#carddescription" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        card.description
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. 퍼블리싱 전 체크리스트
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="8. 퍼블리싱 전 체크리스트">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_12" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        법적 확인
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_13" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        데이터 품질
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dataset-card" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dataset Card
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_14" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        프로세스
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. 버전 관리
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="9. 버전 관리">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_15" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        수집 메타데이터
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_16" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        업데이트 정책
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_17" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        관련 문서
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-kaggle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Kaggle 퍼블리싱
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="10. Kaggle 퍼블리싱">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_18" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        개요
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#kaggle-slug" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Kaggle Slug 네이밍
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#config-yaml" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Config YAML 설정
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#huggingface-kaggle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HuggingFace → Kaggle 라이선스 매핑
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dataset-metadatajson" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        dataset-metadata.json 필수 필드
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cli" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CLI 사용법
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#kaggle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Kaggle 인증
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#kaggle_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Kaggle 업데이트 동작
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#huggingface-kaggle_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HuggingFace와 Kaggle 차이점 요약
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../lessons-learned/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    교훈 (Lessons Learned)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    개발 가이드
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    개발 가이드
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../CONTRIBUTING/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    기여 방법
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AGENTS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    에이전트 가이드
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    프로젝트
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    프로젝트
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../PRD/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    요구사항 (PRD)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ROADMAP/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    로드맵
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../PLAN/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    작업 계획
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../CHANGELOG/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    변경 이력
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    ADR
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adrs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR 소개
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adrs/0001-builder-as-orchestrator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Builder as Orchestrator
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adrs/0002-build-execution-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Build Execution Model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adrs/0003-persistent-build-store/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Persistent Build Store
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adrs/0004-plugin-exporter-contract/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plugin Exporter Contract
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adrs/0005-api-contract-single-source/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Contract Single Source
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adrs/0006-service-auth-and-deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Service Auth and Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="목차">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      목차
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. 목적 및 범위
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. 데이터셋 네이밍 컨벤션
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. 데이터셋 네이밍 컨벤션">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hf-repo-id" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HF Repo ID 형식
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        규칙
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        예시
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. 법적 요건 및 라이선스
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. 법적 요건 및 라이선스">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        법적 근거
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#huggingface" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        공공누리 → HuggingFace 라이선스 매핑
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        퍼블리싱 전 법적 확인 사항
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        출처표시 필수 문구
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        선례
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. 언어 규칙
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4. 언어 규칙">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        컬럼 설명 작성 패턴
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-dataset-card" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Dataset Card 필수 섹션
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. Dataset Card 필수 섹션">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#51-yaml-front-matter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.1 YAML Front Matter (필수)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#52" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.2 본문 섹션 (필수)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#53-dataset-description" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.3 Dataset Description 작성 가이드
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#54-citation-bibtex" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.4 Citation BibTeX 템플릿
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. 데이터 품질 기준
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="6. 데이터 품질 기준">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        최소 요건
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        필수 처리
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_11" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        시계열 데이터 추가 기준
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-config-yaml" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Config YAML 작성 규칙
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="7. Config YAML 작성 규칙">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fetch_params" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        fetch_params
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#column_mapping" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        column_mapping
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#features" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        features
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#license" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        license
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#carddescription" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        card.description
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. 퍼블리싱 전 체크리스트
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="8. 퍼블리싱 전 체크리스트">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_12" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        법적 확인
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_13" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        데이터 품질
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dataset-card" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dataset Card
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_14" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        프로세스
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. 버전 관리
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="9. 버전 관리">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_15" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        수집 메타데이터
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_16" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        업데이트 정책
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_17" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        관련 문서
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-kaggle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Kaggle 퍼블리싱
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="10. Kaggle 퍼블리싱">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_18" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        개요
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#kaggle-slug" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Kaggle Slug 네이밍
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#config-yaml" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Config YAML 설정
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#huggingface-kaggle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HuggingFace → Kaggle 라이선스 매핑
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dataset-metadatajson" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        dataset-metadata.json 필수 필드
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cli" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CLI 사용법
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#kaggle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Kaggle 인증
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#kaggle_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Kaggle 업데이트 동작
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#huggingface-kaggle_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HuggingFace와 Kaggle 차이점 요약
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="_1">데이터셋 퍼블리싱 표준 규칙<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h1>
+<p>이 문서는 kpubdata-builder를 통해 한국 공공데이터를 HuggingFace Hub 및 Kaggle에 반복적으로 퍼블리싱할 때 따라야 할 <strong>표준 규칙</strong>을 정의한다.</p>
+<p>스크립트 사용법과 Config YAML 스키마는 <a href="../publishing/">publishing.md</a>를 참고한다.</p>
+<hr />
+<h2 id="1">1. 목적 및 범위<a class="headerlink" href="#1" title="Permanent link">&para;</a></h2>
+<p>kpubdata-builder는 <code>kpubdata</code>가 수집한 원시 공공데이터를 <strong>정제 → 검증 → 패키징 → 배포</strong>하는 빌드 엔진이다. HuggingFace Hub에 퍼블리싱하는 것은 이 파이프라인의 최종 단계(Publish)에 해당한다.</p>
+<p>이 문서는 다음을 표준화한다:</p>
+<ul>
+<li>데이터셋 네이밍</li>
+<li>법적 요건 및 라이선스</li>
+<li>언어 규칙</li>
+<li>Dataset Card 필수 구성</li>
+<li>데이터 품질 기준</li>
+<li>Config 작성 규칙</li>
+<li>퍼블리싱 전 체크리스트</li>
+</ul>
+<hr />
+<h2 id="2">2. 데이터셋 네이밍 컨벤션<a class="headerlink" href="#2" title="Permanent link">&para;</a></h2>
+<h3 id="hf-repo-id">HF Repo ID 형식<a class="headerlink" href="#hf-repo-id" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code>kpubdata/{scope}-{subject}-{type}
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">요소</th>
+<th style="text-align: left;">설명</th>
+<th style="text-align: left;">예시</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>scope</code></td>
+<td style="text-align: left;">지역 범위</td>
+<td style="text-align: left;"><code>seoul</code>, <code>korea</code>, <code>busan</code>, <code>gyeonggi</code></td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>subject</code></td>
+<td style="text-align: left;">데이터 주제</td>
+<td style="text-align: left;"><code>apartment</code>, <code>weather</code>, <code>population</code>, <code>base-rate</code></td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>type</code></td>
+<td style="text-align: left;">데이터 종류</td>
+<td style="text-align: left;"><code>trades</code>, <code>prices</code>, <code>forecast</code>, <code>migration</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="_2">규칙<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>영어만</strong> 사용한다.</li>
+<li><strong>kebab-case</strong>를 사용한다 (<code>seoul-apartment-trades</code>, NOT <code>seoulApartmentTrades</code>).</li>
+<li>scope가 전국인 경우 <code>korea</code>를 사용한다.</li>
+<li>scope가 특정 주제에 불필요한 경우(예: 기준금리) <code>{subject}</code> 또는 <code>{scope}-{subject}</code>로 축약할 수 있다.</li>
+</ul>
+<h3 id="_3">예시<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">데이터</th>
+<th style="text-align: left;">Repo ID</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">서울 아파트 매매 실거래가</td>
+<td style="text-align: left;"><code>kpubdata/seoul-apartment-trades</code></td>
+</tr>
+<tr>
+<td style="text-align: left;">한국은행 기준금리</td>
+<td style="text-align: left;"><code>kpubdata/korea-base-rate</code></td>
+</tr>
+<tr>
+<td style="text-align: left;">전국 대기오염 정보</td>
+<td style="text-align: left;"><code>kpubdata/korea-air-quality</code></td>
+</tr>
+<tr>
+<td style="text-align: left;">부산 인구이동</td>
+<td style="text-align: left;"><code>kpubdata/busan-population-migration</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="3">3. 법적 요건 및 라이선스<a class="headerlink" href="#3" title="Permanent link">&para;</a></h2>
+<h3 id="_4">법적 근거<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h3>
+<p>한국 공공데이터의 재배포는 <strong>공공데이터의 제공 및 이용 활성화에 관한 법률</strong>(공공데이터법)에 의해 보호된다.</p>
+<ul>
+<li><strong>제26조</strong>: 공공데이터를 이용하고자 하는 자는 공공기관이나 공공데이터 포털에서 제공받을 수 있다.</li>
+<li><strong>제17조</strong>: 비공개 정보 또는 제3자 권리 침해 데이터만 제외된다.</li>
+</ul>
+<h3 id="huggingface">공공누리 → HuggingFace 라이선스 매핑<a class="headerlink" href="#huggingface" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">공공누리 유형</th>
+<th style="text-align: left;">조건</th>
+<th style="text-align: left;">HuggingFace 라이선스</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>제1유형</strong></td>
+<td style="text-align: left;">출처표시</td>
+<td style="text-align: left;"><code>cc-by-4.0</code></td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>제2유형</strong></td>
+<td style="text-align: left;">출처표시 + 상업적 이용 금지</td>
+<td style="text-align: left;"><code>cc-by-nc-4.0</code></td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>제3유형</strong></td>
+<td style="text-align: left;">출처표시 + 변경 금지</td>
+<td style="text-align: left;"><code>cc-by-nd-4.0</code></td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>제4유형</strong></td>
+<td style="text-align: left;">출처표시 + 상업적 이용 금지 + 변경 금지</td>
+<td style="text-align: left;"><code>cc-by-nc-nd-4.0</code></td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>주의</strong>: HuggingFace는 라이선스 값을 <strong>소문자만</strong> 허용한다. <code>cc-by-4.0</code> ✅, <code>CC-BY-4.0</code> ❌</p>
+</blockquote>
+<h3 id="_5">퍼블리싱 전 법적 확인 사항<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>이용허락범위 확인</strong>: data.go.kr 해당 API 상세 페이지에서 "이용허락범위" 항목 확인</li>
+<li><strong>공공누리 유형 확인</strong>: 제1유형~제4유형 중 어느 것인지 확인</li>
+<li><strong>개인정보 포함 여부 확인</strong>: 개인 식별 가능 정보가 포함되지 않았는지 확인</li>
+<li><strong>제3자 권리 확인</strong>: 해당 데이터에 제3자 저작권이 포함되지 않았는지 확인</li>
+</ol>
+<h3 id="_6">출처표시 필수 문구<a class="headerlink" href="#_6" title="Permanent link">&para;</a></h3>
+<p>Dataset Card의 Legal &amp; Attribution 섹션에 반드시 포함해야 하는 <strong>한국어 원문</strong>:</p>
+<div class="highlight"><pre><span></span><code>본 저작물은 &#39;{기관명}&#39;에서 &#39;{작성연도}&#39; 작성하여 공공누리 제{N}유형으로 개방한
+&#39;{데이터명}&#39;을 이용하였으며, 해당 저작물은 &#39;{기관명}, {원본URL}&#39;에서
+무료로 다운받으실 수 있습니다.
+</code></pre></div>
+<p><strong>영어 번역</strong>도 병기한다:</p>
+<div class="highlight"><pre><span></span><code>This dataset uses &#39;{Data Name}&#39; published by {Agency Name} under
+Korea Open Government License Type {N} (공공누리 제{N}유형).
+Original data is available at {Source URL}.
+</code></pre></div>
+<h3 id="_7">선례<a class="headerlink" href="#_7" title="Permanent link">&para;</a></h3>
+<p>data.go.kr 공공데이터를 HuggingFace에 퍼블리싱한 기존 사례:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">데이터셋</th>
+<th style="text-align: left;">라이선스</th>
+<th style="text-align: left;">출처</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>transitgrid/kr_subway_station_ridership_daily</code></td>
+<td style="text-align: left;">CC-BY-4.0</td>
+<td style="text-align: left;">data.go.kr API</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>whybe-choi/ko-vdr-train-public-v1.0</code></td>
+<td style="text-align: left;">CC-BY-4.0</td>
+<td style="text-align: left;">한국 공공기관 문서</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>chaannwooff/Dartdoc</code></td>
+<td style="text-align: left;">CC-BY-4.0</td>
+<td style="text-align: left;">DART OpenAPI (금융 데이터)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="4">4. 언어 규칙<a class="headerlink" href="#4" title="Permanent link">&para;</a></h2>
+<p>HuggingFace는 글로벌 플랫폼이므로, 퍼블리싱 산출물은 <strong>영어를 기본 언어</strong>로 한다.</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">항목</th>
+<th style="text-align: left;">언어</th>
+<th style="text-align: left;">예시</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Dataset Card (README.md)</td>
+<td style="text-align: left;"><strong>영어</strong></td>
+<td style="text-align: left;">"Real transaction prices for apartment sales..."</td>
+</tr>
+<tr>
+<td style="text-align: left;">컬럼명</td>
+<td style="text-align: left;"><strong>영어</strong> (snake_case)</td>
+<td style="text-align: left;"><code>deal_amount_10k_krw</code>, <code>district_code</code></td>
+</tr>
+<tr>
+<td style="text-align: left;">컬럼 설명 (features)</td>
+<td style="text-align: left;"><strong>영어 + (한국어)</strong> 병기</td>
+<td style="text-align: left;"><code>"Transaction price in 10,000 KRW (거래금액, 만원 단위)"</code></td>
+</tr>
+<tr>
+<td style="text-align: left;">출처표시 섹션</td>
+<td style="text-align: left;"><strong>한국어 원문 + 영어 번역</strong></td>
+<td style="text-align: left;">위 출처표시 문구 참조</td>
+</tr>
+<tr>
+<td style="text-align: left;">태그</td>
+<td style="text-align: left;"><strong>영어</strong></td>
+<td style="text-align: left;"><code>real-estate</code>, <code>housing-prices</code>, <code>korea</code></td>
+</tr>
+<tr>
+<td style="text-align: left;">Config YAML 주석</td>
+<td style="text-align: left;">한국어 또는 영어</td>
+<td style="text-align: left;"><code># 강남구</code>, <code># Gangnam-gu</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="_8">컬럼 설명 작성 패턴<a class="headerlink" href="#_8" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="nt">features</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">district_code</span>
+<span class="w">    </span><span class="nt">description</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;5-digit</span><span class="nv"> </span><span class="s">administrative</span><span class="nv"> </span><span class="s">district</span><span class="nv"> </span><span class="s">code</span><span class="nv"> </span><span class="s">(시군구코드)&quot;</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">deal_amount_10k_krw</span>
+<span class="w">    </span><span class="nt">description</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Transaction</span><span class="nv"> </span><span class="s">price</span><span class="nv"> </span><span class="s">in</span><span class="nv"> </span><span class="s">10,000</span><span class="nv"> </span><span class="s">KRW</span><span class="nv"> </span><span class="s">(거래금액,</span><span class="nv"> </span><span class="s">만원</span><span class="nv"> </span><span class="s">단위)&quot;</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">neighborhood</span>
+<span class="w">    </span><span class="nt">description</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Legal</span><span class="nv"> </span><span class="s">neighborhood</span><span class="nv"> </span><span class="s">name</span><span class="nv"> </span><span class="s">in</span><span class="nv"> </span><span class="s">Korean</span><span class="nv"> </span><span class="s">(법정동명,</span><span class="nv"> </span><span class="s">e.g.</span><span class="nv"> </span><span class="s">역삼동)&quot;</span>
+</code></pre></div>
+<p>패턴: <code>{영어 설명} ({한국어 원본명})</code></p>
+<hr />
+<h2 id="5-dataset-card">5. Dataset Card 필수 섹션<a class="headerlink" href="#5-dataset-card" title="Permanent link">&para;</a></h2>
+<p>모든 HuggingFace 데이터셋의 README.md는 다음 섹션을 포함해야 한다.</p>
+<h3 id="51-yaml-front-matter">5.1 YAML Front Matter (필수)<a class="headerlink" href="#51-yaml-front-matter" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="nn">---</span>
+<span class="nt">license</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">cc-by-4.0</span>
+<span class="nt">language</span><span class="p">:</span>
+<span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ko</span>
+<span class="nt">tags</span><span class="p">:</span>
+<span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">real-estate</span>
+<span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">housing-prices</span>
+<span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">korea</span>
+<span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">seoul</span>
+<span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">tabular</span>
+<span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">regression</span>
+<span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">time-series</span>
+<span class="nt">size_categories</span><span class="p">:</span>
+<span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">100K&lt;n&lt;1M</span>
+<span class="nt">task_categories</span><span class="p">:</span>
+<span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">tabular-regression</span>
+<span class="nn">---</span>
+</code></pre></div>
+<p>필수 필드:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">필드</th>
+<th style="text-align: left;">설명</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>license</code></td>
+<td style="text-align: left;">공공누리 매핑에 따른 라이선스 (소문자)</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>language</code></td>
+<td style="text-align: left;">데이터 언어 코드 (<code>ko</code>)</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>tags</code></td>
+<td style="text-align: left;">검색용 태그 (영어)</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>size_categories</code></td>
+<td style="text-align: left;">레코드 수 범위</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>task_categories</code></td>
+<td style="text-align: left;">ML 태스크 유형 (해당 시)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="52">5.2 본문 섹션 (필수)<a class="headerlink" href="#52" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">섹션</th>
+<th style="text-align: left;">내용</th>
+<th style="text-align: left;">언어</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>Title</strong></td>
+<td style="text-align: left;">데이터셋 제목</td>
+<td style="text-align: left;">영어</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Dataset Description</strong></td>
+<td style="text-align: left;">1~2 문단 요약</td>
+<td style="text-align: left;">영어</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Dataset Summary</strong></td>
+<td style="text-align: left;">레코드 수, 피처 수, 출처, 기간, 지역 범위</td>
+<td style="text-align: left;">영어</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Features</strong></td>
+<td style="text-align: left;">컬럼별 이름, 타입, 설명 테이블</td>
+<td style="text-align: left;">영어 + (한국어)</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Statistics</strong></td>
+<td style="text-align: left;">수치 컬럼 통계 (mean, std, min, max)</td>
+<td style="text-align: left;">영어</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Sample Data</strong></td>
+<td style="text-align: left;">상위 5행 테이블</td>
+<td style="text-align: left;">-</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Usage</strong></td>
+<td style="text-align: left;"><code>datasets</code> 라이브러리 코드 스니펫</td>
+<td style="text-align: left;">영어</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Data Collection</strong></td>
+<td style="text-align: left;">수집 방법, API 정보, kpubdata 사용</td>
+<td style="text-align: left;">영어</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Legal &amp; Attribution</strong></td>
+<td style="text-align: left;">출처표시 문구 (한국어 원문 + 영어 번역), 라이선스, 원본 링크</td>
+<td style="text-align: left;">한/영 병기</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Limitations</strong></td>
+<td style="text-align: left;">알려진 제한사항, 커버리지 공백, 업데이트 주기</td>
+<td style="text-align: left;">영어</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Citation</strong></td>
+<td style="text-align: left;">BibTeX 항목</td>
+<td style="text-align: left;">영어</td>
+</tr>
+</tbody>
+</table>
+<h3 id="53-dataset-description">5.3 Dataset Description 작성 가이드<a class="headerlink" href="#53-dataset-description" title="Permanent link">&para;</a></h3>
+<p>첫 문단에 다음 정보를 포함한다:</p>
+<ul>
+<li>데이터가 무엇인지 (what)</li>
+<li>어디서 온 데이터인지 (source)</li>
+<li>어떤 범위를 커버하는지 (scope: 지역, 기간)</li>
+<li>어떤 ML 태스크에 적합한지 (use case)</li>
+</ul>
+<p>예시:</p>
+<div class="highlight"><pre><span></span><code>This dataset contains real apartment trade transaction records in Seoul, South Korea,
+covering all 25 districts from January 2020 to December 2024 (60 months).
+Sourced from the Ministry of Land, Infrastructure and Transport (MOLIT) via data.go.kr,
+it provides a comprehensive time-series view of the Seoul housing market across
+the COVID-19 boom, 2022 correction, and subsequent recovery phases.
+</code></pre></div>
+<h3 id="54-citation-bibtex">5.4 Citation BibTeX 템플릿<a class="headerlink" href="#54-citation-bibtex" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="nc">@dataset</span><span class="p">{</span><span class="nl">kpubdata_{dataset_id</span><span class="p">}</span><span class="c">_{year},</span>
+<span class="w">  </span><span class="c">title  = {{Dataset Title}},</span>
+<span class="w">  </span><span class="c">author = {{kpubdata}},</span>
+<span class="w">  </span><span class="c">year   = {{collection_year}},</span>
+<span class="w">  </span><span class="c">url    = {https://huggingface.co/datasets/kpubdata/{dataset-name}},</span>
+<span class="w">  </span><span class="c">note   = {Sourced from data.go.kr under Korea Open Government License Type {N}}</span>
+<span class="c">}</span>
+</code></pre></div>
+<hr />
+<h2 id="6">6. 데이터 품질 기준<a class="headerlink" href="#6" title="Permanent link">&para;</a></h2>
+<h3 id="_9">최소 요건<a class="headerlink" href="#_9" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">기준</th>
+<th style="text-align: left;">최소값</th>
+<th style="text-align: left;">권장값</th>
+<th style="text-align: left;">근거</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">레코드 수</td>
+<td style="text-align: left;">10,000건</td>
+<td style="text-align: left;">50,000건 이상</td>
+<td style="text-align: left;">California Housing: ~20,640건</td>
+</tr>
+<tr>
+<td style="text-align: left;">시계열 깊이</td>
+<td style="text-align: left;">12개월</td>
+<td style="text-align: left;">36개월 이상</td>
+<td style="text-align: left;">최소 1개 시장 사이클 커버</td>
+</tr>
+<tr>
+<td style="text-align: left;">결측치 비율</td>
+<td style="text-align: left;">컬럼별 50% 미만</td>
+<td style="text-align: left;">컬럼별 10% 미만</td>
+<td style="text-align: left;">-</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_10">필수 처리<a class="headerlink" href="#_10" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>타입 일관성</strong>: 모든 컬럼에 <code>dtypes</code> 명시 (str, int, float, int_comma)</li>
+<li><strong>결측치 처리</strong>: 빈 문자열, <code>"-"</code>, <code>"N/A"</code> 등은 <code>null</code>로 통일</li>
+<li><strong>의미 없는 레코드 제거</strong>: 거래금액 0, 면적 0 등 명백히 잘못된 데이터 필터링</li>
+<li><strong>결측치 비율 공개</strong>: Dataset Card에 컬럼별 null 비율 명시</li>
+</ul>
+<h3 id="_11">시계열 데이터 추가 기준<a class="headerlink" href="#_11" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>최소 36개월</strong> 권장: 계절성과 시장 사이클을 커버해야 함</li>
+<li><strong>정권/정책 변화 시점</strong> 문서화: 부동산 규제 변경, 금리 인상 등 주요 이벤트 기록</li>
+<li>Dataset Card의 Limitations 섹션에 <strong>시계열 분할 권고</strong> 포함:</li>
+</ul>
+<div class="highlight"><pre><span></span><code>For time-series modeling, use time-based splits (not random splits)
+to avoid data leakage. Recommended split: train ≤ 2023, test = 2024.
+</code></pre></div>
+<hr />
+<h2 id="7-config-yaml">7. Config YAML 작성 규칙<a class="headerlink" href="#7-config-yaml" title="Permanent link">&para;</a></h2>
+<p>Config YAML 스키마 자체는 <a href="../publishing/#config-yaml">publishing.md</a>를 참고한다. 여기서는 <strong>표준 준수를 위한 작성 규칙</strong>만 정의한다.</p>
+<h3 id="fetch_params">fetch_params<a class="headerlink" href="#fetch_params" title="Permanent link">&para;</a></h3>
+<ul>
+<li>지역 코드(<code>LAWD_CD</code>)에는 <strong>주석으로 지역명</strong>을 표기한다.</li>
+<li>대량 파라미터는 스크립트로 생성하되, 생성된 YAML에도 주석을 유지한다.</li>
+</ul>
+<div class="highlight"><pre><span></span><code><span class="nt">fetch_params</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">LAWD_CD</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;11110&quot;</span><span class="w">    </span><span class="c1"># 종로구</span>
+<span class="w">    </span><span class="nt">DEAL_YMD</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;202001&quot;</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">LAWD_CD</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;11140&quot;</span><span class="w">    </span><span class="c1"># 중구</span>
+<span class="w">    </span><span class="nt">DEAL_YMD</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;202001&quot;</span>
+</code></pre></div>
+<h3 id="column_mapping">column_mapping<a class="headerlink" href="#column_mapping" title="Permanent link">&para;</a></h3>
+<ul>
+<li>API가 제공하는 모든 <strong>유용한 필드</strong>를 포함한다.</li>
+<li>영어 컬럼명은 <strong>snake_case</strong>를 사용한다.</li>
+<li>단위가 있는 컬럼은 <strong>단위를 컬럼명에 포함</strong>한다: <code>deal_amount_10k_krw</code>, <code>exclusive_area_m2</code></li>
+</ul>
+<h3 id="features">features<a class="headerlink" href="#features" title="Permanent link">&para;</a></h3>
+<ul>
+<li>설명은 <strong><code>{영어 설명} ({한국어 원본명})</code></strong> 패턴을 따른다.</li>
+<li>target variable이 있으면 설명에 명시한다: <code>"(target variable for regression)"</code></li>
+</ul>
+<h3 id="license">license<a class="headerlink" href="#license" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>반드시 소문자</strong>로 작성한다: <code>cc-by-4.0</code> ✅</li>
+<li>HuggingFace <code>_validate_yaml()</code>이 대문자를 거부한다.</li>
+</ul>
+<h3 id="carddescription">card.description<a class="headerlink" href="#carddescription" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>영어</strong>로 작성한다.</li>
+<li>데이터의 범위 (지역, 기간)를 명시한다.</li>
+<li>출처 기관을 영어 정식 명칭으로 표기한다.</li>
+</ul>
+<hr />
+<h2 id="8">8. 퍼블리싱 전 체크리스트<a class="headerlink" href="#8" title="Permanent link">&para;</a></h2>
+<p>새 데이터셋을 퍼블리싱하기 전, 또는 기존 데이터셋을 업데이트하기 전에 다음을 확인한다.</p>
+<h3 id="_12">법적 확인<a class="headerlink" href="#_12" title="Permanent link">&para;</a></h3>
+<ul>
+<li>[ ] data.go.kr 해당 API 페이지에서 <strong>이용허락범위</strong> 확인</li>
+<li>[ ] <strong>공공누리 유형</strong> 확인 및 라이선스 매핑 완료</li>
+<li>[ ] <strong>개인정보</strong> 포함 여부 확인 (포함 시 퍼블리싱 금지)</li>
+<li>[ ] <strong>출처표시 문구</strong> 한국어 원문 + 영어 번역 Dataset Card에 포함</li>
+</ul>
+<h3 id="_13">데이터 품질<a class="headerlink" href="#_13" title="Permanent link">&para;</a></h3>
+<ul>
+<li>[ ] <code>--local-only</code>로 <strong>로컬 테스트</strong> 완료</li>
+<li>[ ] 레코드 수 <strong>최소 10,000건</strong> 이상</li>
+<li>[ ] 모든 컬럼에 <strong>dtype 지정</strong> 완료</li>
+<li>[ ] <strong>결측치 비율</strong> 확인 및 Dataset Card에 명시</li>
+<li>[ ] 의미 없는 레코드(금액 0 등) <strong>필터링</strong> 완료</li>
+<li>[ ] <strong>샘플 데이터</strong> 5행 검수 (값이 합리적인지 확인)</li>
+</ul>
+<h3 id="dataset-card">Dataset Card<a class="headerlink" href="#dataset-card" title="Permanent link">&para;</a></h3>
+<ul>
+<li>[ ] <strong>영어</strong>로 작성 완료</li>
+<li>[ ] 모든 <strong>필수 섹션</strong> 포함 (§5.2 참조)</li>
+<li>[ ] 컬럼 설명에 <strong>한국어 원본명 병기</strong></li>
+<li>[ ] <strong>YAML front matter</strong> 필수 필드 포함</li>
+<li>[ ] <strong>Citation</strong> BibTeX 항목 포함</li>
+</ul>
+<h3 id="_14">프로세스<a class="headerlink" href="#_14" title="Permanent link">&para;</a></h3>
+<ul>
+<li>[ ] feature branch에서 config 변경사항 <strong>커밋</strong></li>
+<li>[ ] <strong>PR</strong> 생성 후 리뷰</li>
+<li>[ ] PR merge 후 퍼블리싱 실행</li>
+</ul>
+<hr />
+<h2 id="9">9. 버전 관리<a class="headerlink" href="#9" title="Permanent link">&para;</a></h2>
+<h3 id="_15">수집 메타데이터<a class="headerlink" href="#_15" title="Permanent link">&para;</a></h3>
+<p>Dataset Card에 다음을 반드시 명시한다:</p>
+<ul>
+<li><strong>수집 일자</strong>: 데이터를 API에서 가져온 날짜</li>
+<li><strong>데이터 범위</strong>: 시작 ~ 종료 기간, 지역 범위</li>
+<li><strong>kpubdata 버전</strong>: 수집에 사용한 kpubdata 패키지 버전</li>
+</ul>
+<div class="highlight"><pre><span></span><code><span class="gu">## Data Collection</span>
+
+<span class="k">-</span><span class="w"> </span><span class="gs">**Collection date**</span>: 2025-04-26
+<span class="k">-</span><span class="w"> </span><span class="gs">**Time range**</span>: 2020-01 to 2024-12
+<span class="k">-</span><span class="w"> </span><span class="gs">**Geographic scope**</span>: Seoul, all 25 districts
+<span class="k">-</span><span class="w"> </span><span class="gs">**kpubdata version**</span>: 0.1.x
+<span class="k">-</span><span class="w"> </span><span class="gs">**API calls**</span>: 1,500 (25 districts × 60 months)
+</code></pre></div>
+<h3 id="_16">업데이트 정책<a class="headerlink" href="#_16" title="Permanent link">&para;</a></h3>
+<ul>
+<li>기존 데이터셋을 <strong>덮어쓰기</strong> 전, HF repo의 이전 상태를 기록한다 (commit hash 또는 수집 일자).</li>
+<li>데이터 범위가 확장되면 Dataset Card의 수집 메타데이터를 함께 업데이트한다.</li>
+<li>스키마(컬럼 구조)가 변경되면 Dataset Card의 Features 테이블과 Breaking Changes 섹션을 업데이트한다.</li>
+</ul>
+<hr />
+<h2 id="_17">관련 문서<a class="headerlink" href="#_17" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">문서</th>
+<th style="text-align: left;">설명</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><a href="../publishing/">publishing.md</a></td>
+<td style="text-align: left;">퍼블리싱 스크립트 사용법 및 Config YAML 스키마</td>
+</tr>
+<tr>
+<td style="text-align: left;"><a href="https://www.kogl.or.kr/info/license.do">공공누리 이용허락 안내</a></td>
+<td style="text-align: left;">공공누리 유형별 이용 조건</td>
+</tr>
+<tr>
+<td style="text-align: left;"><a href="https://www.law.go.kr/법령/공공데이터의제공및이용활성화에관한법률">공공데이터법</a></td>
+<td style="text-align: left;">법률 원문</td>
+</tr>
+<tr>
+<td style="text-align: left;"><a href="https://huggingface.co/docs/hub/datasets-cards">HuggingFace Dataset Card Guide</a></td>
+<td style="text-align: left;">HF 공식 Dataset Card 작성 가이드</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="10-kaggle">10. Kaggle 퍼블리싱<a class="headerlink" href="#10-kaggle" title="Permanent link">&para;</a></h2>
+<h3 id="_18">개요<a class="headerlink" href="#_18" title="Permanent link">&para;</a></h3>
+<p><code>publish_to_hf.py</code>는 <code>--target kaggle</code> 또는 <code>--target all</code> 옵션으로 Kaggle에도 동시 퍼블리싱을 지원한다. HuggingFace와 동일한 parquet 데이터를 재사용하며, 메타데이터 형식만 <code>dataset-metadata.json</code>으로 변환한다.</p>
+<h3 id="kaggle-slug">Kaggle Slug 네이밍<a class="headerlink" href="#kaggle-slug" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code>{kaggle-username}/{dataset-slug}
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">요소</th>
+<th style="text-align: left;">설명</th>
+<th style="text-align: left;">예시</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>kaggle-username</code></td>
+<td style="text-align: left;">Kaggle 계정 사용자명</td>
+<td style="text-align: left;"><code>yschoe</code></td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>dataset-slug</code></td>
+<td style="text-align: left;">HF repo의 dataset name과 동일하게 유지</td>
+<td style="text-align: left;"><code>seoul-apartment-trades</code></td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>Kaggle은 organization 계정이 없으므로 개인 계정 소속이 된다. 브랜드 통일이 필요하면 전용 Kaggle 계정을 생성한다.</p>
+</blockquote>
+<h3 id="config-yaml">Config YAML 설정<a class="headerlink" href="#config-yaml" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="nt">output</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">hf_repo</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;kpubdata/seoul-apartment-trades&quot;</span>
+<span class="w">  </span><span class="nt">kaggle_slug</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;yschoe/seoul-apartment-trades&quot;</span>
+<span class="w">  </span><span class="nt">parquet_filename</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;data/train.parquet&quot;</span>
+<span class="w">  </span><span class="nt">staging_dir</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;./staging/seoul-apartment-trades&quot;</span>
+</code></pre></div>
+<p><code>kaggle_slug</code>이 없으면 Kaggle 업로드를 건너뛴다.</p>
+<h3 id="huggingface-kaggle">HuggingFace → Kaggle 라이선스 매핑<a class="headerlink" href="#huggingface-kaggle" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">HuggingFace (소문자)</th>
+<th style="text-align: left;">Kaggle</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>cc-by-4.0</code></td>
+<td style="text-align: left;"><code>CC-BY-4.0</code></td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>cc0-1.0</code></td>
+<td style="text-align: left;"><code>CC0-1.0</code></td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>cc-by-sa-4.0</code></td>
+<td style="text-align: left;"><code>CC-BY-SA-4.0</code></td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>cc-by-nc-4.0</code></td>
+<td style="text-align: left;"><code>CC-BY-NC-4.0</code></td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>cc-by-nc-sa-4.0</code></td>
+<td style="text-align: left;"><code>CC-BY-NC-SA-4.0</code></td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>HuggingFace는 소문자 강제, Kaggle은 대문자 허용. 스크립트가 자동 변환한다.</p>
+</blockquote>
+<h3 id="dataset-metadatajson">dataset-metadata.json 필수 필드<a class="headerlink" href="#dataset-metadatajson" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">필드</th>
+<th style="text-align: left;">필수</th>
+<th style="text-align: left;">설명</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>title</code></td>
+<td style="text-align: left;">✅</td>
+<td style="text-align: left;">6~50자, Config의 <code>card.title</code> 사용</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>id</code></td>
+<td style="text-align: left;">✅</td>
+<td style="text-align: left;"><code>{username}/{slug}</code> 형식</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>licenses</code></td>
+<td style="text-align: left;">✅</td>
+<td style="text-align: left;">정확히 1개, <code>[{"name": "CC-BY-4.0"}]</code></td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>subtitle</code></td>
+<td style="text-align: left;">권장</td>
+<td style="text-align: left;">20~80자. 미지정 시 description 첫 줄에서 자동 생성</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>description</code></td>
+<td style="text-align: left;">권장</td>
+<td style="text-align: left;">Config의 <code>card.description</code> + <code>card.attribution</code> 결합</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>keywords</code></td>
+<td style="text-align: left;">권장</td>
+<td style="text-align: left;">Config의 <code>card.tags</code> 재사용</td>
+</tr>
+</tbody>
+</table>
+<h3 id="cli">CLI 사용법<a class="headerlink" href="#cli" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># HuggingFace + Kaggle 동시 퍼블리싱</span>
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/publish_to_hf.py<span class="w"> </span>scripts/configs/seoul_apartment_trades.yaml<span class="w"> </span>--target<span class="w"> </span>all
+
+<span class="c1"># Kaggle만</span>
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/publish_to_hf.py<span class="w"> </span>scripts/configs/seoul_apartment_trades.yaml<span class="w"> </span>--target<span class="w"> </span>kaggle
+
+<span class="c1"># HuggingFace만 (기존 동작)</span>
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/publish_to_hf.py<span class="w"> </span>scripts/configs/seoul_apartment_trades.yaml<span class="w"> </span>--target<span class="w"> </span>hf
+</code></pre></div>
+<h3 id="kaggle">Kaggle 인증<a class="headerlink" href="#kaggle" title="Permanent link">&para;</a></h3>
+<p>두 가지 방식 중 하나를 사용한다:</p>
+<ol>
+<li><strong>환경변수</strong>: <code>KAGGLE_USERNAME</code> + <code>KAGGLE_KEY</code></li>
+<li><strong>파일</strong>: <code>~/.kaggle/kaggle.json</code> (<code>{"username":"...","key":"..."}</code>)</li>
+</ol>
+<h3 id="kaggle_1">Kaggle 업데이트 동작<a class="headerlink" href="#kaggle_1" title="Permanent link">&para;</a></h3>
+<ul>
+<li>데이터셋이 이미 존재하면 <strong>새 버전</strong>(<code>dataset_create_version</code>)으로 업데이트한다.</li>
+<li>존재하지 않으면 <strong>신규 생성</strong>(<code>dataset_create_new</code>)한다.</li>
+<li>스크립트가 자동으로 존재 여부를 판별한다.</li>
+</ul>
+<h3 id="huggingface-kaggle_1">HuggingFace와 Kaggle 차이점 요약<a class="headerlink" href="#huggingface-kaggle_1" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">항목</th>
+<th style="text-align: left;">HuggingFace</th>
+<th style="text-align: left;">Kaggle</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">메타데이터 형식</td>
+<td style="text-align: left;"><code>README.md</code> (YAML front matter)</td>
+<td style="text-align: left;"><code>dataset-metadata.json</code></td>
+</tr>
+<tr>
+<td style="text-align: left;">라이선스 표기</td>
+<td style="text-align: left;">소문자 (<code>cc-by-4.0</code>)</td>
+<td style="text-align: left;">대문자 허용 (<code>CC-BY-4.0</code>)</td>
+</tr>
+<tr>
+<td style="text-align: left;">Organization</td>
+<td style="text-align: left;">지원 (<code>kpubdata/...</code>)</td>
+<td style="text-align: left;">미지원 (개인 계정만)</td>
+</tr>
+<tr>
+<td style="text-align: left;">버전 관리</td>
+<td style="text-align: left;">Git 기반 (commit history)</td>
+<td style="text-align: left;">명시적 버전 번호</td>
+</tr>
+<tr>
+<td style="text-align: left;">Dataset Card</td>
+<td style="text-align: left;">README.md 내장</td>
+<td style="text-align: left;">별도 description 필드</td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  맨위로
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "search.suggest", "search.highlight"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "\ud074\ub9bd\ubcf4\ub4dc\uc5d0 \ubcf5\uc0ac\ub428", "clipboard.copy": "\ud074\ub9bd\ubcf4\ub4dc\ub85c \ubcf5\uc0ac", "search.result.more.one": "\uc774 \ubb38\uc11c\uc5d0\uc11c 1\uac1c\uc758 \uac80\uc0c9 \uacb0\uacfc \ub354 \ubcf4\uae30", "search.result.more.other": "\uc774 \ubb38\uc11c\uc5d0\uc11c #\uac1c\uc758 \uac80\uc0c9 \uacb0\uacfc \ub354 \ubcf4\uae30", "search.result.none": "\uac80\uc0c9\uc5b4\uc640 \uc77c\uce58\ud558\ub294 \ubb38\uc11c\uac00 \uc5c6\uc2b5\ub2c8\ub2e4", "search.result.one": "1\uac1c\uc758 \uc77c\uce58\ud558\ub294 \ubb38\uc11c", "search.result.other": "#\uac1c\uc758 \uc77c\uce58\ud558\ub294 \ubb38\uc11c", "search.result.placeholder": "\uac80\uc0c9\uc5b4\ub97c \uc785\ub825\ud558\uc138\uc694", "search.result.term.missing": "\ud3ec\ud568\ub418\uc9c0 \uc54a\uc740 \uac80\uc0c9\uc5b4", "select.version": "\ubc84\uc804 \uc120\ud0dd"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="https://unpkg.com/mermaid@10/dist/mermaid.min.js"></script>
+      
+        <script src="../javascripts/mermaid.js"></script>
+      
+    
+  </body>
+</html>

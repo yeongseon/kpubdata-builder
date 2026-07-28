@@ -1,0 +1,2619 @@
+
+<!doctype html>
+<html lang="ko" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://yeongseon.github.io/kpubdata-builder/guides/cli-usage/">
+      
+      
+        <link rel="prev" href="../../vision/">
+      
+      
+        <link rel="next" href="../../API_CONTRACT/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>CLI 사용 가이드 - KPubData Builder</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="teal">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#cli-kpubdata-builder" class="md-skip">
+          콘텐츠로 이동
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="상단/헤더">
+    <a href="../.." title="KPubData Builder" class="md-header__button md-logo" aria-label="KPubData Builder" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            KPubData Builder
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              CLI 사용 가이드
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+    
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="검색" placeholder="검색" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="검색">
+        
+        <button type="reset" class="md-search__icon md-icon" title="지우기" aria-label="지우기" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            검색 초기화
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/yeongseon/kpubdata-builder" title="저장소로 이동" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    yeongseon/kpubdata-builder
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="탭" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../vision/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  비전
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="./" class="md-tabs__link">
+          
+  
+  
+  사용 가이드
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../ARCHITECTURE/" class="md-tabs__link">
+          
+  
+  
+  아키텍처
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../publishing/" class="md-tabs__link">
+          
+  
+  
+  퍼블리싱
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../CONTRIBUTING/" class="md-tabs__link">
+          
+  
+  
+  개발 가이드
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../PRD/" class="md-tabs__link">
+          
+  
+  
+  프로젝트
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../adrs/" class="md-tabs__link">
+          
+  
+  
+  ADR
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="네비게이션" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="KPubData Builder" class="md-nav__button md-logo" aria-label="KPubData Builder" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    KPubData Builder
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/yeongseon/kpubdata-builder" title="저장소로 이동" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    yeongseon/kpubdata-builder
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../vision/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    비전
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    사용 가이드
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    사용 가이드
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI 사용 가이드
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI 사용 가이드
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="목차">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      목차
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        설치 확인
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        전체 도움말
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#subcommands" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        하위 명령 (Subcommands)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="하위 명령 (Subcommands)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#validate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        validate — 빌드 명세 검증
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="validate — 빌드 명세 검증">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        검증 성공 예시
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        검증 실패 예시 1 — 로드 오류
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        검증 실패 예시 2 — 스펙 유효성 오류
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#preview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        preview — 스키마·샘플 미리 보기
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#build" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        build — 파이프라인 전체 실행
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#publish" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        publish — 아티팩트 게시
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#http-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        서비스 모드 (HTTP API)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="서비스 모드 (HTTP API)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        서비스 기동
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get-version" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GET /version
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#post-validate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        POST /validate
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#post-build" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        POST /build
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get-artifactsrun_id" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GET /artifacts/{run_id}
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        환경 변수
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        관련 문서
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API_CONTRACT/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API 규약
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../DOMAIN_MODEL/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    도메인 모델
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../EXPORT_MODEL/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    내보내기 모델
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../error-handling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    에러 처리
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_6" id="__nav_3_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    예제
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    예제
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../examples/seoul-apt-trade/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    서울 아파트 실거래가
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    아키텍처
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    아키텍처
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ARCHITECTURE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    시스템 구조
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../BOUNDARY/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    경계 규칙
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../BUILD_SPEC/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BuildSpec 계약
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../BUILD_STATE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    빌드 상태 머신
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ALGORITHM/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    빌드 알고리즘 명세
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../FEATURE_FLOWS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    기능 처리 흐름
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    퍼블리싱
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    퍼블리싱
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../publishing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    퍼블리싱 가이드
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../hf-publishing-standards/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    HuggingFace 퍼블리싱 표준
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../lessons-learned/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    교훈 (Lessons Learned)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    개발 가이드
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    개발 가이드
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../CONTRIBUTING/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    기여 방법
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../AGENTS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    에이전트 가이드
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    프로젝트
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    프로젝트
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../PRD/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    요구사항 (PRD)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ROADMAP/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    로드맵
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../PLAN/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    작업 계획
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../CHANGELOG/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    변경 이력
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    ADR
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adrs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR 소개
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adrs/0001-builder-as-orchestrator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Builder as Orchestrator
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adrs/0002-build-execution-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Build Execution Model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adrs/0003-persistent-build-store/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Persistent Build Store
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adrs/0004-plugin-exporter-contract/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plugin Exporter Contract
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adrs/0005-api-contract-single-source/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Contract Single Source
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adrs/0006-service-auth-and-deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Service Auth and Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="목차">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      목차
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        설치 확인
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        전체 도움말
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#subcommands" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        하위 명령 (Subcommands)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="하위 명령 (Subcommands)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#validate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        validate — 빌드 명세 검증
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="validate — 빌드 명세 검증">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        검증 성공 예시
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        검증 실패 예시 1 — 로드 오류
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        검증 실패 예시 2 — 스펙 유효성 오류
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#preview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        preview — 스키마·샘플 미리 보기
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#build" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        build — 파이프라인 전체 실행
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#publish" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        publish — 아티팩트 게시
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#http-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        서비스 모드 (HTTP API)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="서비스 모드 (HTTP API)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        서비스 기동
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get-version" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GET /version
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#post-validate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        POST /validate
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#post-build" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        POST /build
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get-artifactsrun_id" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GET /artifacts/{run_id}
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        환경 변수
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        관련 문서
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="cli-kpubdata-builder">CLI 사용 가이드 — KPubData Builder<a class="headerlink" href="#cli-kpubdata-builder" title="Permanent link">&para;</a></h1>
+<p>이 문서는 <code>kpubdata-builder</code> 명령줄 도구(CLI)의 실제 사용법을 다룹니다.
+각 명령의 출력은 실제 실행 결과를 그대로 수록했습니다.
+라이브 API 키가 필요한 <code>preview</code> 및 <code>build</code> 명령의 출력은 테스트 픽스처 기반 예시임을 명시합니다.</p>
+<hr />
+<h2 id="_1">설치 확인<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
+<p>설치가 완료되면 <code>kpubdata-builder</code> 실행 파일이 PATH에 등록됩니다.
+버전을 확인하려면 <code>--version</code> 옵션을 사용합니다.</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>kpubdata-builder<span class="w"> </span>--version
+<span class="go">kpubdata-builder 0.1.0</span>
+</code></pre></div>
+<hr />
+<h2 id="_2">전체 도움말<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>kpubdata-builder<span class="w"> </span>--help
+<span class="go">usage: kpubdata-builder [-h] [--version] command ...</span>
+
+<span class="go">KPubData Builder command-line interface.</span>
+
+<span class="go">positional arguments:</span>
+<span class="go">  command</span>
+<span class="go">    validate  Validate a BuildSpec YAML file.</span>
+<span class="go">    preview   Preview a BuildSpec: schema and sample rows without writing</span>
+<span class="go">              artifacts.</span>
+<span class="go">    build     Execute a BuildSpec through the Medallion pipeline.</span>
+<span class="go">    publish   Publish build artifacts to a local or remote destination.</span>
+
+<span class="go">options:</span>
+<span class="go">  -h, --help  show this help message and exit</span>
+<span class="go">  --version   show program&#39;s version number and exit</span>
+</code></pre></div>
+<hr />
+<h2 id="subcommands">하위 명령 (Subcommands)<a class="headerlink" href="#subcommands" title="Permanent link">&para;</a></h2>
+<h3 id="validate">validate — 빌드 명세 검증<a class="headerlink" href="#validate" title="Permanent link">&para;</a></h3>
+<p><code>validate</code> 명령은 BuildSpec YAML 파일의 구조와 필드 유효성을 검사합니다.
+실제 데이터 소스(data.go.kr 등)에는 접근하지 않으므로 API 키 없이 오프라인에서 실행할 수 있습니다.</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>kpubdata-builder<span class="w"> </span>validate<span class="w"> </span>--help
+<span class="go">usage: kpubdata-builder validate [-h] spec</span>
+
+<span class="go">positional arguments:</span>
+<span class="go">  spec        Path to the BuildSpec YAML file.</span>
+
+<span class="go">options:</span>
+<span class="go">  -h, --help  show this help message and exit</span>
+</code></pre></div>
+<h4 id="_3">검증 성공 예시<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h4>
+<p>다음은 유효한 BuildSpec YAML 파일 <code>apt_trade_spec.yaml</code> 예시입니다.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># apt_trade_spec.yaml</span>
+<span class="nt">dataset_id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">dataset.seoul_apt_trade</span>
+<span class="nt">title</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">서울 아파트 실거래가</span>
+<span class="nt">description</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
+<span class="w">  </span><span class="no">data.go.kr 국토교통부 아파트매매 실거래가 데이터를 수집해</span>
+<span class="w">  </span><span class="no">JSONL 형식으로 내보내는 BuildSpec 예제입니다.</span>
+<span class="nt">sources</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">provider</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">datago</span>
+<span class="w">    </span><span class="nt">dataset</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">apt_trade</span>
+<span class="w">    </span><span class="nt">alias</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">gangnam_202401</span>
+<span class="w">    </span><span class="nt">params</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">LAWD_CD</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;11680&quot;</span>
+<span class="w">      </span><span class="nt">DEAL_YMD</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;202401&quot;</span>
+<span class="nt">exports</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">jsonl</span>
+<span class="w">    </span><span class="nt">output_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">out/apt_trade.jsonl</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>kpubdata-builder<span class="w"> </span>validate<span class="w"> </span>apt_trade_spec.yaml
+<span class="go">spec is valid: dataset.seoul_apt_trade</span>
+</code></pre></div>
+<p>성공 시 종료 코드는 <code>0</code>이며, 표준 출력에 <code>spec is valid: &lt;dataset_id&gt;</code>가 출력됩니다.</p>
+<h4 id="1">검증 실패 예시 1 — 로드 오류<a class="headerlink" href="#1" title="Permanent link">&para;</a></h4>
+<p><code>sources</code> 목록이 비어 있는 YAML은 로드(파싱) 단계에서 오류가 발생합니다.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># broken_empty_sources.yaml</span>
+<span class="nt">dataset_id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">dataset.broken</span>
+<span class="nt">title</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Broken Spec</span>
+<span class="nt">description</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">sources 목록이 비어 있어 검증에 실패하는 예제입니다.</span>
+<span class="nt">sources</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[]</span>
+<span class="nt">exports</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">jsonl</span>
+<span class="w">    </span><span class="nt">output_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">out/data.jsonl</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>kpubdata-builder<span class="w"> </span>validate<span class="w"> </span>broken_empty_sources.yaml
+<span class="go">error: failed to load spec: Failed to parse build spec: sources must not be empty</span>
+</code></pre></div>
+<p>종료 코드는 <code>1</code>입니다. 오류 메시지는 표준 오류(stderr)로 출력됩니다.</p>
+<h4 id="2">검증 실패 예시 2 — 스펙 유효성 오류<a class="headerlink" href="#2" title="Permanent link">&para;</a></h4>
+<p>지원하지 않는 <code>export.kind</code> 값은 파싱은 성공하지만 유효성 검사(validation) 단계에서 실패합니다.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># broken_export_kind.yaml</span>
+<span class="nt">dataset_id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">dataset.broken_export</span>
+<span class="nt">title</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">잘못된 Export Kind 예제</span>
+<span class="nt">description</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">지원하지 않는 export kind가 포함된 스펙으로 검증 실패를 보여줍니다.</span>
+<span class="nt">sources</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">provider</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">datago</span>
+<span class="w">    </span><span class="nt">dataset</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">apt_trade</span>
+<span class="nt">exports</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">unsupported_format</span>
+<span class="w">    </span><span class="nt">output_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">out/data.unsupported</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>kpubdata-builder<span class="w"> </span>validate<span class="w"> </span>broken_export_kind.yaml
+<span class="go">error: spec validation failed:</span>
+<span class="go">  - exports[0].kind &#39;unsupported_format&#39; is not supported; supported kinds: [&#39;csv&#39;, &#39;huggingface&#39;, &#39;jsonl&#39;, &#39;kaggle&#39;, &#39;markdown&#39;, &#39;parquet&#39;]</span>
+</code></pre></div>
+<p>지원되는 export kind는 <code>csv</code>, <code>huggingface</code>, <code>jsonl</code>, <code>kaggle</code>, <code>markdown</code>, <code>parquet</code>입니다.</p>
+<hr />
+<h3 id="preview">preview — 스키마·샘플 미리 보기<a class="headerlink" href="#preview" title="Permanent link">&para;</a></h3>
+<p><code>preview</code> 명령은 BuildSpec을 검증한 뒤 각 소스(source)의 스키마(컬럼 목록)와 샘플 행을 가져옵니다.
+아티팩트(artifact) 파일은 생성하지 않습니다.</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>kpubdata-builder<span class="w"> </span>preview<span class="w"> </span>--help
+<span class="go">usage: kpubdata-builder preview [-h] [--limit LIMIT] spec</span>
+
+<span class="go">positional arguments:</span>
+<span class="go">  spec           Path to the BuildSpec YAML file.</span>
+
+<span class="go">options:</span>
+<span class="go">  -h, --help     show this help message and exit</span>
+<span class="go">  --limit LIMIT  Maximum sample rows per source (default: 5).</span>
+</code></pre></div>
+<blockquote>
+<p><strong>[예시 — 픽스처 기반 출력]</strong> <code>preview</code> 명령은 실제 data.go.kr API에 접근하므로
+아래 출력은 라이브 실행이 아닌 테스트 픽스처를 바탕으로 재구성한 대표 예시입니다.
+실제 실행을 위해서는 <code>KPUBDATA_DATAGO_API_KEY</code> 환경 변수에 유효한 API 키가 필요합니다.</p>
+</blockquote>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span><span class="nb">export</span><span class="w"> </span><span class="nv">KPUBDATA_DATAGO_API_KEY</span><span class="o">=</span><span class="s2">&quot;&lt;your-data-go-kr-api-key&gt;&quot;</span>
+<span class="gp">$ </span>kpubdata-builder<span class="w"> </span>preview<span class="w"> </span>apt_trade_spec.yaml<span class="w"> </span>--limit<span class="w"> </span><span class="m">3</span>
+<span class="go">preview: dataset.seoul_apt_trade</span>
+<span class="go">  - gangnam_202401: sggCd (Utf8), umdNm (Utf8), aptNm (Utf8), excluUseAr (Float64), floor (Int64), buildYear (Int64), dealYear (Int64), dealMonth (Int64), dealDay (Int64), dealAmount (Utf8)</span>
+<span class="go">    sample (3 of 142 rows):</span>
+<span class="go">      {&#39;sggCd&#39;: &#39;11680&#39;, &#39;umdNm&#39;: &#39;개포동&#39;, &#39;aptNm&#39;: &#39;개포주공1단지&#39;, &#39;excluUseAr&#39;: 41.96, &#39;floor&#39;: 3, &#39;buildYear&#39;: 1982, &#39;dealYear&#39;: 2024, &#39;dealMonth&#39;: 1, &#39;dealDay&#39;: 6, &#39;dealAmount&#39;: &#39;82,500&#39;}</span>
+<span class="go">      {&#39;sggCd&#39;: &#39;11680&#39;, &#39;umdNm&#39;: &#39;개포동&#39;, &#39;aptNm&#39;: &#39;개포주공2단지&#39;, &#39;excluUseAr&#39;: 36.0, &#39;floor&#39;: 9, &#39;buildYear&#39;: 1983, &#39;dealYear&#39;: 2024, &#39;dealMonth&#39;: 1, &#39;dealDay&#39;: 8, &#39;dealAmount&#39;: &#39;53,500&#39;}</span>
+<span class="go">      {&#39;sggCd&#39;: &#39;11680&#39;, &#39;umdNm&#39;: &#39;역삼동&#39;, &#39;aptNm&#39;: &#39;역삼래미안&#39;, &#39;excluUseAr&#39;: 59.97, &#39;floor&#39;: 12, &#39;buildYear&#39;: 2003, &#39;dealYear&#39;: 2024, &#39;dealMonth&#39;: 1, &#39;dealDay&#39;: 11, &#39;dealAmount&#39;: &#39;120,000&#39;}</span>
+</code></pre></div>
+<p>소스 fetch에 실패하면 표준 오류(stderr)에 오류 메시지가 출력되고 종료 코드 <code>1</code>이 반환됩니다.</p>
+<hr />
+<h3 id="build">build — 파이프라인 전체 실행<a class="headerlink" href="#build" title="Permanent link">&para;</a></h3>
+<p><code>build</code> 명령은 BuildSpec의 Medallion 파이프라인(Bronze → Silver → Gold)을 전체 실행하고
+아티팩트(artifact)와 매니페스트(manifest)를 생성합니다.</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>kpubdata-builder<span class="w"> </span>build<span class="w"> </span>--help
+<span class="go">usage: kpubdata-builder build [-h] [--output-dir OUTPUT_DIR] [--run-id RUN_ID]</span>
+<span class="go">                              spec</span>
+
+<span class="go">positional arguments:</span>
+<span class="go">  spec                  Path to the BuildSpec YAML file.</span>
+
+<span class="go">options:</span>
+<span class="go">  -h, --help            show this help message and exit</span>
+<span class="go">  --output-dir OUTPUT_DIR</span>
+<span class="go">                        Run workspace root directory (default: build).</span>
+<span class="go">  --run-id RUN_ID       Run identifier (default: generated timestamp).</span>
+</code></pre></div>
+<blockquote>
+<p><strong>[예시 — 픽스처 기반 출력]</strong> <code>build</code> 명령은 실제 data.go.kr API에 접근하므로
+아래 출력은 테스트 픽스처를 바탕으로 재구성한 대표 예시입니다.
+실제 실행을 위해서는 <code>KPUBDATA_DATAGO_API_KEY</code> 환경 변수에 유효한 API 키가 필요합니다.</p>
+</blockquote>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span><span class="nb">export</span><span class="w"> </span><span class="nv">KPUBDATA_DATAGO_API_KEY</span><span class="o">=</span><span class="s2">&quot;&lt;your-data-go-kr-api-key&gt;&quot;</span>
+<span class="gp">$ </span>kpubdata-builder<span class="w"> </span>build<span class="w"> </span>apt_trade_spec.yaml<span class="w"> </span>--output-dir<span class="w"> </span>./build<span class="w"> </span>--run-id<span class="w"> </span>run-20240601
+<span class="go">build: dataset.seoul_apt_trade (run run-20240601)</span>
+<span class="go">  - gangnam_202401: ok [bronze, silver, gold]</span>
+<span class="go">manifest: &lt;path&gt;/build/run-20240601/manifest.json</span>
+</code></pre></div>
+<p><code>--run-id</code>를 생략하면 타임스탬프 기반 식별자가 자동 생성됩니다.</p>
+<p>빌드가 실패하면 실패한 소스 키와 오류 내용이 표준 오류(stderr)에 출력되고
+종료 코드 <code>1</code>이 반환됩니다.</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>kpubdata-builder<span class="w"> </span>build<span class="w"> </span>apt_trade_spec.yaml
+<span class="go">build: dataset.seoul_apt_trade (run 20240601-153022)</span>
+<span class="go">  - gangnam_202401: failed [-]</span>
+<span class="go">error: build failed for one or more sources</span>
+<span class="go">  - gangnam_202401: ConfigError: KPUBDATA_DATAGO_API_KEY not set</span>
+</code></pre></div>
+<hr />
+<h3 id="publish">publish — 아티팩트 게시<a class="headerlink" href="#publish" title="Permanent link">&para;</a></h3>
+<p><code>publish</code> 명령은 이미 생성된 아티팩트를 로컬 디렉터리, Hugging Face, 또는 Kaggle에 게시합니다.</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>kpubdata-builder<span class="w"> </span>publish<span class="w"> </span>--help
+<span class="go">usage: kpubdata-builder publish [-h] [--target {huggingface,kaggle,local}]</span>
+<span class="go">                                --destination DESTINATION --artifacts-dir</span>
+<span class="go">                                ARTIFACTS_DIR [--public]</span>
+<span class="go">                                spec</span>
+
+<span class="go">positional arguments:</span>
+<span class="go">  spec                  Path to the BuildSpec YAML file.</span>
+
+<span class="go">options:</span>
+<span class="go">  -h, --help            show this help message and exit</span>
+<span class="go">  --target {huggingface,kaggle,local}</span>
+<span class="go">                        Publish target (default: local).</span>
+<span class="go">  --destination DESTINATION</span>
+<span class="go">                        Local directory path (local) or HF repo id</span>
+<span class="go">                        (huggingface).</span>
+<span class="go">  --artifacts-dir ARTIFACTS_DIR</span>
+<span class="go">                        Directory whose files will be published.</span>
+<span class="go">  --public              Create new datasets as public (kaggle only; default:</span>
+<span class="go">                        private).</span>
+</code></pre></div>
+<p>로컬 디렉터리로 복사하는 예시입니다.</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>kpubdata-builder<span class="w"> </span>publish<span class="w"> </span>apt_trade_spec.yaml<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--target<span class="w"> </span><span class="nb">local</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--destination<span class="w"> </span>./dist/apt_trade<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--artifacts-dir<span class="w"> </span>./build/run-20240601
+<span class="go">publish: dataset.seoul_apt_trade -&gt; local</span>
+<span class="go">  target: &lt;path&gt;/dist/apt_trade</span>
+<span class="go">  artifacts: 2</span>
+</code></pre></div>
+<hr />
+<h2 id="http-api">서비스 모드 (HTTP API)<a class="headerlink" href="#http-api" title="Permanent link">&para;</a></h2>
+<p><code>kpubdata-builder</code> 패키지는 HTTP 서비스로 실행할 수도 있습니다.
+서비스는 stdlib <code>http.server</code> 어댑터 기반이며 추가 의존성 없이 실행됩니다.</p>
+<h3 id="_4">서비스 기동<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h3>
+<p>별도 CLI <code>serve</code> 명령은 없습니다. <code>BuilderService</code>와 <code>serve()</code>를 직접 임포트해 실행합니다.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># serve_dev.py  —  개발·로컬 테스트용 기동 스크립트 예시</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">kpubdata_builder.service</span><span class="w"> </span><span class="kn">import</span> <span class="n">BuilderService</span><span class="p">,</span> <span class="n">serve</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">kpubdata_builder.stages.bronze.build</span><span class="w"> </span><span class="kn">import</span> <span class="n">SourceClient</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_client_factory</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">SourceClient</span><span class="p">:</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">kpubdata</span><span class="w"> </span><span class="kn">import</span> <span class="n">Client</span>
+    <span class="k">return</span> <span class="n">Client</span><span class="o">.</span><span class="n">from_env</span><span class="p">()</span>  <span class="c1"># type: ignore[return-value]</span>
+
+<span class="n">service</span> <span class="o">=</span> <span class="n">BuilderService</span><span class="p">(</span>
+    <span class="n">output_root</span><span class="o">=</span><span class="n">Path</span><span class="p">(</span><span class="s2">&quot;build&quot;</span><span class="p">),</span>
+    <span class="n">client_factory</span><span class="o">=</span><span class="n">_client_factory</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">serve</span><span class="p">(</span><span class="n">service</span><span class="p">,</span> <span class="n">host</span><span class="o">=</span><span class="s2">&quot;127.0.0.1&quot;</span><span class="p">,</span> <span class="n">port</span><span class="o">=</span><span class="mi">8000</span><span class="p">)</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>python<span class="w"> </span>serve_dev.py
+<span class="gp"># </span>서버가<span class="w"> </span><span class="m">127</span>.0.0.1:8000에서<span class="w"> </span>요청을<span class="w"> </span>대기합니다<span class="w"> </span><span class="o">(</span>Ctrl-C로<span class="w"> </span>종료<span class="o">)</span>.
+</code></pre></div>
+<p><code>/validate</code>와 <code>/version</code>은 API 키 없이 오프라인으로 사용할 수 있습니다.
+<code>/preview</code>와 <code>/build</code>는 <code>KPUBDATA_DATAGO_API_KEY</code> 환경 변수가 필요합니다.</p>
+<h3 id="get-version">GET /version<a class="headerlink" href="#get-version" title="Permanent link">&para;</a></h3>
+<p>서비스가 노출하는 API 계약 버전을 확인합니다.</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>curl<span class="w"> </span>-s<span class="w"> </span>http://127.0.0.1:8000/version
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;service&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;kpubdata-builder&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;api_version&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;1.0.0&quot;</span>
+<span class="p">}</span>
+</code></pre></div>
+<h3 id="post-validate">POST /validate<a class="headerlink" href="#post-validate" title="Permanent link">&para;</a></h3>
+<p>BuildSpec YAML 문자열을 JSON body의 <code>spec</code> 필드로 전달합니다.</p>
+<p>검증 성공:</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>curl<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://127.0.0.1:8000/validate<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-d<span class="w"> </span><span class="err">&#39;</span><span class="o">{</span>
+<span class="go">      &quot;spec&quot;: &quot;dataset_id: dataset.sample\ntitle: Sample\ndescription: test\nsources:\n  - provider: datago\n    dataset: apt_trade\nexports:\n  - kind: jsonl\n    output_path: out/data.jsonl\n&quot;</span>
+<span class="go">    }&#39;</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;valid&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;dataset_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;dataset.sample&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;api_version&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;1.0.0&quot;</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>검증 실패 (지원하지 않는 export kind):</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;invalid&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;problems&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="s2">&quot;exports[0].kind &#39;unsupported_format&#39; is not supported; supported kinds: [&#39;csv&#39;, &#39;huggingface&#39;, &#39;jsonl&#39;, &#39;kaggle&#39;, &#39;markdown&#39;, &#39;parquet&#39;]&quot;</span>
+<span class="w">  </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre></div>
+<h3 id="post-build">POST /build<a class="headerlink" href="#post-build" title="Permanent link">&para;</a></h3>
+<blockquote>
+<p><strong>[예시 — 대표 응답]</strong> <code>POST /build</code>는 실제 data.go.kr API에 접근하므로
+아래 응답은 테스트 픽스처를 바탕으로 재구성한 대표 예시입니다.
+실제 실행을 위해서는 <code>KPUBDATA_DATAGO_API_KEY</code> 환경 변수에 유효한 API 키가 필요합니다.</p>
+</blockquote>
+<p>BuildSpec YAML 문자열을 JSON body의 <code>spec</code> 필드로 전달합니다. 선택적으로 <code>run_id</code>를 지정할 수 있습니다.</p>
+<p>빌드 성공 (HTTP 200):</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>curl<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://127.0.0.1:8000/build<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;spec&quot;: &quot;&lt;spec-yaml-string&gt;&quot;, &quot;run_id&quot;: &quot;run-20240601&quot;}&#39;</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ok&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;run_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;run-20240601&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;outcomes&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;source_key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;gangnam_202401&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ok&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;stages_completed&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;bronze&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;silver&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;gold&quot;</span><span class="p">],</span>
+<span class="w">      </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">],</span>
+<span class="w">  </span><span class="nt">&quot;manifest&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;build/run-20240601/manifest.json&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;api_version&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;1.0.0&quot;</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>빌드 실패 (HTTP 502 — 업스트림 소스 fetch 실패):</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;failed&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;run_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;run-20240601&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;outcomes&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;source_key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;gangnam_202401&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;failed&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;stages_completed&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[],</span>
+<span class="w">      </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ConfigError: KPUBDATA_DATAGO_API_KEY not set&quot;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">],</span>
+<span class="w">  </span><span class="nt">&quot;manifest&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;build/run-20240601/manifest.json&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;api_version&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;1.0.0&quot;</span>
+<span class="p">}</span>
+</code></pre></div>
+<h3 id="get-artifactsrun_id">GET /artifacts/{run_id}<a class="headerlink" href="#get-artifactsrun_id" title="Permanent link">&para;</a></h3>
+<p>지정한 실행 워크스페이스의 산출물 파일 목록을 반환합니다.</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>curl<span class="w"> </span>-s<span class="w"> </span>http://127.0.0.1:8000/artifacts/run-20240601
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;run_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;run-20240601&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;files&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="s2">&quot;gangnam_202401/apt_trade.jsonl&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="s2">&quot;manifest.json&quot;</span>
+<span class="w">  </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>실행 ID가 존재하지 않으면 HTTP 404가 반환됩니다.</p>
+<hr />
+<p>구현된 엔드포인트는 <code>GET /version</code>, <code>POST /validate</code>, <code>POST /preview</code>, <code>POST /build</code>,
+<code>GET /artifacts/{run_id}</code>이며, 이것이 실제 동작의 기준입니다.
+공식 API 계약(스키마·버전 협상 포함)은 PR #231에서 실제 구현과 동기화된
+<a href="https://github.com/yeongseon/kpubdata-builder/blob/main/contract/builder-api.yaml"><code>contract/builder-api.yaml</code></a>을 참고하세요.</p>
+<hr />
+<h2 id="_5">환경 변수<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">변수</th>
+<th style="text-align: left;">설명</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>KPUBDATA_DATAGO_API_KEY</code></td>
+<td style="text-align: left;">data.go.kr 공공데이터 API 인증 키. <code>preview</code> 및 <code>build</code> 명령 실행 시 필요합니다.</td>
+</tr>
+</tbody>
+</table>
+<p>API 키는 <a href="https://www.data.go.kr/">data.go.kr</a>에서 회원가입 후 발급받을 수 있습니다.</p>
+<hr />
+<h2 id="_6">관련 문서<a class="headerlink" href="#_6" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">문서</th>
+<th style="text-align: left;">설명</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><a href="../error-handling/">에러 처리</a></td>
+<td style="text-align: left;">에러 계층 및 단계별 에러 처리 정책</td>
+</tr>
+<tr>
+<td style="text-align: left;"><a href="../../examples/seoul-apt-trade/">예제: 서울 아파트 실거래가</a></td>
+<td style="text-align: left;">종단 간 데이터 수집·게시 예제</td>
+</tr>
+<tr>
+<td style="text-align: left;"><a href="../../API_CONTRACT/">API 규약</a></td>
+<td style="text-align: left;">서비스 HTTP API 상세 규약</td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  맨위로
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "search.suggest", "search.highlight"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "\ud074\ub9bd\ubcf4\ub4dc\uc5d0 \ubcf5\uc0ac\ub428", "clipboard.copy": "\ud074\ub9bd\ubcf4\ub4dc\ub85c \ubcf5\uc0ac", "search.result.more.one": "\uc774 \ubb38\uc11c\uc5d0\uc11c 1\uac1c\uc758 \uac80\uc0c9 \uacb0\uacfc \ub354 \ubcf4\uae30", "search.result.more.other": "\uc774 \ubb38\uc11c\uc5d0\uc11c #\uac1c\uc758 \uac80\uc0c9 \uacb0\uacfc \ub354 \ubcf4\uae30", "search.result.none": "\uac80\uc0c9\uc5b4\uc640 \uc77c\uce58\ud558\ub294 \ubb38\uc11c\uac00 \uc5c6\uc2b5\ub2c8\ub2e4", "search.result.one": "1\uac1c\uc758 \uc77c\uce58\ud558\ub294 \ubb38\uc11c", "search.result.other": "#\uac1c\uc758 \uc77c\uce58\ud558\ub294 \ubb38\uc11c", "search.result.placeholder": "\uac80\uc0c9\uc5b4\ub97c \uc785\ub825\ud558\uc138\uc694", "search.result.term.missing": "\ud3ec\ud568\ub418\uc9c0 \uc54a\uc740 \uac80\uc0c9\uc5b4", "select.version": "\ubc84\uc804 \uc120\ud0dd"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="https://unpkg.com/mermaid@10/dist/mermaid.min.js"></script>
+      
+        <script src="../../javascripts/mermaid.js"></script>
+      
+    
+  </body>
+</html>

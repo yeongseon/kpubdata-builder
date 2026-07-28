@@ -82,9 +82,19 @@ def load_entry_point_exporters(*, override: bool = False) -> list[str]:
     return sorted(registered)
 
 
+def clear_exporter_registry() -> None:
+    """모든 exporter 등록을 초기화한다 (#326).
+
+    주로 테스트에서 사용한다. 테스트 간 exporter 등록 누수를 방지하기 위해
+    레지스트리를 비운다.
+    """
+    EXPORTER_REGISTRY.clear()
+
+
 __all__ = [
     "EXPORTER_ENTRY_POINT_GROUP",
     "EXPORTER_REGISTRY",
+    "clear_exporter_registry",
     "get_exporter",
     "load_entry_point_exporters",
     "register_exporter",

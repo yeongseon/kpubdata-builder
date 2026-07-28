@@ -1,0 +1,2581 @@
+
+<!doctype html>
+<html lang="ko" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://yeongseon.github.io/kpubdata-builder/ARCHITECTURE/">
+      
+      
+        <link rel="prev" href="../examples/seoul-apt-trade/">
+      
+      
+        <link rel="next" href="../BOUNDARY/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>시스템 구조 - KPubData Builder</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="teal">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#kpubdata-builder" class="md-skip">
+          콘텐츠로 이동
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="상단/헤더">
+    <a href=".." title="KPubData Builder" class="md-header__button md-logo" aria-label="KPubData Builder" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            KPubData Builder
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              시스템 구조
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+    
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="검색" placeholder="검색" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="검색">
+        
+        <button type="reset" class="md-search__icon md-icon" title="지우기" aria-label="지우기" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            검색 초기화
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/yeongseon/kpubdata-builder" title="저장소로 이동" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    yeongseon/kpubdata-builder
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="탭" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../vision/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  비전
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../guides/cli-usage/" class="md-tabs__link">
+          
+  
+  
+  사용 가이드
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="./" class="md-tabs__link">
+          
+  
+  
+  아키텍처
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../publishing/" class="md-tabs__link">
+          
+  
+  
+  퍼블리싱
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../CONTRIBUTING/" class="md-tabs__link">
+          
+  
+  
+  개발 가이드
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../PRD/" class="md-tabs__link">
+          
+  
+  
+  프로젝트
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../adrs/" class="md-tabs__link">
+          
+  
+  
+  ADR
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="네비게이션" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="KPubData Builder" class="md-nav__button md-logo" aria-label="KPubData Builder" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    KPubData Builder
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/yeongseon/kpubdata-builder" title="저장소로 이동" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    yeongseon/kpubdata-builder
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../vision/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    비전
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    사용 가이드
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    사용 가이드
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guides/cli-usage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI 사용 가이드
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../API_CONTRACT/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API 규약
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../DOMAIN_MODEL/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    도메인 모델
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../EXPORT_MODEL/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    내보내기 모델
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guides/error-handling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    에러 처리
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_6" id="__nav_3_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    예제
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    예제
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../examples/seoul-apt-trade/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    서울 아파트 실거래가
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    아키텍처
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    아키텍처
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    시스템 구조
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    시스템 구조
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="목차">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      목차
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. 역할 정의
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-buildspec" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. BuildSpec 중심 설계 원칙
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. 계층 분리
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. 계층 분리">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#31" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.1 파이프라인 오케스트레이터
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#32-bronze" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.2 Bronze 단계
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#33-silver" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.3 Silver 단계
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#34-gold" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.4 Gold 단계
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#35-exporter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.5 Exporter
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#36-publisher" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.6 Publisher
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#37-manifest" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.7 Manifest
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. 외부 통합 지점
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-medallion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Medallion 파이프라인 흐름
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. 내부 책임 지도
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. 목표 디렉터리 구조
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-builder-studio" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Builder-Studio 연결 원칙
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-vs-208" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. 빌드 실행 경로 — 정식 vs 레거시 (#208)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="9. 빌드 실행 경로 — 정식 vs 레거시 (#208)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#91" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.1 정식 경로 — 메달리온 오케스트레이터
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#92-publish" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.2 레거시 경로 — 스크립트 기반 publish 파이프라인
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#93-follow-up" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.3 통합 계획 (follow-up)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. 관련 문서
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../BOUNDARY/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    경계 규칙
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../BUILD_SPEC/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BuildSpec 계약
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../BUILD_STATE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    빌드 상태 머신
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ALGORITHM/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    빌드 알고리즘 명세
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../FEATURE_FLOWS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    기능 처리 흐름
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    퍼블리싱
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    퍼블리싱
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../publishing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    퍼블리싱 가이드
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../hf-publishing-standards/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    HuggingFace 퍼블리싱 표준
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../lessons-learned/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    교훈 (Lessons Learned)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    개발 가이드
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    개발 가이드
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../CONTRIBUTING/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    기여 방법
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AGENTS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    에이전트 가이드
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    프로젝트
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    프로젝트
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../PRD/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    요구사항 (PRD)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ROADMAP/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    로드맵
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../PLAN/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    작업 계획
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../CHANGELOG/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    변경 이력
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    ADR
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adrs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR 소개
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adrs/0001-builder-as-orchestrator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Builder as Orchestrator
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adrs/0002-build-execution-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Build Execution Model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adrs/0003-persistent-build-store/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Persistent Build Store
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adrs/0004-plugin-exporter-contract/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plugin Exporter Contract
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adrs/0005-api-contract-single-source/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Contract Single Source
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adrs/0006-service-auth-and-deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Service Auth and Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="목차">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      목차
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. 역할 정의
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-buildspec" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. BuildSpec 중심 설계 원칙
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. 계층 분리
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. 계층 분리">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#31" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.1 파이프라인 오케스트레이터
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#32-bronze" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.2 Bronze 단계
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#33-silver" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.3 Silver 단계
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#34-gold" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.4 Gold 단계
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#35-exporter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.5 Exporter
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#36-publisher" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.6 Publisher
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#37-manifest" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.7 Manifest
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. 외부 통합 지점
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-medallion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Medallion 파이프라인 흐름
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. 내부 책임 지도
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. 목표 디렉터리 구조
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-builder-studio" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Builder-Studio 연결 원칙
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-vs-208" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. 빌드 실행 경로 — 정식 vs 레거시 (#208)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="9. 빌드 실행 경로 — 정식 vs 레거시 (#208)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#91" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.1 정식 경로 — 메달리온 오케스트레이터
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#92-publish" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.2 레거시 경로 — 스크립트 기반 publish 파이프라인
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#93-follow-up" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.3 통합 계획 (follow-up)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. 관련 문서
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="kpubdata-builder">아키텍처 — KPubData Builder<a class="headerlink" href="#kpubdata-builder" title="Permanent link">&para;</a></h1>
+<h2 id="1">1. 역할 정의<a class="headerlink" href="#1" title="Permanent link">&para;</a></h2>
+<p><code>kpubdata-builder</code>는 <strong>재현 가능한 공공데이터 데이터셋 조립을 위한 Medallion 실행 엔진</strong>입니다.</p>
+<p>Builder의 핵심 역할은 다음과 같습니다.</p>
+<ul>
+<li>BuildSpec을 읽고 검증한다.</li>
+<li><code>kpubdata</code>를 통해 Bronze source fetch를 위임한다.</li>
+<li>Bronze/Silver/Gold 단계를 오케스트레이션한다.</li>
+<li>Gold 결과를 exporter에 전달해 artifact를 만든다.</li>
+<li>모든 실행을 manifest로 기록한다.</li>
+<li>필요 시 publisher를 통해 외부 대상에 게시한다.</li>
+</ul>
+<p>Builder는 다음을 하지 않습니다.</p>
+<ul>
+<li>provider별 API 접근 로직을 다시 구현하지 않습니다.</li>
+<li>Studio 같은 UI 계층의 화면 상태를 소유하지 않습니다.</li>
+<li>임의의 범용 ETL 엔진이 되려고 하지 않습니다.</li>
+</ul>
+<h2 id="2-buildspec">2. BuildSpec 중심 설계 원칙<a class="headerlink" href="#2-buildspec" title="Permanent link">&para;</a></h2>
+<p>이 시스템의 설계 중심은 <strong>BuildSpec</strong>입니다.</p>
+<ol>
+<li><strong>BuildSpec이 실행의 단일 진실 공급원(single source of truth)</strong> 입니다.</li>
+<li>실행 엔진은 spec을 해석하지만, 의미를 재정의하지 않습니다.</li>
+<li>Bronze/Silver/Gold는 orchestrator가 관리하는 내부 실행 단계이며, exporter와 publisher는 Gold 결과를 소비하는 하위 단계입니다.</li>
+<li>manifest는 실행 후 생성되는 기록물이지, 실행 규칙을 다시 정의하는 입력물이 아닙니다.</li>
+<li>Studio나 다른 클라이언트는 BuildSpec을 작성·전송할 수 있지만, 계약 자체를 소유하지 않습니다.</li>
+</ol>
+<h2 id="3">3. 계층 분리<a class="headerlink" href="#3" title="Permanent link">&para;</a></h2>
+<h3 id="31">3.1 파이프라인 오케스트레이터<a class="headerlink" href="#31" title="Permanent link">&para;</a></h3>
+<ul>
+<li>BuildSpec 로딩/검증</li>
+<li>Bronze/Silver/Gold stage 전이 관리</li>
+<li>run workspace(<code>build/{run_id}/bronze/</code>, <code>silver/</code>, <code>gold/</code>) 관리</li>
+</ul>
+<h3 id="32-bronze">3.2 Bronze 단계<a class="headerlink" href="#32-bronze" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>kpubdata</code> 호출로 원시 fetch 수행</li>
+<li>source snapshot 저장</li>
+<li>provenance logging 기록</li>
+</ul>
+<h3 id="33-silver">3.3 Silver 단계<a class="headerlink" href="#33-silver" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Bronze snapshot을 표 형태로 정렬</li>
+<li><strong>Polars 단일 내부 엔진</strong>으로 tabularize 수행</li>
+<li>schema validation, statistics, preview generation 수행</li>
+</ul>
+<h3 id="34-gold">3.4 Gold 단계<a class="headerlink" href="#34-gold" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Silver 결과를 split-ready package로 조립</li>
+<li>export-ready artifact 집합 준비</li>
+<li>exporter/publisher가 소비할 기준 패키지 생성</li>
+</ul>
+<h3 id="35-exporter">3.5 Exporter<a class="headerlink" href="#35-exporter" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Gold package를 파일/레이아웃 artifact로 변환</li>
+<li>로컬 파일 시스템 기준 결과물 생성</li>
+<li>source fetch나 stage promotion 정책은 직접 담당하지 않음</li>
+</ul>
+<h3 id="36-publisher">3.6 Publisher<a class="headerlink" href="#36-publisher" title="Permanent link">&para;</a></h3>
+<ul>
+<li>이미 생성된 artifact를 원격 대상에 게시</li>
+<li>게시 성공/실패를 실행 결과에 반영</li>
+<li>파일 생성 책임은 없음</li>
+</ul>
+<h3 id="37-manifest">3.7 Manifest<a class="headerlink" href="#37-manifest" title="Permanent link">&para;</a></h3>
+<ul>
+<li>spec digest, 상태, artifact 목록, 실행 시각, 오류 요약 기록</li>
+<li>stage별 산출물과 승격 결과 기록 가능</li>
+<li>성공/실패 여부와 무관하게 build run을 설명하는 감사 기록</li>
+<li>exporter/publisher를 대체하는 실행 단계가 아님</li>
+</ul>
+<h2 id="4">4. 외부 통합 지점<a class="headerlink" href="#4" title="Permanent link">&para;</a></h2>
+<p>Builder는 외부와 다음 경계로 연결됩니다.</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">외부 시스템</th>
+<th style="text-align: left;">Builder가 받는 것</th>
+<th style="text-align: left;">Builder가 제공하는 것</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>kpubdata</code></td>
+<td style="text-align: left;">정규화된 레코드 접근</td>
+<td style="text-align: left;">Bronze source 실행 위임</td>
+</tr>
+<tr>
+<td style="text-align: left;">파일 시스템</td>
+<td style="text-align: left;">output 디렉터리</td>
+<td style="text-align: left;">artifact, manifest</td>
+</tr>
+<tr>
+<td style="text-align: left;">원격 게시 대상</td>
+<td style="text-align: left;">게시 대상 설정/자격 증명</td>
+<td style="text-align: left;">게시 요청</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>kpubdata-studio</code></td>
+<td style="text-align: left;">BuildSpec, 실행 요청</td>
+<td style="text-align: left;">검증 결과, stage-aware preview, build 상태, manifest</td>
+</tr>
+</tbody>
+</table>
+<p>Studio는 여기서 <strong>외부 UI 클라이언트</strong>로만 동작합니다.</p>
+<h2 id="5-medallion">5. Medallion 파이프라인 흐름<a class="headerlink" href="#5-medallion" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>flowchart LR
+    UI[External UI Client&lt;br/&gt;kpubdata-studio] --&gt;|BuildSpec / build request| S[Builder Service]
+    S --&gt; L[Spec Loader]
+    L --&gt; V[Validator]
+    V --&gt; O[Pipeline Orchestrator]
+    O --&gt; B[Bronze Stage]
+    B --&gt; K[kpubdata]
+    B --&gt; SI[Silver Stage\nPolars tabular engine]
+    SI --&gt; G[Gold Stage]
+    G --&gt; E[Exporter]
+    E --&gt; A[Artifacts]
+    A --&gt; M[Manifest Writer]
+    M --&gt; P[Publisher optional]
+    M --&gt; R[Manifest]
+    P --&gt; O[Remote Target]
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>Studio/UI -&gt; Builder Service -&gt; Spec Loader -&gt; Validator -&gt; Pipeline Orchestrator
+           -&gt; Bronze(raw fetch) -&gt; Silver(Polars tabularize/validate) -&gt; Gold(package)
+           -&gt; Exporter -&gt; Artifacts -&gt; Manifest Writer -&gt; Publisher(optional)
+</code></pre></div>
+<h2 id="6">6. 내부 책임 지도<a class="headerlink" href="#6" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">단계</th>
+<th style="text-align: left;">입력</th>
+<th style="text-align: left;">출력</th>
+<th style="text-align: left;">실패 시 영향</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Spec Loader</td>
+<td style="text-align: left;">YAML/구조화된 spec</td>
+<td style="text-align: left;">BuildSpec 객체</td>
+<td style="text-align: left;">build 시작 불가</td>
+</tr>
+<tr>
+<td style="text-align: left;">Validator</td>
+<td style="text-align: left;">BuildSpec</td>
+<td style="text-align: left;">검증 결과</td>
+<td style="text-align: left;"><code>failed</code>로 종료</td>
+</tr>
+<tr>
+<td style="text-align: left;">Bronze 단계</td>
+<td style="text-align: left;">검증된 BuildSpec</td>
+<td style="text-align: left;">raw snapshot + provenance</td>
+<td style="text-align: left;">Silver 이전에 중단</td>
+</tr>
+<tr>
+<td style="text-align: left;">Silver 단계</td>
+<td style="text-align: left;">Bronze snapshot</td>
+<td style="text-align: left;">Polars table + schema/stats/preview</td>
+<td style="text-align: left;">Gold 이전에 중단</td>
+</tr>
+<tr>
+<td style="text-align: left;">Gold 단계</td>
+<td style="text-align: left;">Silver dataset</td>
+<td style="text-align: left;">split-ready/export-ready package</td>
+<td style="text-align: left;">export 이전에 중단</td>
+</tr>
+<tr>
+<td style="text-align: left;">Exporter</td>
+<td style="text-align: left;">Gold package + export 설정</td>
+<td style="text-align: left;">artifact 목록</td>
+<td style="text-align: left;">publish 이전에 중단</td>
+</tr>
+<tr>
+<td style="text-align: left;">Manifest Writer</td>
+<td style="text-align: left;">spec digest + 실행 결과</td>
+<td style="text-align: left;">manifest.json</td>
+<td style="text-align: left;">감사 기록 상실 위험</td>
+</tr>
+<tr>
+<td style="text-align: left;">Publisher</td>
+<td style="text-align: left;">artifact + publish 설정</td>
+<td style="text-align: left;">게시 결과</td>
+<td style="text-align: left;">artifact는 유지될 수 있음</td>
+</tr>
+</tbody>
+</table>
+<h2 id="7">7. 목표 디렉터리 구조<a class="headerlink" href="#7" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>src/kpubdata_builder/
+├── pipeline/
+│   └── orchestrator.py
+├── stages/
+│   ├── bronze/
+│   ├── silver/
+│   └── gold/
+├── tabular/
+│   └── polars_*.py
+├── exporters/
+├── publishers/
+├── spec.py
+├── manifest.py
+└── ...
+
+build/{run_id}/
+├── bronze/
+├── silver/
+└── gold/
+</code></pre></div>
+<p>위 구조의 핵심은 다음과 같습니다.</p>
+<ul>
+<li>stage 구현은 <code>stages/bronze</code>, <code>stages/silver</code>, <code>stages/gold</code>에 분리합니다.</li>
+<li>stage 흐름 제어는 <code>pipeline/orchestrator.py</code>가 담당합니다.</li>
+<li>tabular 처리는 <strong>Polars 단일 엔진</strong>만 사용하며 dual-engine 전략은 두지 않습니다.</li>
+<li>run workspace는 <code>build/{run_id}/bronze/</code>, <code>silver/</code>, <code>gold/</code>로 고정해 재현성과 디버깅 가능성을 높입니다.</li>
+</ul>
+<h2 id="8-builder-studio">8. Builder-Studio 연결 원칙<a class="headerlink" href="#8-builder-studio" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Studio는 BuildSpec을 <strong>작성하고 전송</strong>할 수 있지만, BuildSpec 계약을 정의하지 않습니다.</li>
+<li>Preview 계산은 Builder에서 수행되며 Studio는 stage-aware 결과를 렌더링합니다.</li>
+<li>Build 상태 머신은 Builder가 소유하며 Studio는 조회/표시만 합니다.</li>
+<li>Manifest 스키마는 Builder가 소유하며 Studio는 이를 소비합니다.</li>
+</ul>
+<p>자세한 경계는 <a href="../BOUNDARY/">BOUNDARY.md</a>를 참고하세요.</p>
+<h2 id="9-vs-208">9. 빌드 실행 경로 — 정식 vs 레거시 (#208)<a class="headerlink" href="#9-vs-208" title="Permanent link">&para;</a></h2>
+<p>코드베이스에는 두 실행 경로가 공존한다. 혼란을 막기 위해 <strong>정식 경로를 다음과 같이
+확정</strong>한다.</p>
+<h3 id="91">9.1 정식 경로 — 메달리온 오케스트레이터<a class="headerlink" href="#91" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code>kpubdata_builder.pipeline.run_build(spec, client=..., output_root=..., run_id=...)
+</code></pre></div>
+<ul>
+<li>입력은 <code>BuildSpec</code>이며, 진입점에서 <code>validate_spec()</code>로 fail-fast 검증한다(#212).</li>
+<li>Bronze → Silver → Gold를 오케스트레이션하고, <strong>단일</strong> manifest 생성기
+  (<code>kpubdata_builder.manifest</code>)로 스키마 버전·빌드 환경·입력 지문을 기록한다(#211).</li>
+<li><code>kpubdata_builder.service</code>(HTTP)와 <code>kpubdata_builder.cli</code>가 모두 이 경로를 호출한다.</li>
+<li><strong>신규 기능과 버그 수정은 이 경로에만 추가한다.</strong></li>
+</ul>
+<h3 id="92-publish">9.2 레거시 경로 — 스크립트 기반 publish 파이프라인<a class="headerlink" href="#92-publish" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code>scripts/publish_to_hf.py  →  scripts/pipeline/{fetch,transform,package,publish}.py
+</code></pre></div>
+<ul>
+<li>BuildSpec과 다른 자체 config 스키마(<code>scripts/configs/*.yaml</code>)를 쓰며, data.go.kr →
+  HuggingFace/Kaggle 직접 publish(checkpoint/resume, variant, dataset card)를 담당한다.</li>
+<li>GitHub Actions <code>publish-dataset.yml</code> 및 스케줄 워크플로에 연결된 <strong>프로덕션 경로</strong>다.</li>
+<li>해당 모듈에는 <code>DEPRECATED</code> 표시가 붙어 있으며, 프로덕션 호환을 위해서만 유지한다.</li>
+</ul>
+<h3 id="93-follow-up">9.3 통합 계획 (follow-up)<a class="headerlink" href="#93-follow-up" title="Permanent link">&para;</a></h3>
+<p>두 경로는 config 스키마가 근본적으로 다르고 레거시 경로가 프로덕션에 연결돼 있어 즉시
+병합은 회귀 위험이 크다. 단계적 통합:</p>
+<ol>
+<li><strong>(완료)</strong> 정식 경로를 메달리온으로 확정하고 레거시 모듈 deprecate.</li>
+<li>레거시 config → <code>BuildSpec</code> 변환 어댑터 도입.</li>
+<li>fetch/transform/package를 메달리온 stage 호출로 치환하고 publish만 publisher 계층에
+   위임.</li>
+<li>variant/checkpoint 등 publish 전용 기능을 메달리온에서 동등 제공한 뒤 스케줄
+   워크플로를 새 진입점으로 전환하고 레거시 스크립트 제거.</li>
+</ol>
+<p>각 단계는 publish 워크플로의 라이브 재검증을 동반한다.</p>
+<h2 id="10">10. 관련 문서<a class="headerlink" href="#10" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">문서</th>
+<th style="text-align: left;">설명</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><a href="../BUILD_SPEC/">BUILD_SPEC.md</a></td>
+<td style="text-align: left;">BuildSpec 계약</td>
+</tr>
+<tr>
+<td style="text-align: left;"><a href="../API_CONTRACT/">API_CONTRACT.md</a></td>
+<td style="text-align: left;">Builder 중심 API 계약</td>
+</tr>
+<tr>
+<td style="text-align: left;"><a href="../BUILD_STATE/">BUILD_STATE.md</a></td>
+<td style="text-align: left;">빌드 상태 머신</td>
+</tr>
+<tr>
+<td style="text-align: left;"><a href="../ALGORITHM/">ALGORITHM.md</a></td>
+<td style="text-align: left;">전체 빌드 알고리즘 명세</td>
+</tr>
+<tr>
+<td style="text-align: left;"><a href="../BOUNDARY/">BOUNDARY.md</a></td>
+<td style="text-align: left;">Builder-Studio 경계</td>
+</tr>
+<tr>
+<td style="text-align: left;"><a href="../ROADMAP/">ROADMAP.md</a></td>
+<td style="text-align: left;">향후 확장 계획</td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  맨위로
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "search.suggest", "search.highlight"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "\ud074\ub9bd\ubcf4\ub4dc\uc5d0 \ubcf5\uc0ac\ub428", "clipboard.copy": "\ud074\ub9bd\ubcf4\ub4dc\ub85c \ubcf5\uc0ac", "search.result.more.one": "\uc774 \ubb38\uc11c\uc5d0\uc11c 1\uac1c\uc758 \uac80\uc0c9 \uacb0\uacfc \ub354 \ubcf4\uae30", "search.result.more.other": "\uc774 \ubb38\uc11c\uc5d0\uc11c #\uac1c\uc758 \uac80\uc0c9 \uacb0\uacfc \ub354 \ubcf4\uae30", "search.result.none": "\uac80\uc0c9\uc5b4\uc640 \uc77c\uce58\ud558\ub294 \ubb38\uc11c\uac00 \uc5c6\uc2b5\ub2c8\ub2e4", "search.result.one": "1\uac1c\uc758 \uc77c\uce58\ud558\ub294 \ubb38\uc11c", "search.result.other": "#\uac1c\uc758 \uc77c\uce58\ud558\ub294 \ubb38\uc11c", "search.result.placeholder": "\uac80\uc0c9\uc5b4\ub97c \uc785\ub825\ud558\uc138\uc694", "search.result.term.missing": "\ud3ec\ud568\ub418\uc9c0 \uc54a\uc740 \uac80\uc0c9\uc5b4", "select.version": "\ubc84\uc804 \uc120\ud0dd"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="https://unpkg.com/mermaid@10/dist/mermaid.min.js"></script>
+      
+        <script src="../javascripts/mermaid.js"></script>
+      
+    
+  </body>
+</html>

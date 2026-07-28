@@ -20,6 +20,7 @@ from .parquet import ParquetExporter
 from .registry import (
     EXPORTER_ENTRY_POINT_GROUP,
     EXPORTER_REGISTRY,
+    clear_exporter_registry,
     get_exporter,
     load_entry_point_exporters,
     register_exporter,
@@ -44,6 +45,7 @@ __all__ = [
     "KaggleExporter",
     "MarkdownExporter",
     "ParquetExporter",
+    "clear_exporter_registry",
     "ensure_output_dir",
     "get_exporter",
     "load_entry_point_exporters",

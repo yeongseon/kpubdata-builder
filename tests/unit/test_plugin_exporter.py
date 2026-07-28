@@ -1,8 +1,7 @@
-"""Plugin exporter API(#13): 코드 내 등록과 entry point 발견을 검증한다."""
+"""Plugin exporter API(#13, #326): 코드 내 등록과 entry point 발견을 검증한다."""
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -49,17 +48,6 @@ class _FakeEntryPoint:
 
     def load(self) -> object:
         return self._value
-
-
-@pytest.fixture(autouse=True)
-def _restore_registry() -> Iterator[None]:
-    # 전역 레지스트리를 스냅샷 후 복원해 테스트 간 오염을 막는다.
-    snapshot = dict(EXPORTER_REGISTRY)
-    try:
-        yield
-    finally:
-        EXPORTER_REGISTRY.clear()
-        EXPORTER_REGISTRY.update(snapshot)
 
 
 def test_builtin_exporters_are_registered() -> None:
