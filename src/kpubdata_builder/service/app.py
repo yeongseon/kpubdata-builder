@@ -225,9 +225,7 @@ class BuilderService:
         )
         return ServiceResponse(200, {"run_id": run_id, "files": list(files)})
 
-    def serve_artifact_file(
-        self, run_id: str, file_path: str
-    ) -> ServiceResponse | FileResponse:
+    def serve_artifact_file(self, run_id: str, file_path: str) -> ServiceResponse | FileResponse:
         """실행 워크스페이스의 특정 파일을 제공한다 (#323).
 
         경로 트래버설 공격을 방지하기 위해 run_id와 file_path 모두
