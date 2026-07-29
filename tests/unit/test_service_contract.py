@@ -25,6 +25,7 @@ _DISPATCH_ROUTES: dict[tuple[str, str], str] = {
     ("/validate", "POST"): "validateSpec",
     ("/preview", "POST"): "previewBuild",
     ("/build", "POST"): "createBuild",
+    ("/builds", "GET"): "listBuilds",
     ("/artifacts/{run_id}", "GET"): "listBuildArtifacts",
 }
 
@@ -274,6 +275,7 @@ _OPERATION_STATUS_CODES: dict[str, set[int]] = {
     "validateSpec": {200, 400},
     "previewBuild": {200, 400},
     "createBuild": {200, 400, 502},
+    "listBuilds": {200, 400},
     "listBuildArtifacts": {200, 400, 404},
 }
 
