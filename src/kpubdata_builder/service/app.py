@@ -16,6 +16,7 @@ from __future__ import annotations
 import heapq
 import hmac
 import json
+import logging
 import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -26,12 +27,15 @@ from urllib.parse import parse_qs
 import yaml
 
 from ..errors import SpecLoadError, ValidationError
-from ..pipeline import preview_build, run_build
+from ..index import BuildIndex, BuildStatus
+from ..pipeline import BuildResult, preview_build, run_build
 from ..spec import BuildSpec, JsonValue, parse_spec
 from ..spec.validator import validate_spec
 from ..stages._path_safety import ensure_within, validate_path_segment
 from ..stages.bronze.build import SourceClient
 from ..tabular import DEFAULT_PREVIEW_LIMIT
+
+_logger = logging.getLogger(__name__)
 
 # Builder API 계약 버전. contract/builder-api.yaml의 info.version과 일치해야 하며
 # (test_service_contract가 강제), 응답에 실어 Studio 같은 소비자가 하위 호환을
@@ -81,6 +85,8 @@ def _parse_spec_text(spec_yaml: str) -> BuildSpec:
 class BuilderService:
     """Builder 연산을 HTTP 전송과 무관하게 제공하는 서비스."""
 
+    _BUILD_INDEX_DB = "_builds.sqlite"
+
     def __init__(
         self,
         *,
@@ -89,6 +95,15 @@ class BuilderService:
     ) -> None:
         self._output_root = output_root
         self._client_factory = client_factory
+        # SQLite 인덱스 경로만 저장하고 lazy 초기화 (#329)
+        self._build_index_path = output_root / self._BUILD_INDEX_DB
+        self._build_index: BuildIndex | None = None
+
+    def _get_build_index(self) -> BuildIndex:
+        """BuildIndex를 lazy하게 초기화한다 (#329)."""
+        if self._build_index is None:
+            self._build_index = BuildIndex(db_path=self._build_index_path)
+        return self._build_index
 
     def version(self) -> ServiceResponse:
         """Builder API 계약 버전을 반환한다 (#209).
@@ -153,8 +168,11 @@ class BuilderService:
         응답 코드 정책:
             - 모든 소스 성공: 200
             - 하나라도 소스 fetch/stage가 실패: 502 (upstream 소스 의존 실패).
-              매니페스트는 partial 정책으로 남기 때문에 body에 outcomes와 manifest가
+              매니페스트는 partial 정책으로 남기기 때문에 body에 outcomes와 manifest가
               실린다.
+
+        빌드 완료 후 SQLite 인덱스 갱신을 시도한다 (#329). 인덱스 쓰기 실패는
+        빌드 성공에 영향을 주지 않는다(best-effort).
         """
         spec_or_error = self._load_validated(spec_yaml)
         if isinstance(spec_or_error, ServiceResponse):
@@ -191,7 +209,64 @@ class BuilderService:
                 (o.error for o in result.outcomes if o.status != "ok" and o.error), None
             )
             body["error"] = first_error or "build failed"
+
+        # 빌드 완료 후 인덱스 갱신 (best-effort, 실패해도 빌드는 성공) (#329)
+        self._update_build_index(result)
+
         return ServiceResponse(status_code, body)
+
+    def _update_build_index(self, result: BuildResult) -> None:
+        """빌드 완료 후 SQLite 인덱스를 갱신한다 (#329).
+
+        best-effort로 실행되며, 인덱스 쓰기 실패는 빌드 성공에 영향을 주지
+        않는다(ADR 0003). 실패 시 로그만 남기고 진행한다.
+        """
+        try:
+            from datetime import datetime
+
+            # manifest에서 시작/종료 시간 추출
+            started_at: str | None = None
+            finished_at: str | None = None
+            try:
+                manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+                started_at = manifest.get("started_at")
+                finished_at = manifest.get("finished_at")
+            except (json.JSONDecodeError, OSError):
+                # manifest 읽기 실패 시 현재 시간 사용
+                now = datetime.utcnow().isoformat() + "Z"
+                if not started_at:
+                    started_at = now
+                if not finished_at:
+                    finished_at = now
+
+            # 빌드 상태 결정
+            if result.status == "ok":
+                build_status: BuildStatus = "completed"
+            else:
+                build_status = "failed"
+
+            # 실패한 빌드의 첫 번째 에러 메시지 추출
+            error_msg: str | None = None
+            if result.status != "ok":
+                error_msg = next(
+                    (o.error for o in result.outcomes if o.status != "ok" and o.error), None
+                )
+
+            # 인덱스에 기록
+            self._get_build_index().record_build(
+                run_id=result.context.run_id,
+                status=build_status,
+                started_at=started_at or finished_at or "",
+                finished_at=finished_at or started_at or "",
+                error=error_msg,
+            )
+        except Exception as exc:
+            # 인덱스 쓰기 실패는 빌드 성공에 영향을 주지 않음 (#329)
+            _logger.warning(
+                "Failed to update build index for run %s: %s",
+                result.context.run_id,
+                exc,
+            )
 
     def artifacts(self, run_id: str) -> ServiceResponse:
         """실행 워크스페이스의 산출물 파일 목록을 반환한다."""
@@ -213,9 +288,35 @@ class BuilderService:
     def list_builds(self, *, limit: int = 50) -> ServiceResponse:
         """실행 이력 목록을 최신 수정 시각 기준으로 내림차순 반환한다.
 
-        output_root 아래의 디렉터리를 스캔해 manifest.json이 있는 실행만
-        포함한다. Studio 같은 소비자가 빌드 이력 목록을 표시하는 데 쓰인다 (#250).
+        ADR 0003에 따라 SQLite 인덱스를 우선 조회하고, 인덱스 부재 시
+        디렉터리 스캔으로 폴백한다 (#329). Studio 같은 소비자가 빌드 이력
+        목록을 표시하는 데 쓰인다 (#250).
         """
+        # 인덱스 우선 조회 (#329)
+        try:
+            indexed_builds = self._get_build_index().list_builds(limit=limit)
+            if indexed_builds:
+                # 인덱스 결과를 API 계약에 맞게 변환
+                # 인덱스의 "completed"를 "ok"로 매핑 (ADR 0003 vs 기존 계약)
+                builds: list[JsonValue] = [
+                    {
+                        "run_id": cast(str, b["run_id"]),
+                        "status": (
+                            "ok"
+                            if cast(str, b["status"]) == "completed"
+                            else cast(str, b["status"])
+                        ),
+                        "started_at": cast(str | None, b["started_at"]),
+                        "finished_at": cast(str | None, b["finished_at"]),
+                    }
+                    for b in indexed_builds
+                ]
+                return ServiceResponse(200, {"builds": builds})
+        except Exception as exc:
+            # 인덱스 조회 실패 시 스캔으로 폴백하고 로그만 남김 (#329)
+            _logger.warning("Build index query failed, falling back to directory scan: %s", exc)
+
+        # 폴백: 디렉터리 스캔 (#329)
         if not self._output_root.exists():
             return ServiceResponse(200, {"builds": []})
 
@@ -224,7 +325,7 @@ class BuilderService:
             (d for d in self._output_root.iterdir() if d.is_dir()),
             key=lambda p: p.stat().st_mtime,
         )
-        builds: list[JsonValue] = []
+        builds_from_scan: list[JsonValue] = []
         for run_dir in candidates:
             manifest_path = run_dir / "manifest.json"
             if not manifest_path.exists():
@@ -233,7 +334,7 @@ class BuilderService:
                 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 continue
-            builds.append(
+            builds_from_scan.append(
                 {
                     "run_id": run_dir.name,
                     "status": "failed" if manifest.get("errors") else "ok",
@@ -241,7 +342,7 @@ class BuilderService:
                     "finished_at": manifest.get("finished_at"),
                 }
             )
-        return ServiceResponse(200, {"builds": builds})
+        return ServiceResponse(200, {"builds": builds_from_scan})
 
     def _load_validated(self, spec_yaml: str) -> BuildSpec | ServiceResponse:
         """spec_yaml을 파싱·검증하고, 실패 시 오류 ServiceResponse를 반환한다."""
