@@ -450,3 +450,214 @@ def test_serve_invokes_http_server(
         "output_root": tmp_path,
     }
     assert "serving kpubdata-builder" in out
+
+
+# ---------------------------------------------------------------------------
+# reindex 명령 테스트 (#330)
+# ---------------------------------------------------------------------------
+
+
+class TestReindexCommand:
+    """reindex 커맨드 테스트 (#330)."""
+
+    def test_reindex_command_exists(self) -> None:
+        """reindex 하위 명령이 존재해야 한다."""
+        parser = build_parser()
+        args = parser.parse_args(["reindex"])
+        assert args.command == "reindex"
+        assert args.output_dir == "build"
+
+    def test_reindex_command_with_custom_output_dir(self) -> None:
+        """--output-dir 옵션을 지정할 수 있어야 한다."""
+        parser = build_parser()
+        args = parser.parse_args(["reindex", "--output-dir", "/custom/path"])
+        assert args.command == "reindex"
+        assert args.output_dir == "/custom/path"
+
+    def test_reindex_scans_and_creates_index(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """output_root를 스캔하여 인덱스를 생성한다."""
+        import json
+
+        from kpubdata_builder.index import BuildIndex
+
+        # 테스트용 빌드 디렉터리 및 manifest 생성
+        run1_dir = tmp_path / "run1"
+        run1_dir.mkdir()
+        (run1_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "run_id": "run1",
+                    "status": "ok",
+                    "started_at": "2025-01-01T00:00:00Z",
+                    "finished_at": "2025-01-01T00:01:00Z",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        run2_dir = tmp_path / "run2"
+        run2_dir.mkdir()
+        (run2_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "run_id": "run2",
+                    "status": "failed",
+                    "errors": ["test error"],
+                    "started_at": "2025-01-01T01:00:00Z",
+                    "finished_at": "2025-01-01T01:01:00Z",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        # manifest 없는 디렉터리 (무시되어야 함)
+        (tmp_path / "no-manifest").mkdir()
+
+        # reindex 실행
+        exit_code = main(["reindex", "--output-dir", str(tmp_path)])
+        captured = capsys.readouterr()
+
+        assert exit_code == 0
+        assert "indexed 2 builds" in captured.out
+
+        # 인덱스 확인
+        index_path = tmp_path / "_builds.sqlite"
+        assert index_path.exists()
+
+        index = BuildIndex(db_path=index_path)
+        builds = index.list_builds(limit=10)
+
+        assert len(builds) == 2
+        run_ids = {b["run_id"] for b in builds}
+        assert "run1" in run_ids
+        assert "run2" in run_ids
+
+        # 상태 확인
+        run1_build = next(b for b in builds if b["run_id"] == "run1")
+        assert run1_build["status"] == "completed"
+
+        run2_build = next(b for b in builds if b["run_id"] == "run2")
+        assert run2_build["status"] == "failed"
+
+    def test_reindex_replaces_existing_index(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """기존 인덱스가 있으면 원자적 교체한다."""
+        import json
+
+        from kpubdata_builder.index import BuildIndex, initialize_schema
+
+        # 기존 인덱스 생성 (오래된 데이터)
+        old_index_path = tmp_path / "_builds.sqlite"
+        initialize_schema(old_index_path)
+        old_index = BuildIndex(db_path=old_index_path)
+        old_index.record_build(
+            run_id="old-run",
+            status="completed",
+            started_at="2024-01-01T00:00:00Z",
+            finished_at="2024-01-01T00:01:00Z",
+        )
+
+        # 새 빌드 추가
+        run_dir = tmp_path / "new-run"
+        run_dir.mkdir()
+        (run_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "run_id": "new-run",
+                    "status": "ok",
+                    "started_at": "2025-01-01T00:00:00Z",
+                    "finished_at": "2025-01-01T00:01:00Z",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        # reindex 실행
+        exit_code = main(["reindex", "--output-dir", str(tmp_path)])
+        captured = capsys.readouterr()
+
+        assert exit_code == 0
+        assert "backing up existing index" in captured.out
+
+        # 인덱스가 갱신되었는지 확인
+        index = BuildIndex(db_path=old_index_path)
+        builds = index.list_builds(limit=10)
+
+        assert len(builds) == 1
+        assert builds[0]["run_id"] == "new-run"
+        assert "old-run" not in {b["run_id"] for b in builds}
+
+    def test_reindex_handles_invalid_manifests(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """손상된 manifest는 건너뛰고 계속 진행한다."""
+        import json
+
+        from kpubdata_builder.index import BuildIndex
+
+        # 유효한 빌드
+        run1_dir = tmp_path / "run1"
+        run1_dir.mkdir()
+        (run1_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "run_id": "run1",
+                    "status": "ok",
+                    "started_at": "2025-01-01T00:00:00Z",
+                    "finished_at": "2025-01-01T00:01:00Z",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        # 손상된 manifest
+        run2_dir = tmp_path / "run2"
+        run2_dir.mkdir()
+        (run2_dir / "manifest.json").write_text("invalid json{{{}}", encoding="utf-8")
+
+        # reindex 실행
+        exit_code = main(["reindex", "--output-dir", str(tmp_path)])
+        captured = capsys.readouterr()
+
+        # 손상된 manifest가 있어도 성공해야 함
+        assert exit_code == 0
+        assert "skipping run2" in captured.err
+
+        # 유효한 빌드만 인덱싱되었는지 확인
+        index = BuildIndex(db_path=tmp_path / "_builds.sqlite")
+        builds = index.list_builds(limit=10)
+
+        assert len(builds) == 1
+        assert builds[0]["run_id"] == "run1"
+
+    def test_reindex_returns_error_for_nonexistent_output_dir(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """존재하지 않는 output_dir면 에러를 반환한다."""
+        nonexistent = tmp_path / "nonexistent"
+        exit_code = main(["reindex", "--output-dir", str(nonexistent)])
+        captured = capsys.readouterr()
+
+        assert exit_code == 1
+        assert "does not exist" in captured.err
+
+    def test_reindex_handles_empty_output_dir(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """빈 output_dir면 빈 인덱스를 생성한다."""
+        from kpubdata_builder.index import BuildIndex
+
+        exit_code = main(["reindex", "--output-dir", str(tmp_path)])
+        captured = capsys.readouterr()
+
+        assert exit_code == 0
+        assert "indexed 0 builds" in captured.out
+
+        index = BuildIndex(db_path=tmp_path / "_builds.sqlite")
+        builds = index.list_builds(limit=10)
+
+        assert len(builds) == 0
+

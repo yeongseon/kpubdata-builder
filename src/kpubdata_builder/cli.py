@@ -135,6 +135,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run workspace root directory (default: build).",
     )
 
+    reindex_cmd = subparsers.add_parser(
+        "reindex",
+        help="Rebuild the build index from directory scan (#330).",
+    )
+    reindex_cmd.add_argument(
+        "--output-dir",
+        default="build",
+        help="Run workspace root directory to scan (default: build).",
+    )
+
     return parser
 
 
@@ -337,6 +347,100 @@ def _run_publish(
     return 0
 
 
+def _run_reindex(*, output_dir: str) -> int:
+    """output_root를 스캔하여 SQLite 인덱스를 재구축한다 (#330).
+
+    매개변수:
+        output_dir: 스캔할 실행 워크스페이스 루트.
+
+    반환값:
+        int: 성공 시 0, 실패 시 1.
+    """
+    import json
+
+    from .index import BuildIndex, initialize_schema
+
+    output_root = Path(output_dir)
+
+    if not output_root.exists():
+        print(f"error: output directory does not exist: {output_root}", file=sys.stderr)
+        return 1
+
+    # 기존 인덱스 백업 (원자적 교체를 위해)
+    index_path = output_root / "_builds.sqlite"
+    backup_path = output_root / "_builds.sqlite.bak"
+
+    if index_path.exists():
+        print(f"backing up existing index to {backup_path.name}...")
+        try:
+            import shutil
+
+            shutil.copy2(index_path, backup_path)
+        except OSError as exc:
+            print(f"error: failed to backup index: {exc}", file=sys.stderr)
+            return 1
+
+    # 새 인덱스 생성
+    temp_index_path = output_root / "_builds.sqlite.tmp"
+    try:
+        print(f"scanning {output_root} for builds...")
+        initialize_schema(temp_index_path)
+        temp_index = BuildIndex(db_path=temp_index_path)
+
+        build_count = 0
+        for run_dir in output_root.iterdir():
+            if not run_dir.is_dir():
+                continue
+            manifest_path = run_dir / "manifest.json"
+            if not manifest_path.exists():
+                continue
+
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                print(f"warning: skipping {run_dir.name}: invalid manifest", file=sys.stderr)
+                continue
+
+            run_id = run_dir.name
+            started_at = manifest.get("started_at")
+            finished_at = manifest.get("finished_at")
+
+            # 상태 결정 (manifest의 errors 유무로 판단)
+            build_status = "failed" if manifest.get("errors") else "completed"
+
+            # 인덱스에 기록
+            temp_index.record_build(
+                run_id=run_id,
+                status=build_status,  # type: ignore[arg-type]
+                started_at=started_at or finished_at or "",
+                finished_at=finished_at or started_at or "",
+            )
+            build_count += 1
+
+        print(f"indexed {build_count} builds")
+
+        # 원자적 교체
+        print(f"replacing {index_path.name}...")
+        if index_path.exists():
+            index_path.unlink()
+
+        temp_index_path.rename(index_path)
+
+        # 백업 삭제
+        if backup_path.exists():
+            backup_path.unlink()
+
+        print(f"reindex complete: {index_path}")
+        return 0
+
+    except Exception as exc:
+        # 실패 시 임시 파일 정리
+        if temp_index_path.exists():
+            temp_index_path.unlink()
+        print(f"error: reindex failed: {exc}", file=sys.stderr)
+        return 1
+
+
 def _run_serve(*, output_dir: str, host: str, port: int) -> int:
     """BuilderService를 HTTP 서버로 실행한다 (#249).
 
@@ -402,6 +506,8 @@ def dispatch(args: argparse.Namespace) -> int:
             host=args.host,
             port=args.port,
         )
+    if command == "reindex":
+        return _run_reindex(output_dir=args.output_dir)
     # 일반적인 CLI 경로로는 도달할 수 없지만(argparse가 알 수 없는 하위 명령을 거부함),
     # 프로그래밍 방식 호출자를 위한 방어적 대체 경로로 유지한다.
     return 2
