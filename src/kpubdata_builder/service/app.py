@@ -301,7 +301,11 @@ class BuilderService:
                 builds: list[JsonValue] = [
                     {
                         "run_id": cast(str, b["run_id"]),
-                        "status": "ok" if cast(str, b["status"]) == "completed" else cast(str, b["status"]),
+                        "status": (
+                            "ok"
+                            if cast(str, b["status"]) == "completed"
+                            else cast(str, b["status"])
+                        ),
                         "started_at": cast(str | None, b["started_at"]),
                         "finished_at": cast(str | None, b["finished_at"]),
                     }
