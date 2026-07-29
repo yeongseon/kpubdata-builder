@@ -222,6 +222,63 @@ class TestListBuilds:
         resp = dispatch(_service(tmp_path), "GET", "/builds", None, query="limit=abc")
         assert resp.status_code == 400
 
+    def test_index_fallback_to_scan_on_corruption(self, tmp_path: Path) -> None:
+        """인덱스 손상 시 스캔으로 폴백 (#329)."""
+        service = _service(tmp_path)
+        # 먼저 빌드를 실행해서 manifest 생성
+        service.build(VALID_SPEC_YAML, run_id="run1")
+
+        # 인덱스가 생성되었는지 확인
+        index_path = tmp_path / "_builds.sqlite"
+        assert index_path.exists()
+
+        # 인덱스를 손상시킴 (파일 내용을 비움)
+        index_path.write_text("corrupted")
+
+        # list_builds는 여전히 작동해야 함 (폴백)
+        resp = service.list_builds()
+        assert resp.status_code == 200
+        builds = resp.body["builds"]
+        assert isinstance(builds, list)
+        assert len(builds) == 1
+        assert builds[0]["run_id"] == "run1"  # type: ignore[index]
+
+    def test_build_succeeds_even_if_index_write_fails(self, tmp_path: Path) -> None:
+        """인덱스 쓰기 실패해도 빌드는 성공해야 함 (best-effort, #329)."""
+        import stat
+
+        service = _service(tmp_path)
+
+        # 인덱스 파일을 읽기 전용으로 만들어 쓰기 실패 유도
+        index_path = tmp_path / "_builds.sqlite"
+        index_path.parent.mkdir(parents=True, exist_ok=True)
+        index_path.write_text("readonly")  # 빈 파일 생성
+
+        # 읽기 전용으로 설정
+        index_path.chmod(stat.S_IRUSR | stat.S_IREAD)
+
+        try:
+            # 빌드 실행 - 인덱스 쓰기가 실패해도 성공해야 함
+            resp = service.build(VALID_SPEC_YAML, run_id="run1")
+            assert resp.status_code == 200
+            assert resp.body["run_id"] == "run1"
+
+            # manifest는 정상적으로 생성되어야 함
+            manifest_path = tmp_path / "run1" / "manifest.json"
+            assert manifest_path.exists()
+        finally:
+            # 권한 복원 (cleanup)
+            index_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+
+    def test_index_query_returns_empty_when_no_builds(self, tmp_path: Path) -> None:
+        """인덱스만 조회하고 빌드가 없으면 빈 목록 반환 (#329)."""
+        service = _service(tmp_path)
+
+        # 인덱스 초기화 (list_builds 호출 시 lazy 초기화)
+        resp = service.list_builds()
+        assert resp.status_code == 200
+        assert resp.body["builds"] == []
+
 
 class TestDispatch:
     def test_routes_post_validate(self, tmp_path: Path) -> None:
