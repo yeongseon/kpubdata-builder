@@ -113,6 +113,7 @@ class TestBuildIndex:
         )
 
         build = index.get_build("test-run-1")
+        assert build is not None
         assert build["status"] == "failed"
         assert build["error"] == "test error"
 

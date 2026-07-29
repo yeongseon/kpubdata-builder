@@ -9,6 +9,7 @@ import pytest
 
 from kpubdata_builder import __version__
 from kpubdata_builder.cli import build_parser, main
+from kpubdata_builder.publishers import PUBLISHER_REGISTRY
 from kpubdata_builder.publishers.base import PublishResult
 
 VALID_SPEC_YAML = (
@@ -280,9 +281,7 @@ def test_publish_huggingface_stub(
     stub.expects_directory = False
     stub.publish.return_value = fake_result
 
-    import kpubdata_builder.cli as cli_module
-
-    monkeypatch.setitem(cli_module.PUBLISHER_REGISTRY, "huggingface", stub)
+    monkeypatch.setitem(PUBLISHER_REGISTRY, "huggingface", stub)
 
     exit_code = main(
         [
@@ -660,4 +659,3 @@ class TestReindexCommand:
         builds = index.list_builds(limit=10)
 
         assert len(builds) == 0
-
