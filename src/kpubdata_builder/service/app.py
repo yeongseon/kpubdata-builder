@@ -29,7 +29,7 @@ import yaml
 from ..errors import SpecLoadError, ValidationError
 from ..index import BuildIndex, BuildStatus
 from ..pipeline import BuildResult, preview_build, run_build
-from ..spec import BuildSpec, JsonValue, JsonValue as SpecJsonValue, parse_spec
+from ..spec import BuildSpec, JsonValue, parse_spec
 from ..spec.validator import validate_spec
 from ..stages._path_safety import ensure_within, validate_path_segment
 from ..stages.bronze.build import SourceClient
@@ -301,7 +301,7 @@ class BuilderService:
                 builds: list[JsonValue] = [
                     {
                         "run_id": cast(str, b["run_id"]),
-                        "status": "ok" if b["status"] == "completed" else b["status"],
+                        "status": "ok" if cast(str, b["status"]) == "completed" else cast(str, b["status"]),
                         "started_at": cast(str | None, b["started_at"]),
                         "finished_at": cast(str | None, b["finished_at"]),
                     }
