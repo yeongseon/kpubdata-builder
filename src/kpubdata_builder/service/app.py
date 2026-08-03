@@ -89,6 +89,21 @@ class ServiceResponse:
     body: dict[str, JsonValue]
 
 
+@dataclass(frozen=True)
+class FileResponse:
+    """파일 서빙 응답 (#323).
+
+    속성:
+        status_code: HTTP 상태 코드.
+        file_path: 제공할 파일 경로.
+        filename: 다운로드 시 사용할 파일 이름 (Content-Disposition 헤더용).
+    """
+
+    status_code: int
+    file_path: Path
+    filename: str
+
+
 def _parse_spec_text(spec_yaml: str) -> BuildSpec:
     """YAML 텍스트를 BuildSpec으로 파싱한다."""
     raw = cast(object, yaml.safe_load(spec_yaml))
@@ -246,6 +261,52 @@ class BuilderService:
         )
         return ServiceResponse(200, {"run_id": run_id, "files": list(files)})
 
+    def serve_artifact_file(self, run_id: str, file_path: str) -> ServiceResponse | FileResponse:
+        """실행 워크스페이스의 특정 파일을 제공한다 (#323).
+
+        경로 트래버설 공격을 방지하기 위해 run_id와 file_path 모두
+        검증하며, 심볼릭 링크를 따르지 않는다.
+
+        매개변수:
+            run_id: 실행 식별자.
+            file_path: 요청된 파일 경로 (run_id 하위의 상대 경로).
+
+        반환값:
+            FileResponse (파일 발견 시) 또는 ServiceResponse (오류 시).
+        """
+        # run_id 검증
+        try:
+            validate_path_segment(run_id, field_name="run_id")
+        except ValueError as exc:
+            return ServiceResponse(400, {"error": str(exc)})
+
+        # run_dir 확인
+        run_dir = self._output_root / run_id
+        ensure_within(self._output_root, run_dir, label="run directory")
+        if not run_dir.exists():
+            return ServiceResponse(404, {"error": f"run not found: {run_id}"})
+
+        # file_path 검증 (경로 트래버설 방지)
+        try:
+            validate_path_segment(file_path, field_name="file_path")
+        except ValueError as exc:
+            return ServiceResponse(400, {"error": str(exc)})
+
+        # 요청된 파일의 전체 경로 계산
+        requested_file = run_dir / file_path
+        # 경로가 run_dir 내에 있는지 확인 (심볼릭 링크도 해석하여 안전 검사)
+        ensure_within(run_dir, requested_file, label="artifact file")
+
+        if not requested_file.exists():
+            return ServiceResponse(404, {"error": f"file not found: {file_path}"})
+        if not requested_file.is_file():
+            return ServiceResponse(400, {"error": f"not a file: {file_path}"})
+
+        # 파일명 추출 (Content-Disposition용)
+        filename = requested_file.name
+
+        return FileResponse(status_code=200, file_path=requested_file, filename=filename)
+
     def list_builds(self, *, limit: int = 50) -> ServiceResponse:
         """실행 이력 목록을 최신 완료 시각 기준 내림차순 반환한다.
 
@@ -329,11 +390,14 @@ def dispatch(
     query: str = "",
     *,
     api_key: str | None = None,
-) -> ServiceResponse:
+) -> ServiceResponse | FileResponse:
     """(method, path)를 BuilderService 연산으로 라우팅한다.
 
     라우팅 전에 X-API-Key를 검증한다 (#248). KPUBDATA_BUILDER_API_KEY가
     설정되지 않으면 인증을 건너뛴다.
+
+    반환값:
+        ServiceResponse 또는 FileResponse (#323).
     """
     if not _verify_api_key(api_key):
         return ServiceResponse(401, {"error": "unauthorized"})
@@ -383,7 +447,15 @@ def dispatch(
         return service.build(spec, run_id=run_id)
 
     if method == "GET" and path.startswith("/artifacts/"):
-        run_id = path[len("/artifacts/") :]
+        # /artifacts/{run_id}/{file_path} 형식이면 파일 제공, 아니면 목록 반환
+        rest = path[len("/artifacts/") :]
+        parts = rest.split("/", 1)
+        run_id = parts[0]
+        if len(parts) == 2 and parts[1]:
+            # 파일 요청: /artifacts/{run_id}/{file_path}
+            file_path = parts[1]
+            return service.serve_artifact_file(run_id, file_path)
+        # 목록 요청: /artifacts/{run_id}
         return service.artifacts(run_id)
 
     if method == "GET" and path == "/builds":
@@ -410,4 +482,4 @@ def dispatch(
     return ServiceResponse(404, {"error": f"not found: {method} {path}"})
 
 
-__all__ = ["API_CONTRACT_VERSION", "BuilderService", "ServiceResponse", "dispatch"]
+__all__ = ["API_CONTRACT_VERSION", "BuilderService", "ServiceResponse", "FileResponse", "dispatch"]
