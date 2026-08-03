@@ -20,7 +20,11 @@ else:
     _BaseConn = object
 
 # 스키마 버전: 인덱스 구조 변경 시 증가
-SCHEMA_VERSION = 1
+# 스키마 버전 2: status 어휘를 ok/failed/cancelled로 확장 (#334 비동기 job 모델 대비)
+SCHEMA_VERSION = 2
+
+# 빌드 인덱스 status 어휘. ADR 0003 파생 캐시. manifest.json이 정본.
+BuildStatus = Literal["ok", "failed", "cancelled"]
 
 # 인덱스 파일 이름
 _INDEX_FILENAME = "_builds.sqlite"
@@ -31,7 +35,7 @@ class BuildEntry:
     """빌드 인덱스 엔트리."""
 
     run_id: str
-    status: Literal["ok", "failed"]
+    status: BuildStatus
     started_at: str | None
     finished_at: str | None
     spec_digest: str | None
@@ -98,7 +102,7 @@ class BuildIndex:
                     """
                     CREATE TABLE builds (
                         run_id TEXT PRIMARY KEY,
-                        status TEXT NOT NULL CHECK (status IN ('ok', 'failed')),
+                        status TEXT NOT NULL CHECK (status IN ('ok', 'failed', 'cancelled')),
                         started_at TEXT,
                         finished_at TEXT,
                         spec_digest TEXT,
@@ -131,7 +135,7 @@ class BuildIndex:
     def insert_or_replace(
         self,
         run_id: str,
-        status: Literal["ok", "failed"],
+        status: BuildStatus,
         started_at: str | None,
         finished_at: str | None,
         spec_digest: str | None = None,
@@ -182,7 +186,7 @@ class BuildIndex:
         return [
             BuildEntry(
                 run_id=row[0],
-                status=cast(Literal["ok", "failed"], row[1]),
+                status=cast(BuildStatus, row[1]),
                 started_at=row[2],
                 finished_at=row[3],
                 spec_digest=row[4],
@@ -213,7 +217,7 @@ class BuildIndex:
             return None
         return BuildEntry(
             run_id=row[0],
-            status=cast(Literal["ok", "failed"], row[1]),
+            status=cast(BuildStatus, row[1]),
             started_at=row[2],
             finished_at=row[3],
             spec_digest=row[4],
