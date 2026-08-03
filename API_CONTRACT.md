@@ -10,22 +10,13 @@
 
 ## 2. 실행 모델
 
-Builder는 두 가지 실행 모델을 가집니다.
+Builder는 **동기식 실행 모델**을 사용합니다.
 
-| 모델 | 설명 | 적합한 작업 |
+| 모델 | 설명 | 적용 범위 |
 | :--- | :--- | :--- |
-| **동기식** | 요청-응답 안에서 결과를 바로 반환 | `/validate`, `/preview` |
-| **비동기식** | build를 생성하고 상태를 폴링 | `/build`, `/artifacts/{run_id}` |
+| **동기식** | 요청-응답 안에서 결과를 바로 반환 | 모든 엔드포인트 (`/version`, `/validate`, `/preview`, `/build`, `/artifacts/{run_id}`, `/builds`) |
 
-원칙:
-
-- **검증과 preview는 동기식**으로 제공 가능합니다.
-- **실제 build와 publish는 비동기식**으로 모델링하는 것을 기본값으로 둡니다.
-
-추가 방향:
-
-- 현재 엔드포인트는 build 단위 계약을 유지합니다.
-- 향후 버전에서는 Medallion stage별 artifact/preview 조회를 위해 `/builds/{id}/stages/{stage}/artifacts` 같은 stage-specific endpoint를 노출할 수 있습니다.
+모든 엔드포인트는 동기식으로 요청을 처리하며, 빌드 실행 시에도 요청 스레드에서 완료될 때까지 기다린 후 결과를 반환합니다.
 
 ## 3. 응답 코드 정책
 
@@ -48,7 +39,7 @@ Builder는 두 가지 실행 모델을 가집니다.
 | `/version` | `GET` | Builder API 계약 버전 조회 | 동기식 |
 | `/validate` | `POST` | BuildSpec 검증 | 동기식 |
 | `/preview` | `POST` | 샘플 실행 및 소스별 스키마 preview | 동기식 |
-| `/build` | `POST` | 빌드 실행 (동기; 계약은 비동기 `/builds` 지향) | 동기식(현재) |
+| `/build` | `POST` | 빌드 실행 | 동기식 |
 | `/artifacts/{run_id}` | `GET` | 실행 워크스페이스 산출물 목록 조회 | 동기식 |
 | `/builds` | `GET` | 빌드 이력 목록 조회 (최신 수정 시각 기준 내림차순) | 동기식 |
 
