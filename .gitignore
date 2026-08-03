@@ -36,3 +36,6 @@ Thumbs.db
 .env
 .env.local
 staging/
+
+# mkdocs build output
+site/

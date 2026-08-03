@@ -1,8 +1,7 @@
-"""Plugin exporter API(#13, #325): 코드 내 등록과 entry point 발견을 검증한다."""
+"""Plugin exporter API(#13, #325, #326): 코드 내 등록과 entry point 발견을 검증한다."""
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -10,7 +9,6 @@ import pytest
 import kpubdata_builder.exporters.registry as registry
 from kpubdata_builder import ArtifactDataset
 from kpubdata_builder.exporters import (
-    EXPORTER_REGISTRY,
     BaseExporter,
     ExportResult,
     clear_exporter_registry,
@@ -51,22 +49,6 @@ class _FakeEntryPoint:
 
     def load(self) -> object:
         return self._value
-
-
-@pytest.fixture(autouse=True)
-def _restore_registry() -> Iterator[None]:
-    # 전역 레지스트리를 스냅샷 후 복원해 테스트 간 오염을 막는다.
-    import kpubdata_builder.exporters.registry as reg_module
-
-    factory_snapshot = dict(reg_module._EXPORTER_FACTORIES)
-    instance_snapshot = dict(EXPORTER_REGISTRY)
-    try:
-        yield
-    finally:
-        reg_module._EXPORTER_FACTORIES.clear()
-        reg_module._EXPORTER_FACTORIES.update(factory_snapshot)
-        EXPORTER_REGISTRY.clear()
-        EXPORTER_REGISTRY.update(instance_snapshot)
 
 
 def test_builtin_exporters_are_registered() -> None:

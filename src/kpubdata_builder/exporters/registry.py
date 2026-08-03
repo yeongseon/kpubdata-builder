@@ -147,10 +147,10 @@ def load_entry_point_exporters(*, override: bool = False) -> list[str]:
 
 
 def clear_exporter_registry() -> None:
-    """모든 exporter 등록을 초기화한다 (#325).
+    """모든 exporter 등록을 초기화한다 (#325, #326).
 
     주로 테스트에서 사용한다. 테스트 간 exporter 등록 누수를 방지하기 위해
-    factory와 인스턴스 레지스트리를 모두 비운다.
+    factory와 인스턴스 레지스트를 모두 비운다.
     """
     _EXPORTER_FACTORIES.clear()
     EXPORTER_REGISTRY.clear()
