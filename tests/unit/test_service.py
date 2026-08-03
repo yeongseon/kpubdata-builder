@@ -126,7 +126,9 @@ class TestPreview:
 
     def test_preview_writes_no_files(self, tmp_path: Path) -> None:
         _service(tmp_path).preview(VALID_SPEC_YAML)
-        assert list(tmp_path.iterdir()) == []
+        # SQLite 인덱스 파일은 제외 (#309, ADR 0003)
+        files = [p.name for p in tmp_path.iterdir() if not p.name.startswith("_builds")]
+        assert files == []
 
 
 class TestPreviewLimitGuard:

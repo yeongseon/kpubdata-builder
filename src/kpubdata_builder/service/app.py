@@ -31,7 +31,11 @@ from ..spec import BuildSpec, JsonValue, parse_spec
 from ..spec.validator import validate_spec
 from ..stages._path_safety import ensure_within, validate_path_segment
 from ..stages.bronze.build import SourceClient
+from ..store import BuildIndex
 from ..tabular import DEFAULT_PREVIEW_LIMIT
+
+# Build list entry type for API responses
+_BuildListEntry = dict[str, str | None]
 
 # Builder API 계약 버전. contract/builder-api.yaml의 info.version과 일치해야 하며
 # (test_service_contract가 강제), 응답에 실어 Studio 같은 소비자가 하위 호환을
@@ -104,6 +108,7 @@ class BuilderService:
     ) -> None:
         self._output_root = output_root
         self._client_factory = client_factory
+        self._build_index = BuildIndex(output_root)  # #309, ADR 0003
 
     def version(self) -> ServiceResponse:
         """Builder API 계약 버전을 반환한다 (#209).
@@ -206,6 +211,22 @@ class BuilderService:
                 (o.error for o in result.outcomes if o.status != "ok" and o.error), None
             )
             body["error"] = first_error or "build failed"
+
+        # ADR 0003: 빌드 완료 후 인덱스 갱신 (best-effort, 실패해도 빌드 성공 유지)
+        try:
+            manifest_data = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+            started_at = manifest_data.get("started_at")
+            finished_at = manifest_data.get("finished_at")
+            self._build_index.insert_or_replace(
+                run_id=result.context.run_id,
+                status=result.status,  # type: ignore[arg-type]
+                started_at=started_at,
+                finished_at=finished_at,
+            )
+        except Exception:
+            # 인덱스 갱신 실패는 무시 (ADR 0003)
+            pass
+
         return ServiceResponse(status_code, body)
 
     def artifacts(self, run_id: str) -> ServiceResponse:
@@ -226,11 +247,31 @@ class BuilderService:
         return ServiceResponse(200, {"run_id": run_id, "files": list(files)})
 
     def list_builds(self, *, limit: int = 50) -> ServiceResponse:
-        """실행 이력 목록을 최신 수정 시각 기준으로 내림차순 반환한다.
+        """실행 이력 목록을 최신 완료 시각 기준 내림차순 반환한다.
 
-        output_root 아래의 디렉터리를 스캔해 manifest.json이 있는 실행만
-        포함한다. Studio 같은 소비자가 빌드 이력 목록을 표시하는 데 쓰인다 (#250).
+        ADR 0003에 따라 SQLite 인덱스를 우선 조회하고, 인덱스가 없거나
+        비어있으면 파일시스템 스캔으로 폴백한다.
         """
+        # 인덱스 우선 조회
+        try:
+            entries = self._build_index.list_builds(limit=limit)
+            if entries:
+                # 인덱스가 있으면 반환
+                index_builds: list[_BuildListEntry] = [
+                    {
+                        "run_id": entry.run_id,
+                        "status": entry.status,
+                        "started_at": entry.started_at,
+                        "finished_at": entry.finished_at,
+                    }
+                    for entry in entries
+                ]
+                return ServiceResponse(200, {"builds": cast(list[JsonValue], index_builds)})
+        except Exception:
+            # 인덱스 조회 실패 시 폴백
+            pass
+
+        # 폴백: 파일시스템 스캔
         if not self._output_root.exists():
             return ServiceResponse(200, {"builds": []})
 
@@ -239,7 +280,7 @@ class BuilderService:
             (d for d in self._output_root.iterdir() if d.is_dir()),
             key=lambda p: p.stat().st_mtime,
         )
-        builds: list[JsonValue] = []
+        fs_builds: list[_BuildListEntry] = []
         for run_dir in candidates:
             manifest_path = run_dir / "manifest.json"
             if not manifest_path.exists():
@@ -248,7 +289,7 @@ class BuilderService:
                 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 continue
-            builds.append(
+            fs_builds.append(
                 {
                     "run_id": run_dir.name,
                     "status": "failed" if manifest.get("errors") else "ok",
@@ -256,7 +297,7 @@ class BuilderService:
                     "finished_at": manifest.get("finished_at"),
                 }
             )
-        return ServiceResponse(200, {"builds": builds})
+        return ServiceResponse(200, {"builds": cast(list[JsonValue], fs_builds)})
 
     def _load_validated(self, spec_yaml: str) -> BuildSpec | ServiceResponse:
         """spec_yaml을 파싱·검증하고, 실패 시 오류 ServiceResponse를 반환한다."""
