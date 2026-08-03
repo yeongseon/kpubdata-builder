@@ -216,6 +216,131 @@ graph LR
 
 ---
 
+## Exporter 계약 (ADR 0004)
+
+이 절은 exporter 구현이 따라야 할 안정 계약을 정의한다. ADR 0004(#310)에 따라
+등록/발견 메커니즘, `export()` 시그니처, 실패 시맨틱을 명문화한다.
+
+### 6.1 등록 계약
+
+Exporter는 **명시적 레지스트리**에 등록된다. 등록은 두 가지 방식으로 가능하다:
+
+**방식 A: Factory 등록 (권고, ADR 0004)**
+```python
+from kpubdata_builder.exporters import register_exporter_factory
+from my_exporter import MyExporter
+
+register_exporter_factory("myformat", MyExporter)
+```
+- Factory는 인자 없이 호출할 때마다 **새 인스턴스**를 반환해야 한다.
+- 같은 kind 재등록 시 `ValueError` 발생 (명시적 오류).
+- 덮어쓰기는 `override=True` 옵션으로만 허용된다.
+
+**방식 B: 인스턴스 등록 (레거시 호환)**
+```python
+from kpubdata_builder.exporters import register_exporter
+from my_exporter import MyExporter
+
+register_exporter(MyExporter())
+```
+
+**방식 C: Entry Points (자동 발견)**
+```python
+# pyproject.toml
+[project.entry-points."kpubdata_builder.exporters"]
+myformat = "my_package:MyExporter"
+
+# 런타임
+from kpubdata_builder.exporters import load_entry_point_exporters
+load_entry_point_exporters()
+```
+
+### 6.2 `export()` 메서드 계약
+
+#### 시그니처
+```python
+def export(
+    self,
+    artifact: ArtifactDataset,  # 표준 데이터셋 산출물
+    target: ExportTarget,        # kind, output_path, 옵션
+    output_dir: Path,            # 기본 출력 디렉터리
+) -> ExportResult:
+    ...
+```
+
+#### 입력
+- `artifact`: `ArtifactDataset` — 표준화된 레코드·메타데이터·출처·스키마 요약
+- `target`: `ExportTarget` — exporter kind, 출력 상대 경로, exporter별 옵션
+- `output_dir`: `Path` — 모든 출력의 기준 디렉터리 (경로 안전 모듈이 보장)
+
+#### 반환
+- `ExportResult` — 생성된 파일 메타데이터:
+  - `output_path`: 생성된 파일의 절대 경로
+  - `file_size`: 바이트 단위 파일 크기
+  - `format`: exporter 식별자
+
+### 6.3 실패 및 부분출력 계약
+
+#### 예외 규약
+Exporter는 실패 시 **예외를 발생**시킨다. 모든 I/O 오류는 `ExportError`로 래핑되어야 한다.
+
+```python
+from ..errors import ExportError
+
+try:
+    # 파일 쓰기 등 I/O 작업
+except OSError as exc:
+    raise ExportError(f"Failed to export: {exc}") from exc
+```
+
+#### 부분출력 금지 (원자성)
+Exporter는 **"전부 성공하거나 전부 실패"** 원칙을 따른다:
+- 성공 시: 모든 파일이 정상적으로 기록되고 `ExportResult`를 반환
+- 실패 시: 아무런 파일도 기록되지 않은 상태 (또는 명시적 부분 표기)
+
+임시 파일(`.tmp`)을 사용한 atomic write 패턴을 권장한다:
+
+```python
+import tempfile
+import os
+from contextlib import suppress
+
+def export(self, artifact, target, output_dir) -> ExportResult:
+    destination = ensure_output_dir(output_dir, target.output_path)
+    content = self._format(artifact)  # 가상의 포맷팅 메서드
+
+    fd, tmp_name = tempfile.mkstemp(dir=destination.parent, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+        os.replace(tmp_name, destination)  # atomic
+    except BaseException:
+        with suppress(OSError):
+            os.unlink(tmp_name)  # 실패 시 임시 파일 삭제
+        raise ExportError(f"Failed to write {destination}")
+```
+
+#### 명시적 부분출력 허용 (선택)
+일부 exporter는 의도적으로 부분출력을 제공할 수 있다 (예: 대용량 데이터 처리).
+이 경우 **명시적으로 partial 표기를 해야 한다**. 현재 구현에서는 미사용.
+
+### 6.4 경로 안전 계약
+
+Exporter는 `output_dir` 밖으로 파일을 쓸 수 없다:
+- `ensure_output_dir()` 헬퍼를 사용하여 경로 안전을 보장받아야 한다 (#210).
+- 악의적 `output_path` (예: `../../../etc/passwd`)는 `PathTraversalError`로 거부된다.
+
+```python
+from .base import ensure_output_dir
+
+def export(self, artifact, target, output_dir) -> ExportResult:
+    # safe_output_path가 output_dir 밖으로 나가는지 검사
+    destination = ensure_output_dir(output_dir, target.output_path)
+    ...
+```
+
+---
+
 ## 관련 문서
 
 ### 이 저장소 내 문서
@@ -224,3 +349,9 @@ graph LR
 | [DOMAIN_MODEL.md](./DOMAIN_MODEL.md) | 도메인 모델 정의 |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | 시스템 아키텍처 설계 |
 | [API_CONTRACT.md](./API_CONTRACT.md) | API 인터페이스 규약 |
+| [AGENTS.md](./AGENTS.md) | 골든 테스트 요구 및 개발 체크리스트 |
+
+### 상위 ADR
+| ADR | 제목 | 상태 |
+| :--- | :--- | :--- |
+| [ADR 0004](./docs/adrs/0004-plugin-exporter-contract.md) | Plugin Exporter API 계약 안정화 | 승인됨 |
