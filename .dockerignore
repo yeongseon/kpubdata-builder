@@ -1,0 +1,29 @@
+# VCS / 에이전트 워크스페이스
+.git
+.gitignore
+.claude
+.github
+
+# Python 캐시·빌드 산물
+__pycache__
+**/__pycache__
+*.pyc
+.venv
+.mypy_cache
+.pytest_cache
+.ruff_cache
+*.egg-info
+build/
+dist/
+
+# 테스트는 배포 이미지에 넣지 않는다
+tests/
+
+# 프로젝트 메타·문서 중 빌드에 불필요한 것
+.omc
+docs/
+contract/
+
+# README/LICENSE는 이미지에 포함(아래 예외). 나머지 루트 문서는 제외.
+*.md
+!README.md
