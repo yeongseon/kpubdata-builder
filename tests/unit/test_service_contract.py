@@ -1,4 +1,4 @@
-"""Builder Service Contract(#63, #226, #317, #319) OpenAPI 스펙의 구조 검증.
+"""Builder Service Contract(#63, #226, #317, #319, #209) OpenAPI 스펙의 구조·런타임 검증.
 
 설치된 OpenAPI validator가 없으므로, 계약이 OpenAPI 3.1이고 BuilderService
 (service/app.py)가 실제로 구현한 동기 라우트와 wire 형태를 모두 담는지 구조적으로
@@ -6,14 +6,27 @@
 드리프트를 막기 위해 구현 라우트 ↔ 계약 operationId 매핑을 명시적으로 고정한다(#317).
 또한 YAML 계약과 실제 dispatch 구현 간의 양방향 일치성을 검증하며(#317),
 상태 코드와 응답 스키마 검증으로 범위를 확장한다(#319).
+
+구조 검증(위)은 YAML의 *선언*과 dispatch의 *라우팅 목록*이 일치하는지 본다(#317, #319).
+``TestResponseConformance``(#209, ADR-0005)는 한 단계 더 나아가 **실제 dispatch 응답
+본문이 선언된 스키마에 부합하는지**(wire-level conformance)를 순수 파이썬
+validator(``_openapi.py``)로 검증한다 — #319의 정적 스키마 검사가 "스키마가 required를
+선언했는가"만 보듯, app.py 응답에서 필수 필드가 빠지거나 타입이 바뀌어도 선언부가
+그대로면 정적 검사는 통과하지만 이 런타임 검사는 잡는다.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, cast
 
 import yaml
+
+from kpubdata_builder.service import BuilderService, ServiceResponse, dispatch
+from kpubdata_builder.spec import JsonValue
+
+from ._openapi import response_schema, validate
 
 _CONTRACT_PATH = Path(__file__).parents[2] / "contract" / "builder-api.yaml"
 
@@ -37,6 +50,7 @@ _REQUIRED_OPERATIONS = [
     ("/preview", "post"),
     ("/build", "post"),
     ("/artifacts/{run_id}", "get"),
+    ("/builds", "get"),
 ]
 
 
@@ -397,3 +411,182 @@ def test_response_schemas_have_required_fields() -> None:
                     f"{method} {path} (operationId: {operation_id})의 "
                     f"200 응답 스키마에 필수 필드가 너무 적습니다: {required_fields}"
                 )
+
+
+# ---------------------------------------------------------------------------
+# 런타임 wire-level conformance (#209, ADR-0005)
+#
+# 정적 검증(위)은 계약 YAML과 dispatch 라우팅 목록이 일치하는지 본다. 아래 테스트들은
+# 실제 dispatch()를 호출해 반환된 JSON 본문이 선언된 응답 스키마에 부합하는지 검증한다.
+# 외부 의존 없이 순수 파이썬 validator(_openapi.py)를 쓰며, 이것이 ADR-0005 미해결 질문
+# #1(스키마 대조를 순수 파이썬 경량으로 할지)을 "순수 파이썬 경량" 방향으로 마무리한다.
+#
+# #319의 test_response_schemas_have_required_fields는 스키마가 required를 *선언했는지*만
+# 본다. app.py가 실제 응답에서 필수 필드를 빼거나 타입을 바꿔도 선언부가 그대로면 그 정적
+# 검사는 통과한다 — 이 런타임 검사가 그 wire 드리프트를 잡는다. 계약에 선언된 6개 오퍼레이션
+# 모두(/version, /validate, /preview, /build, /artifacts, /builds)를 성공+오류 상태 코드에
+# 걸쳐 검증한다.
+# ---------------------------------------------------------------------------
+
+_CONFORM_SPEC_YAML = (
+    "dataset_id: dataset.conform\n"
+    "title: Conform Sample\n"
+    "description: runtime conformance fixture\n"
+    "sources:\n"
+    "  - provider: datago\n"
+    "    dataset: air_quality\n"
+    "exports:\n"
+    "  - kind: jsonl\n"
+    "    output_path: out/data.jsonl\n"
+)
+
+# fetch를 실패시켜 502 경로를 만들기 위한 spec: fake client가 모르는 소스.
+_FAILING_SPEC_YAML = _CONFORM_SPEC_YAML.replace("dataset: air_quality\n", "dataset: missing\n")
+
+# 파싱은 통과하지만 validate_spec에서 미지원 exporter kind로 실패하는 spec.
+_INVALID_SPEC_YAML = _CONFORM_SPEC_YAML.replace("kind: jsonl", "kind: unsupported_format")
+
+
+class _FakeResult:
+    def __init__(self, items: list[dict[str, JsonValue]]) -> None:
+        self._items = items
+
+    @property
+    def items(self) -> Iterable[dict[str, JsonValue]]:
+        return self._items
+
+
+class _FakeDataset:
+    def __init__(self, items: list[dict[str, JsonValue]]) -> None:
+        self._items = items
+
+    def list(self, **params: JsonValue) -> _FakeResult:
+        return _FakeResult(self._items)
+
+
+class _FakeClient:
+    def __init__(self, data: dict[str, list[dict[str, JsonValue]]]) -> None:
+        self._data = data
+
+    def dataset(self, source_key: str) -> _FakeDataset:
+        if source_key not in self._data:
+            raise KeyError(f"unknown source: {source_key}")
+        return _FakeDataset(self._data[source_key])
+
+
+def _conform_service(tmp_path: Path) -> BuilderService:
+    client = _FakeClient({"datago.air_quality": [{"id": "1", "v": 10}, {"id": "2", "v": 20}]})
+    return BuilderService(output_root=tmp_path, client_factory=lambda: client)
+
+
+def _assert_conforms(resp: ServiceResponse, path: str, method: str) -> None:
+    """실제 dispatch 응답이 계약 스키마에 부합하는지(상태 코드 선언 + 본문 형태) 검증."""
+    contract = _load_contract()
+    schema = response_schema(contract, path, method, resp.status_code)
+    assert schema is not None, (
+        f"{method} {path}: status {resp.status_code} is not declared in the contract"
+    )
+    errors = validate(resp.body, schema, contract)
+    assert not errors, (
+        f"{method} {path} {resp.status_code} response drifts from contract:\n  "
+        + "\n  ".join(errors)
+    )
+
+
+class TestResponseConformance:
+    """선언된 각 오퍼레이션의 실제 wire 응답이 OpenAPI 스키마에 부합하는지 고정."""
+
+    def test_version_200(self, tmp_path: Path) -> None:
+        resp = dispatch(_conform_service(tmp_path), "GET", "/version", None)
+        assert resp.status_code == 200
+        _assert_conforms(resp, "/version", "GET")
+
+    def test_validate_200(self, tmp_path: Path) -> None:
+        resp = dispatch(
+            _conform_service(tmp_path), "POST", "/validate", {"spec": _CONFORM_SPEC_YAML}
+        )
+        assert resp.status_code == 200
+        _assert_conforms(resp, "/validate", "POST")
+
+    def test_validate_400_invalid_spec(self, tmp_path: Path) -> None:
+        resp = dispatch(
+            _conform_service(tmp_path), "POST", "/validate", {"spec": _INVALID_SPEC_YAML}
+        )
+        assert resp.status_code == 400
+        # 미지원 exporter → {"status": "invalid", "problems": [...]}
+        _assert_conforms(resp, "/validate", "POST")
+
+    def test_preview_200(self, tmp_path: Path) -> None:
+        resp = dispatch(
+            _conform_service(tmp_path), "POST", "/preview", {"spec": _CONFORM_SPEC_YAML, "limit": 2}
+        )
+        assert resp.status_code == 200
+        _assert_conforms(resp, "/preview", "POST")
+
+    def test_preview_400_bad_limit(self, tmp_path: Path) -> None:
+        # 400 응답은 oneOf(Error | ValidationError) — limit 오류는 Error 형태.
+        resp = dispatch(
+            _conform_service(tmp_path), "POST", "/preview", {"spec": _CONFORM_SPEC_YAML, "limit": 0}
+        )
+        assert resp.status_code == 400
+        _assert_conforms(resp, "/preview", "POST")
+
+    def test_build_200_success(self, tmp_path: Path) -> None:
+        resp = dispatch(
+            _conform_service(tmp_path),
+            "POST",
+            "/build",
+            {"spec": _CONFORM_SPEC_YAML, "run_id": "conform-ok"},
+        )
+        assert resp.status_code == 200
+        _assert_conforms(resp, "/build", "POST")
+
+    def test_build_502_failure(self, tmp_path: Path) -> None:
+        resp = dispatch(
+            _conform_service(tmp_path),
+            "POST",
+            "/build",
+            {"spec": _FAILING_SPEC_YAML, "run_id": "conform-fail"},
+        )
+        assert resp.status_code == 502
+        _assert_conforms(resp, "/build", "POST")
+
+    def test_build_400_bad_run_id(self, tmp_path: Path) -> None:
+        # 400 응답은 oneOf(Error | ValidationError) — run_id 타입 오류는 Error 형태.
+        resp = dispatch(
+            _conform_service(tmp_path),
+            "POST",
+            "/build",
+            {"spec": _CONFORM_SPEC_YAML, "run_id": 123},
+        )
+        assert resp.status_code == 400
+        _assert_conforms(resp, "/build", "POST")
+
+    def test_artifacts_200_after_build(self, tmp_path: Path) -> None:
+        service = _conform_service(tmp_path)
+        dispatch(service, "POST", "/build", {"spec": _CONFORM_SPEC_YAML, "run_id": "conform-art"})
+        resp = dispatch(service, "GET", "/artifacts/conform-art", None)
+        assert resp.status_code == 200
+        _assert_conforms(resp, "/artifacts/{run_id}", "GET")
+
+    def test_artifacts_404_missing(self, tmp_path: Path) -> None:
+        resp = dispatch(_conform_service(tmp_path), "GET", "/artifacts/nope", None)
+        assert resp.status_code == 404
+        _assert_conforms(resp, "/artifacts/{run_id}", "GET")
+
+    def test_builds_200_empty(self, tmp_path: Path) -> None:
+        resp = dispatch(_conform_service(tmp_path), "GET", "/builds", None, query="")
+        assert resp.status_code == 200
+        _assert_conforms(resp, "/builds", "GET")
+
+    def test_builds_200_after_build(self, tmp_path: Path) -> None:
+        service = _conform_service(tmp_path)
+        dispatch(service, "POST", "/build", {"spec": _CONFORM_SPEC_YAML, "run_id": "conform-list"})
+        resp = dispatch(service, "GET", "/builds", None, query="")
+        assert resp.status_code == 200
+        _assert_conforms(resp, "/builds", "GET")
+
+    def test_builds_400_bad_limit(self, tmp_path: Path) -> None:
+        resp = dispatch(_conform_service(tmp_path), "GET", "/builds", None, query="limit=0")
+        assert resp.status_code == 400
+        _assert_conforms(resp, "/builds", "GET")

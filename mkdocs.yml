@@ -50,6 +50,12 @@ nav:
       - 변경 이력: CHANGELOG.md
   - ADR:
       - Builder as Orchestrator: adrs/0001-builder-as-orchestrator.md
+      - Build 실행 모델: adrs/0002-build-execution-model.md
+      - 영속 Build 저장소: adrs/0003-persistent-build-store.md
+      - Plugin Exporter 계약: adrs/0004-plugin-exporter-contract.md
+      - API 계약 단일 소스: adrs/0005-api-contract-single-source.md
+      - 서비스 인증 & 배포: adrs/0006-service-auth-and-deployment.md
+      - 버전 호환성 정책: adrs/0007-kpubdata-version-compatibility-policy.md
 
 markdown_extensions:
   - admonition

@@ -10,6 +10,7 @@ KPubData Builder의 주요 설계 결정을 기록합니다. 각 ADR은 배경·
 | [0004](./0004-plugin-exporter-contract.md) | Plugin Exporter API 계약 안정화 | 승인됨 | #310 |
 | [0005](./0005-api-contract-single-source.md) | API 계약 단일 소스 & 코드 생성 전략 | 승인됨 | #311 |
 | [0006](./0006-service-auth-and-deployment.md) | 서비스 인증 & 배포(Docker) 스토리 | 승인됨 | #312 |
+| [0007](./0007-kpubdata-version-compatibility-policy.md) | kpubdata 버전 호환성 정책 및 핀 강화 | 승인됨 | #213 |
 
 ## 작성 규칙
 

@@ -126,7 +126,9 @@ class TestPreview:
 
     def test_preview_writes_no_files(self, tmp_path: Path) -> None:
         _service(tmp_path).preview(VALID_SPEC_YAML)
-        assert list(tmp_path.iterdir()) == []
+        # SQLite 인덱스 파일은 제외 (#309, ADR 0003)
+        files = [p.name for p in tmp_path.iterdir() if not p.name.startswith("_builds")]
+        assert files == []
 
 
 class TestPreviewLimitGuard:
@@ -284,19 +286,40 @@ class TestDispatch:
 
 
 class TestApiKeyAuth:
-    """API 키 인증(#248): X-API-Key 검증."""
+    """API 키 인증(#248, #321, ADR 0006): X-API-Key 검증, fail-closed 정책."""
 
-    def test_auth_skipped_when_env_unset(
+    def test_auth_required_when_env_and_dev_mode_unset(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # KPUBDATA_BUILDER_API_KEY 미설정 시 인증 없이 통과한다(로컬 개발 편의).
+        # ADR 0006 fail-closed: dev-mode 미설정 + API 키 미설정 시 인증 거부 (401).
         monkeypatch.delenv("KPUBDATA_BUILDER_API_KEY", raising=False)
+        monkeypatch.delenv("KPUBDATA_BUILDER_DEV_MODE", raising=False)
+        resp = dispatch(_service(tmp_path), "GET", "/version", None)
+        assert resp.status_code == 401
+        assert resp.body == {"error": "unauthorized"}
+
+    def test_auth_skipped_in_dev_mode(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # dev-mode 설정 시 API 키가 없어도 인증 생략 (로컬 개발 편의).
+        monkeypatch.delenv("KPUBDATA_BUILDER_API_KEY", raising=False)
+        monkeypatch.setenv("KPUBDATA_BUILDER_DEV_MODE", "true")
+        resp = dispatch(_service(tmp_path), "GET", "/version", None)
+        assert resp.status_code == 200
+
+    def test_auth_skipped_in_dev_mode_variant(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # dev-mode="1"도 인증 생략.
+        monkeypatch.delenv("KPUBDATA_BUILDER_API_KEY", raising=False)
+        monkeypatch.setenv("KPUBDATA_BUILDER_DEV_MODE", "1")
         resp = dispatch(_service(tmp_path), "GET", "/version", None)
         assert resp.status_code == 200
 
     def test_rejects_missing_api_key_when_configured(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        monkeypatch.delenv("KPUBDATA_BUILDER_DEV_MODE", raising=False)
         monkeypatch.setenv("KPUBDATA_BUILDER_API_KEY", "secret")
         resp = dispatch(_service(tmp_path), "GET", "/version", None)
         assert resp.status_code == 401
@@ -305,6 +328,7 @@ class TestApiKeyAuth:
     def test_rejects_wrong_api_key_when_configured(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        monkeypatch.delenv("KPUBDATA_BUILDER_DEV_MODE", raising=False)
         monkeypatch.setenv("KPUBDATA_BUILDER_API_KEY", "secret")
         resp = dispatch(_service(tmp_path), "GET", "/version", None, api_key="wrong")
         assert resp.status_code == 401
@@ -312,6 +336,7 @@ class TestApiKeyAuth:
     def test_accepts_matching_api_key(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        monkeypatch.delenv("KPUBDATA_BUILDER_DEV_MODE", raising=False)
         monkeypatch.setenv("KPUBDATA_BUILDER_API_KEY", "secret")
         resp = dispatch(_service(tmp_path), "GET", "/version", None, api_key="secret")
         assert resp.status_code == 200
@@ -320,6 +345,7 @@ class TestApiKeyAuth:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # /build처럼 비용이 큰 엔드포인트도 예외 없이 보호돼야 한다.
+        monkeypatch.delenv("KPUBDATA_BUILDER_DEV_MODE", raising=False)
         monkeypatch.setenv("KPUBDATA_BUILDER_API_KEY", "secret")
         resp = dispatch(
             _service(tmp_path), "POST", "/build", {"spec": VALID_SPEC_YAML, "run_id": "auth1"}
@@ -348,8 +374,32 @@ def clear_cors_cache() -> None:
 @pytest.fixture()
 def http_server(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> Iterable[tuple[str, HTTPServer, threading.Thread]]:
     """실제 HTTPServer를 임의 포트에 띄워서 어댑터 레벨 동작을 검증한다."""
+    # 테스트에서는 dev-mode를 설정하여 인증을 생략한다 (#321, ADR 0006).
+    monkeypatch.setenv("KPUBDATA_BUILDER_DEV_MODE", "true")
+    service = _service(tmp_path)
+    server = HTTPServer(("127.0.0.1", 0), make_handler(service))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://{server.server_address[0]}:{server.server_address[1]}"
+    try:
+        yield base_url, server, thread
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=1.0)
+
+
+@pytest.fixture()
+def http_server_with_auth(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterable[tuple[str, HTTPServer, threading.Thread]]:
+    """인증이 활성화된 HTTPServer (dev-mode 미설정, API 키 설정)."""
+    monkeypatch.delenv("KPUBDATA_BUILDER_DEV_MODE", raising=False)
+    monkeypatch.setenv("KPUBDATA_BUILDER_API_KEY", "secret")
     service = _service(tmp_path)
     server = HTTPServer(("127.0.0.1", 0), make_handler(service))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -583,23 +633,20 @@ class TestHttpAdapter:
 
     def test_missing_api_key_returns_401_when_configured(
         self,
-        http_server: tuple[str, HTTPServer, threading.Thread],
-        monkeypatch: pytest.MonkeyPatch,
+        http_server_with_auth: tuple[str, HTTPServer, threading.Thread],
     ) -> None:
         # 어댑터가 X-API-Key 헤더를 dispatch로 전달해야 한다 (#248).
-        monkeypatch.setenv("KPUBDATA_BUILDER_API_KEY", "secret")
-        base_url, _, _ = http_server
+        base_url, _, _ = http_server_with_auth
         with pytest.raises(urllib.error.HTTPError) as exc_info:
             urllib.request.urlopen(f"{base_url}/version", timeout=2.0)
         assert exc_info.value.code == 401
 
     def test_valid_api_key_header_is_accepted(
         self,
-        http_server: tuple[str, HTTPServer, threading.Thread],
-        monkeypatch: pytest.MonkeyPatch,
+        http_server_with_auth: tuple[str, HTTPServer, threading.Thread],
     ) -> None:
-        monkeypatch.setenv("KPUBDATA_BUILDER_API_KEY", "secret")
-        base_url, _, _ = http_server
+        # http_server_with_auth fixture가 이미 API 키를 설정하므로 monkeypatch 불필요
+        base_url, _, _ = http_server_with_auth
         req = urllib.request.Request(f"{base_url}/version", headers={"X-API-Key": "secret"})
         with urllib.request.urlopen(req, timeout=2.0) as response:
             assert response.status == 200
@@ -829,3 +876,94 @@ class TestHttpRobustness:
         status, body = captured[0]
         assert status == 400
         assert "incomplete" in str(body.get("error", ""))
+
+
+class TestArtifactFileServing:
+    """아티팩트 파일 서빙 기능 테스트 (#323)."""
+
+    def test_serves_existing_file(self, tmp_path: Path) -> None:
+        from kpubdata_builder.service import FileResponse
+
+        service = _service(tmp_path)
+        dispatch(service, "POST", "/build", {"spec": VALID_SPEC_YAML, "run_id": "run1"})
+
+        resp = service.serve_artifact_file("run1", "manifest.json")
+        assert isinstance(resp, FileResponse)
+        assert resp.status_code == 200
+        assert resp.filename == "manifest.json"
+        assert resp.file_path.exists()
+
+    def test_returns_404_for_nonexistent_file(self, tmp_path: Path) -> None:
+        service = _service(tmp_path)
+        dispatch(service, "POST", "/build", {"spec": VALID_SPEC_YAML, "run_id": "run1"})
+
+        resp = service.serve_artifact_file("run1", "nonexistent.csv")
+        assert isinstance(resp, ServiceResponse)
+        assert resp.status_code == 404
+        assert "not found" in str(resp.body.get("error", ""))
+
+    def test_returns_404_for_nonexistent_run(self, tmp_path: Path) -> None:
+        service = _service(tmp_path)
+
+        resp = service.serve_artifact_file("nope", "manifest.json")
+        assert isinstance(resp, ServiceResponse)
+        assert resp.status_code == 404
+        assert "run not found" in str(resp.body.get("error", ""))
+
+    def test_blocks_path_traversal_with_dot_dot(self, tmp_path: Path) -> None:
+        service = _service(tmp_path)
+        dispatch(service, "POST", "/build", {"spec": VALID_SPEC_YAML, "run_id": "run1"})
+
+        resp = service.serve_artifact_file("run1", "../run2/manifest.json")
+        assert isinstance(resp, ServiceResponse)
+        assert resp.status_code == 400
+        assert "safe" in str(resp.body.get("error", "")).lower()
+
+    def test_blocks_path_traversal_with_absolute_path(self, tmp_path: Path) -> None:
+        service = _service(tmp_path)
+        dispatch(service, "POST", "/build", {"spec": VALID_SPEC_YAML, "run_id": "run1"})
+
+        resp = service.serve_artifact_file("run1", "/etc/passwd")
+        assert isinstance(resp, ServiceResponse)
+        assert resp.status_code == 400
+        assert "safe" in str(resp.body.get("error", "")).lower()
+
+    def test_returns_400_for_directory_not_file(self, tmp_path: Path) -> None:
+        service = _service(tmp_path)
+        dispatch(service, "POST", "/build", {"spec": VALID_SPEC_YAML, "run_id": "run1"})
+
+        # out 디렉터리는 빌드로 생성되므로 존재함
+        (tmp_path / "run1" / "subdir").mkdir()
+
+        resp = service.serve_artifact_file("run1", "subdir")
+        assert isinstance(resp, ServiceResponse)
+        assert resp.status_code == 400
+        assert "not a file" in str(resp.body.get("error", ""))
+
+    def test_serve_artifact_file_route(self, tmp_path: Path) -> None:
+        from kpubdata_builder.service import FileResponse
+
+        service = _service(tmp_path)
+        dispatch(service, "POST", "/build", {"spec": VALID_SPEC_YAML, "run_id": "run1"})
+
+        resp = dispatch(service, "GET", "/artifacts/run1/manifest.json", None)
+        assert isinstance(resp, FileResponse)
+        assert resp.status_code == 200
+        assert resp.filename == "manifest.json"
+
+    def test_mime_type_detection(self, tmp_path: Path) -> None:
+        from kpubdata_builder.service.http import _get_mime_type
+
+        # 명시적 매핑
+        assert _get_mime_type(tmp_path / "data.parquet") == "application/vnd.apache.parquet"
+        assert _get_mime_type(tmp_path / "data.csv") == "text/csv"
+        assert _get_mime_type(tmp_path / "data.json") == "application/json"
+        assert _get_mime_type(tmp_path / "data.txt") == "text/plain"
+
+        # mimetypes 라이브러리 (fallback)
+        assert _get_mime_type(tmp_path / "data.html") == "text/html"
+        assert _get_mime_type(tmp_path / "data.xml") == "application/xml"
+
+        # 알 수 없는 확장자 → 기본값
+        assert _get_mime_type(tmp_path / "data.unknown") == "application/octet-stream"
+        assert _get_mime_type(tmp_path / "data") == "application/octet-stream"

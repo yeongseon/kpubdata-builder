@@ -64,3 +64,32 @@ jobs:
 
       - name: Run tests
         run: uv run --no-sources pytest
+
+  min-deps:
+    # kpubdata 호환성 정책(#213): 선언된 하한(>=0.5.0)에서 테스트 스위트가
+    # 통과하는지 강제한다. 정상 해석 후 kpubdata를 하한으로 고정한다(전체
+    # --resolution lowest-direct는 pyyaml 6.0이 빌드되지 않아 불가).
+    # 하한은 pyproject에서 자동 추출하므로 핀 변경 시 이 잡을 수동 갱신할 필요가 없다.
+    name: Minimum kpubdata floor
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # v8.3.2
+        with:
+          enable-cache: true
+
+      - name: Install dependencies (normal resolution)
+        run: uv sync --extra dev --no-sources
+
+      - name: Pin kpubdata to its declared floor
+        run: |
+          floor=$(sed -n 's/.*kpubdata>=\([0-9][0-9.]*\).*/\1/p' pyproject.toml | head -1)
+          echo "Pinning kpubdata to declared floor: $floor"
+          test -n "$floor" || { echo "could not extract kpubdata floor from pyproject.toml"; exit 1; }
+          uv pip install "kpubdata==$floor" --no-deps
+
+      - name: Run tests at the floor
+        run: uv run --no-sync pytest
