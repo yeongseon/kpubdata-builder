@@ -466,10 +466,10 @@ components:
           enum: [ok, failed]
           description: 빌드 상태
         started_at:
-          type: string
+          type: [string, "null"]
           description: 빌드 시작 시각 (ISO 8601 또는 null)
         finished_at:
-          type: string
+          type: [string, "null"]
           description: 빌드 완료 시각 (ISO 8601 또는 null)
 
     BuildsResponse:
