@@ -10,17 +10,19 @@
 
 ## 2. 실행 모델
 
-Builder는 두 가지 실행 모델을 가집니다.
+Builder는 **동기식 실행 모델**을 사용합니다.
 
-| 모델 | 설명 | 적합한 작업 |
+| 모델 | 설명 | 적용 범위 |
 | :--- | :--- | :--- |
-| **동기식** | 요청-응답 안에서 결과를 바로 반환 | `/validate`, `/preview` |
-| **비동기식** | build를 생성하고 상태를 폴링 | `/build`, `/artifacts/{run_id}` |
+| **동기식** | 요청-응답 안에서 결과를 바로 반환 | 모든 엔드포인트 (`/version`, `/validate`, `/preview`, `/build`, `/artifacts/{run_id}`, `/builds`) |
 
 원칙:
 
-- **검증과 preview는 동기식**으로 제공 가능합니다.
-- **실제 build와 publish는 비동기식**으로 모델링하는 것을 기본값으로 둡니다.
+- **검증, preview, build는 동기식**으로 제공합니다.
+- 비동기 build 모델(`POST /builds` / `GET /builds/{run_id}`)은 후속 ADR에서 구현 예정입니다.
+
+> **결정 기록**: ADR 0002에서 v0.4는 동기 `POST /build`만 유지하기로 결정했습니다.
+> 비동기 job 모델은 상태 머신·취소·멱등성 등 시맨틱을 완비한 뒤 별도 이슈에서 구현합니다.
 
 추가 방향:
 
@@ -48,7 +50,7 @@ Builder는 두 가지 실행 모델을 가집니다.
 | `/version` | `GET` | Builder API 계약 버전 조회 | 동기식 |
 | `/validate` | `POST` | BuildSpec 검증 | 동기식 |
 | `/preview` | `POST` | 샘플 실행 및 소스별 스키마 preview | 동기식 |
-| `/build` | `POST` | 빌드 실행 (동기; 계약은 비동기 `/builds` 지향) | 동기식(현재) |
+| `/build` | `POST` | 빌드 실행 (동기식) | 동기식 |
 | `/artifacts/{run_id}` | `GET` | 실행 워크스페이스 산출물 목록 조회 | 동기식 |
 | `/builds` | `GET` | 빌드 이력 목록 조회 (최신 수정 시각 기준 내림차순) | 동기식 |
 
@@ -278,14 +280,21 @@ BuildSpec을 실행 전에 검증합니다. body의 `spec` 키에 YAML 문자열
 (`test_service_contract`가 강제). 소비자는 `GET /version`으로 계약 버전을 먼저
 확인할 수 있고, `POST /validate`·`POST /build` 응답에도 `api_version`이 실립니다.
 
+버전 문자열 일치 외에, `test_service_contract`의 **`TestResponseConformance`** 는
+실제 `dispatch()` 응답 본문이 선언된 OpenAPI 스키마에 부합하는지(wire-level
+conformance) 순수 파이썬 validator(`tests/unit/_openapi.py`)로 검증합니다
+(#209, ADR-0005 미해결 질문 #1). app.py 응답에서 필수 필드가 빠지거나 타입이
+바뀌되 YAML이 갱신되지 않는 드리프트를 CI에서 차단합니다. 정적 경로/상태코드
+대조(#317, #319)가 *선언* 일치를 본다면, 이 검사는 *실제 wire* 일치를 봅니다.
+
 | 계약 operationId | 상태 | 현재 구현 경로 |
 | :--- | :--- | :--- |
 | `validateSpec` | 구현됨 | `POST /validate` (동기) |
 | `previewBuild` | 구현됨 | `POST /preview` (동기) |
-| `createBuild` | 구현됨 | `POST /build` (동기; 계약은 비동기 `POST /builds` 지향) |
+| `createBuild` | 구현됨 | `POST /build` (동기) |
 | `listBuildArtifacts` | 구현됨 | `GET /artifacts/{run_id}` |
 | `listDatasets` | 계획(planned)/미구현 | — |
-| `getBuild` | 계획(planned)/미구현 | — |
+| `getBuild` | 계획(planned)/미구현 — 비동기 job 모델 | `GET /builds/{run_id}` (후속 ADR) |
 | `getBuildManifest` | 계획(planned)/미구현 | — |
 | `publishArtifacts` | 계획(planned)/미구현 | — |
 | (메타) | 구현됨 | `GET /version` → `{service, api_version}` |
@@ -309,7 +318,40 @@ Studio 연동을 위해 향후 구조화된 에러 봉투 형식을 도입할 �
 
 이 형식은 Studio와의 교차 레포 조율이 필요한 후속 작업에서 활성화될 예정입니다.
 
-## 9. Python API — BuilderService
+## 9. CORS 정책
+
+브라우저 클라이언트(Studio 등)와의 연동을 위한 크로스-오리진 요청 정책입니다 (#322).
+
+### 9.1 Default-Deny
+
+- 기본 정책은 **default-deny**입니다: 환경변수 미설정 시 모든 크로스-오리진 요청을 거부합니다.
+- Same-origin 요청(브라우저가 Origin 헤더를 보내지 않는 경우)은 항상 허용됩니다.
+
+### 9.2 허용 오리진 설정
+
+`KPUBDATA_BUILDER_ALLOWED_ORIGINS` 환경변수로 허용할 오리진을 콤마로 구분하여 설정합니다.
+
+```bash
+# 단일 오리진 허용
+export KPUBDATA_BUILDER_ALLOWED_ORIGINS=http://localhost:5173
+
+# 복수 오리진 허용
+export KPUBDATA_BUILDER_ALLOWED_ORIGINS=http://localhost:5173,https://studio.example.com
+```
+
+### 9.3 Preflight 요청
+
+`OPTIONS` 메서드로 preflight 요청을 지원합니다. 허용된 오리진에 대해 다음 헤더를 응답합니다:
+
+- `Access-Control-Allow-Methods: GET, POST, OPTIONS`
+- `Access-Control-Allow-Headers: Content-Type, X-API-Key`
+- `Access-Control-Max-Age: 86400` (24시간)
+
+### 9.4 인증 헤더
+
+`X-API-Key` 커스텀 헤더를 사용한 인증은 preflight 요청에서 허용 목록에 포함되어야 합니다.
+
+## 10. Python API — BuilderService
 
 Python 코드에서 직접 사용하는 경우 `BuilderService`를 통해 HTTP 없이 같은 로직을 호출할 수 있습니다.
 
@@ -333,7 +375,7 @@ response = service.build(spec_yaml_str, run_id="my-run-001")
 # response.body: {"status": "ok"|"failed", "outcomes": [...], ...}
 ```
 
-## 10. 관련 문서
+## 11. 관련 문서
 
 | 문서 | 설명 |
 | :--- | :--- |

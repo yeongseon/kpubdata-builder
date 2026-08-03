@@ -135,6 +135,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run workspace root directory (default: build).",
     )
 
+    rebuild_cmd = subparsers.add_parser(
+        "rebuild-index",
+        help="Rebuild the build index from filesystem scans.",
+    )
+    rebuild_cmd.add_argument(
+        "--output-dir",
+        default="build",
+        help="Run workspace root directory (default: build).",
+    )
+
     return parser
 
 
@@ -367,6 +377,29 @@ def _run_serve(*, output_dir: str, host: str, port: int) -> int:
     return 0
 
 
+def _run_rebuild_index(output_dir: str) -> int:
+    """파일시스템 스캔으로 빌드 인덱스를 재구축한다 (#309, ADR 0003).
+
+    매개변수:
+        output_dir: 빌드 출력 루트 디렉터리.
+
+    반환값:
+        int: 성공 시 0, 실패 시 1.
+    """
+    from .store import rebuild_index
+
+    output_root = Path(output_dir)
+    print(f"rebuilding build index from {output_root}...", flush=True)
+
+    try:
+        count = rebuild_index(output_root)
+        print(f"rebuilt index with {count} build(s)", flush=True)
+        return 0
+    except Exception as exc:
+        print(f"error: failed to rebuild index: {exc}", file=sys.stderr)
+        return 1
+
+
 def dispatch(args: argparse.Namespace) -> int:
     """파싱된 argparse 결과를 실제 명령 실행 함수로 전달한다.
 
@@ -402,6 +435,8 @@ def dispatch(args: argparse.Namespace) -> int:
             host=args.host,
             port=args.port,
         )
+    if command == "rebuild-index":
+        return _run_rebuild_index(output_dir=args.output_dir)
     # 일반적인 CLI 경로로는 도달할 수 없지만(argparse가 알 수 없는 하위 명령을 거부함),
     # 프로그래밍 방식 호출자를 위한 방어적 대체 경로로 유지한다.
     return 2

@@ -189,19 +189,48 @@ kpubdata-builder serve --host 0.0.0.0 --port 8000 --output-dir ./dist
 
 ### HTTP 서비스 배포 (Docker)
 
-> **Dockerfile과 docker-compose는 ADR 0006 (#312) 후속 작업으로 계획 중입니다.**
+`Dockerfile`과 `docker-entrypoint.sh`은 `uv sync --no-sources`로 PyPI `kpubdata`를
+설치해 `kpubdata-builder serve`를 실행하는 재현 가능한 이미지를 만듭니다 (#320,
+ADR 0006). 설정은 환경변수로 주입합니다 — `docker-entrypoint.sh`가 이를 serve CLI
+플래그로 변환합니다.
 
-현재는 다음과 같이 서비스를 실행할 수 있습니다:
+**컨테이너 환경변수**:
+
+| 변수 | 설명 | 기본값 | 필수 |
+| :--- | :--- | :--- | :--- |
+| `KPUBDATA_BUILDER_API_KEY` | `X-API-Key` 인증 키 | 없음 | **필수** (fail-closed) |
+| `KPUBDATA_BUILDER_PORT` | 바인딩 포트 | `8000` | 선택 |
+| `KPUBDATA_BUILDER_OUTPUT_DIR` | 실행 워크스페이스 루트 | `/data` | 선택 |
+| `KPUBDATA_BUILDER_HOST` | 바인딩 호스트 | `0.0.0.0` | 선택 |
+| `KPUBDATA_BUILDER_DEV` | `1`이면 API 키 없이 기동 (로컬 개발 전용) | 미설정 | 선택 |
+
+> **fail-closed (ADR 0006)**: 컨테이너는 `KPUBDATA_BUILDER_API_KEY`가 없으면 기동을
+> 거부합니다. `service/app.py`의 "키 미설정 = 인증 생략" 동작은 로컬 개발 편의 전용이며
+> 컨테이너로 누출되지 않습니다. 로컬에서 인증 없이 띄우려면 `KPUBDATA_BUILDER_DEV=1`을
+> 명시하세요.
 
 ```bash
-# 로컬 개발 환경
-export KPUBDATA_BUILDER_API_KEY="dev-key"
-kpubdata-builder serve --host 127.0.0.1 --port 8000
+# 이미지 빌드
+docker build -t kpubdata-builder:latest .
 
-# 프로덕션 환경 (API 키 필수)
-export KPUBDATA_BUILDER_API_KEY="${PROD_API_KEY}"
-kpubdata-builder serve --host 0.0.0.0 --port 8000 --output-dir /data/builds
+# 실행 — API 키 필수 (fail-closed). 빌드 산출물은 /data 볼륨에 영속화.
+docker run --rm -p 8000:8000 \
+  -e KPUBDATA_BUILDER_API_KEY="${API_KEY}" \
+  -v kpubdata-builder-data:/data \
+  kpubdata-builder:latest
+
+# 헬스 체크: 계약 버전 확인
+curl -s -H "X-API-Key: ${API_KEY}" http://localhost:8000/version
+# {"service": "kpubdata-builder", "api_version": "1.0.0"}
+
+# 로컬 개발 — 인증 생략 (dev-mode)
+docker run --rm -p 8000:8000 -e KPUBDATA_BUILDER_DEV=1 kpubdata-builder:latest
 ```
+
+`kpubdata`는 `uv sync --no-sources`로 PyPI에서 설치되므로, 빌드 시 형제 디렉터리
+(`../kpubdata`)가 필요하지 않습니다 (버전 핀 정책은 [CONTRIBUTING.md](./CONTRIBUTING.md)
+참고). Parquet/Hugging Face export 등의 선택 의존성이 필요하면 Dockerfile의
+`uv sync` 라인에 `--extra parquet --extra huggingface`를 추가하세요.
 
 ### API 인증
 
@@ -237,7 +266,38 @@ kpubdata-builder preview specs/weather.yaml --limit 5
 kpubdata-builder build specs/weather.yaml --output-dir ./dist/weather
 ```
 
-### Python API 예시
+### 서비스 모드
+
+Builder HTTP 서비스를 실행하여 Studio 같은 외부 클라이언트와 연동할 수 있습니다.
+
+```bash
+# 서버 시작 (기본: 127.0.0.1:8000)
+kpubdata-builder serve
+
+# 커스텀 호스트/포트
+kpubdata-builder serve --host 0.0.0.0 --port 8080
+```
+
+#### CORS 설정
+
+브라우저 클라이언트(Studio 등)와의 연동을 위해 크로스-오리진 요청을 허용해야 합니다.
+
+```bash
+# 허용할 오리진 설정 (콤마로 구분)
+export KPUBDATA_BUILDER_ALLOWED_ORIGINS=http://localhost:5173,https://studio.example.com
+
+# 인증 키 설정 (선택)
+export KPUBDATA_BUILDER_API_KEY=your-secret-key
+
+# 서버 시작
+kpubdata-builder serve
+```
+
+**보안 참고:** default-deny 정책이 적용되므로, `KPUBDATA_BUILDER_ALLOWED_ORIGINS`를 설정하지 않으면 모든 크로스-오리진 요청이 거부됩니다. 로컬 개발 시에는 `http://localhost:5173`을 명시적으로 설정하세요.
+
+### 향후 API 예시(placeholder)
+
+서비스 모드가 정식 도입되면 아래와 같은 형태의 API 사용 예시가 추가될 예정입니다.
 
 ```python
 from pathlib import Path

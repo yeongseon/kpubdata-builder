@@ -1,0 +1,39 @@
+name: Docker
+
+# Dockerfile이 빌드 가능한 serve 이미지를 만드는지 검증한다 (#320, ADR 0006).
+# docker build 자체가 인수 기준 "빌드 성공 + serve 진입점 포함"을 증명한다.
+# uv sync --no-sources가 PyPI에서 kpubdata를 해석하므로 빌드 시 네트워크가 필요하다.
+
+on:
+  pull_request:
+    paths:
+      - "Dockerfile"
+      - "docker-entrypoint.sh"
+      - ".dockerignore"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "src/**"
+      - ".github/workflows/docker.yml"
+  push:
+    branches: [main]
+    paths:
+      - "Dockerfile"
+      - "docker-entrypoint.sh"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: docker build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Build serve image
+        run: docker build -t kpubdata-builder:ci .
