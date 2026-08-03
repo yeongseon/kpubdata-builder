@@ -31,29 +31,48 @@ from ..spec import BuildSpec, JsonValue, parse_spec
 from ..spec.validator import validate_spec
 from ..stages._path_safety import ensure_within, validate_path_segment
 from ..stages.bronze.build import SourceClient
+from ..store import BuildIndex
 from ..tabular import DEFAULT_PREVIEW_LIMIT
+
+# Build list entry type for API responses
+_BuildListEntry = dict[str, str | None]
 
 # Builder API 계약 버전. contract/builder-api.yaml의 info.version과 일치해야 하며
 # (test_service_contract가 강제), 응답에 실어 Studio 같은 소비자가 하위 호환을
 # 협상할 수 있게 한다 (#209).
 API_CONTRACT_VERSION = "1.0.0"
 
-# 서버가 요구하는 API 키. 환경변수로만 주입하며, 미설정 시 인증을 건너뛴다(로컬 개발
-# 편의를 위한 기본값으로 CORS 기본 오리진 정책과 동일한 접근). /build가 비용이 큰
-# 외부 API 호출과 파일 시스템 쓰기를 유발하므로, 프로덕션 배포 시 반드시 설정해야
-# 한다 (#248).
+# 서버가 요구하는 API 키. 환경변수로만 주입한다 (#248).
+# ADR 0006에 따라 fail-closed로 동작: dev-mode 미설정 + API 키 미설정 시 인증을 거부한다.
 _API_KEY_ENV = "KPUBDATA_BUILDER_API_KEY"
+_DEV_MODE_ENV = "KPUBDATA_BUILDER_DEV_MODE"
+
+
+def _is_dev_mode() -> bool:
+    """로컬 개발 모드인지 확인한다 (#321, ADR 0006).
+
+    KPUBDATA_BUILDER_DEV_MODE가 'true'/'1'이면 dev-mode로 간주하여 인증을 생략한다.
+    프로덕션 배포에서는 이 환경변수를 설정하지 않아야 한다.
+    """
+    return os.environ.get(_DEV_MODE_ENV, "").lower() in ("true", "1")
 
 
 def _verify_api_key(api_key: str | None) -> bool:
-    """요청의 X-API-Key를 서버에 설정된 키와 비교한다 (#248).
+    """요청의 X-API-Key를 서버에 설정된 키와 비교한다 (#248, #321, ADR 0006).
 
-    KPUBDATA_BUILDER_API_KEY가 설정되지 않으면 인증을 건너뛴다. 설정된 경우
-    타이밍 공격을 막기 위해 hmac.compare_digest로 비교한다.
+    ADR 0006 fail-closed 정책:
+    - dev-mode인 경우: 인증을 생략한다 (로컬 개발 편의).
+    - dev-mode가 아닌 경우:
+      - API 키가 설정되어 있으면 키를 검증한다.
+      - API 키가 미설정이면 인증을 거부한다 (False 반환).
     """
+    if _is_dev_mode():
+        return True
+
     expected = os.environ.get(_API_KEY_ENV)
     if not expected:
-        return True
+        # fail-closed: dev-mode 미설정 + API 키 미설정 시 인증 거부
+        return False
     return api_key is not None and hmac.compare_digest(api_key, expected)
 
 
@@ -68,6 +87,21 @@ class ServiceResponse:
 
     status_code: int
     body: dict[str, JsonValue]
+
+
+@dataclass(frozen=True)
+class FileResponse:
+    """파일 서빙 응답 (#323).
+
+    속성:
+        status_code: HTTP 상태 코드.
+        file_path: 제공할 파일 경로.
+        filename: 다운로드 시 사용할 파일 이름 (Content-Disposition 헤더용).
+    """
+
+    status_code: int
+    file_path: Path
+    filename: str
 
 
 def _parse_spec_text(spec_yaml: str) -> BuildSpec:
@@ -89,6 +123,7 @@ class BuilderService:
     ) -> None:
         self._output_root = output_root
         self._client_factory = client_factory
+        self._build_index = BuildIndex(output_root)  # #309, ADR 0003
 
     def version(self) -> ServiceResponse:
         """Builder API 계약 버전을 반환한다 (#209).
@@ -191,6 +226,22 @@ class BuilderService:
                 (o.error for o in result.outcomes if o.status != "ok" and o.error), None
             )
             body["error"] = first_error or "build failed"
+
+        # ADR 0003: 빌드 완료 후 인덱스 갱신 (best-effort, 실패해도 빌드 성공 유지)
+        try:
+            manifest_data = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+            started_at = manifest_data.get("started_at")
+            finished_at = manifest_data.get("finished_at")
+            self._build_index.insert_or_replace(
+                run_id=result.context.run_id,
+                status=result.status,  # type: ignore[arg-type]
+                started_at=started_at,
+                finished_at=finished_at,
+            )
+        except Exception:
+            # 인덱스 갱신 실패는 무시 (ADR 0003)
+            pass
+
         return ServiceResponse(status_code, body)
 
     def artifacts(self, run_id: str) -> ServiceResponse:
@@ -210,12 +261,78 @@ class BuilderService:
         )
         return ServiceResponse(200, {"run_id": run_id, "files": list(files)})
 
-    def list_builds(self, *, limit: int = 50) -> ServiceResponse:
-        """실행 이력 목록을 최신 수정 시각 기준으로 내림차순 반환한다.
+    def serve_artifact_file(self, run_id: str, file_path: str) -> ServiceResponse | FileResponse:
+        """실행 워크스페이스의 특정 파일을 제공한다 (#323).
 
-        output_root 아래의 디렉터리를 스캔해 manifest.json이 있는 실행만
-        포함한다. Studio 같은 소비자가 빌드 이력 목록을 표시하는 데 쓰인다 (#250).
+        경로 트래버설 공격을 방지하기 위해 run_id와 file_path 모두
+        검증하며, 심볼릭 링크를 따르지 않는다.
+
+        매개변수:
+            run_id: 실행 식별자.
+            file_path: 요청된 파일 경로 (run_id 하위의 상대 경로).
+
+        반환값:
+            FileResponse (파일 발견 시) 또는 ServiceResponse (오류 시).
         """
+        # run_id 검증
+        try:
+            validate_path_segment(run_id, field_name="run_id")
+        except ValueError as exc:
+            return ServiceResponse(400, {"error": str(exc)})
+
+        # run_dir 확인
+        run_dir = self._output_root / run_id
+        ensure_within(self._output_root, run_dir, label="run directory")
+        if not run_dir.exists():
+            return ServiceResponse(404, {"error": f"run not found: {run_id}"})
+
+        # file_path 검증 (경로 트래버설 방지)
+        try:
+            validate_path_segment(file_path, field_name="file_path")
+        except ValueError as exc:
+            return ServiceResponse(400, {"error": str(exc)})
+
+        # 요청된 파일의 전체 경로 계산
+        requested_file = run_dir / file_path
+        # 경로가 run_dir 내에 있는지 확인 (심볼릭 링크도 해석하여 안전 검사)
+        ensure_within(run_dir, requested_file, label="artifact file")
+
+        if not requested_file.exists():
+            return ServiceResponse(404, {"error": f"file not found: {file_path}"})
+        if not requested_file.is_file():
+            return ServiceResponse(400, {"error": f"not a file: {file_path}"})
+
+        # 파일명 추출 (Content-Disposition용)
+        filename = requested_file.name
+
+        return FileResponse(status_code=200, file_path=requested_file, filename=filename)
+
+    def list_builds(self, *, limit: int = 50) -> ServiceResponse:
+        """실행 이력 목록을 최신 완료 시각 기준 내림차순 반환한다.
+
+        ADR 0003에 따라 SQLite 인덱스를 우선 조회하고, 인덱스가 없거나
+        비어있으면 파일시스템 스캔으로 폴백한다.
+        """
+        # 인덱스 우선 조회
+        try:
+            entries = self._build_index.list_builds(limit=limit)
+            if entries:
+                # 인덱스가 있으면 반환
+                index_builds: list[_BuildListEntry] = [
+                    {
+                        "run_id": entry.run_id,
+                        "status": entry.status,
+                        "started_at": entry.started_at,
+                        "finished_at": entry.finished_at,
+                    }
+                    for entry in entries
+                ]
+                return ServiceResponse(200, {"builds": cast(list[JsonValue], index_builds)})
+        except Exception:
+            # 인덱스 조회 실패 시 폴백
+            pass
+
+        # 폴백: 파일시스템 스캔
         if not self._output_root.exists():
             return ServiceResponse(200, {"builds": []})
 
@@ -224,7 +341,7 @@ class BuilderService:
             (d for d in self._output_root.iterdir() if d.is_dir()),
             key=lambda p: p.stat().st_mtime,
         )
-        builds: list[JsonValue] = []
+        fs_builds: list[_BuildListEntry] = []
         for run_dir in candidates:
             manifest_path = run_dir / "manifest.json"
             if not manifest_path.exists():
@@ -233,7 +350,7 @@ class BuilderService:
                 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 continue
-            builds.append(
+            fs_builds.append(
                 {
                     "run_id": run_dir.name,
                     "status": "failed" if manifest.get("errors") else "ok",
@@ -241,7 +358,7 @@ class BuilderService:
                     "finished_at": manifest.get("finished_at"),
                 }
             )
-        return ServiceResponse(200, {"builds": builds})
+        return ServiceResponse(200, {"builds": cast(list[JsonValue], fs_builds)})
 
     def _load_validated(self, spec_yaml: str) -> BuildSpec | ServiceResponse:
         """spec_yaml을 파싱·검증하고, 실패 시 오류 ServiceResponse를 반환한다."""
@@ -273,11 +390,14 @@ def dispatch(
     query: str = "",
     *,
     api_key: str | None = None,
-) -> ServiceResponse:
+) -> ServiceResponse | FileResponse:
     """(method, path)를 BuilderService 연산으로 라우팅한다.
 
     라우팅 전에 X-API-Key를 검증한다 (#248). KPUBDATA_BUILDER_API_KEY가
     설정되지 않으면 인증을 건너뛴다.
+
+    반환값:
+        ServiceResponse 또는 FileResponse (#323).
     """
     if not _verify_api_key(api_key):
         return ServiceResponse(401, {"error": "unauthorized"})
@@ -327,7 +447,15 @@ def dispatch(
         return service.build(spec, run_id=run_id)
 
     if method == "GET" and path.startswith("/artifacts/"):
-        run_id = path[len("/artifacts/") :]
+        # /artifacts/{run_id}/{file_path} 형식이면 파일 제공, 아니면 목록 반환
+        rest = path[len("/artifacts/") :]
+        parts = rest.split("/", 1)
+        run_id = parts[0]
+        if len(parts) == 2 and parts[1]:
+            # 파일 요청: /artifacts/{run_id}/{file_path}
+            file_path = parts[1]
+            return service.serve_artifact_file(run_id, file_path)
+        # 목록 요청: /artifacts/{run_id}
         return service.artifacts(run_id)
 
     if method == "GET" and path == "/builds":
@@ -354,4 +482,4 @@ def dispatch(
     return ServiceResponse(404, {"error": f"not found: {method} {path}"})
 
 
-__all__ = ["API_CONTRACT_VERSION", "BuilderService", "ServiceResponse", "dispatch"]
+__all__ = ["API_CONTRACT_VERSION", "BuilderService", "ServiceResponse", "FileResponse", "dispatch"]

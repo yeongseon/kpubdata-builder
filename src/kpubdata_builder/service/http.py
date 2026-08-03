@@ -12,16 +12,19 @@ from __future__ import annotations
 
 import json
 import logging
+import mimetypes
 import os
 import traceback
 from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from socket import socket as _socket
 from typing import Any, cast
 from urllib.parse import urlsplit
 
 from ..spec import JsonValue
-from .app import BuilderService, dispatch
+from .app import BuilderService, FileResponse, dispatch
 
 # 단일 요청이 메모리를 고갈시키거나 단일 스레드 서버를 멈추게 하지 않도록 body 크기를
 # 제한한다. spec YAML 요청에 충분하면서도 남용을 막는 보수적 상한 (#186).
@@ -36,12 +39,89 @@ _SOCKET_TIMEOUT_SECONDS = 30.0
 # 메모리가 고갈될 수 있다 (#253). 고정 크기 스레드 풀로 상한을 둔다.
 _DEFAULT_MAX_WORKERS = 10
 
-# CORS 허용 Origin. 기본값은 로컬 개발 편의를 위해 모든 오리진(`*`)이지만, 환경변수로
-# 특정 오리진(예: http://localhost:5173)만 허용하도록 제한할 수 있다 (#254 보안 강화).
-_CORS_ALLOW_ORIGIN_ENV = "KPUBDATA_BUILDER_CORS_ALLOW_ORIGIN"
-_DEFAULT_CORS_ALLOW_ORIGIN = "*"
+# CORS 허용 Origin 목록 (#322). default-deny 정책: 환경변수 미설정 시 모든 크로스오리진
+# 요청을 거부한다. 콤마로 구분된 오리진 목록을 받는다 (예:
+# KPUBDATA_BUILDER_ALLOWED_ORIGINS=http://localhost:5173,https://studio.example.com).
+_ALLOWED_ORIGINS_ENV = "KPUBDATA_BUILDER_ALLOWED_ORIGINS"
+
+# MIME 타입 기본값 (#323). mimetypes.guess_type이 None을 반환할 때 사용.
+_DEFAULT_MIME_TYPE = "application/octet-stream"
+
+# 일반적인 데이터셋 파일 확장자에 대한 명시적 MIME 타입 매핑.
+# mimetypes 라이브러리가 부정확하거나 누락된 경우에 대비해 보수적인 기본값을 둔다.
+_EXPLICIT_MIME_TYPES: dict[str, str] = {
+    ".parquet": "application/vnd.apache.parquet",
+    ".csv": "text/csv",
+    ".json": "application/json",
+    ".geojson": "application/geo+json",
+    ".geojsonl": "application/geo+jsonl",
+    ".ndjson": "application/x-ndjson",
+    ".txt": "text/plain",
+    ".md": "text/markdown",
+    ".html": "text/html",
+    ".xml": "application/xml",
+    ".yaml": "text/yaml",
+    ".yml": "text/yaml",
+}
 
 _logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=1)
+def _get_allowed_origins() -> frozenset[str]:
+    """환경변수에서 허용된 오리진 목록을 파싱한다 (#322).
+
+    Returns:
+        허용된 오리진의 frozenset. 환경변수 미설정 시 빈 frozenset (default-deny).
+    """
+    env_value = os.environ.get(_ALLOWED_ORIGINS_ENV, "")
+    if not env_value:
+        return frozenset()
+    # 콤마로 구분된 오리진 목록을 파싱하고 공백을 제거한다.
+    origins = [origin.strip() for origin in env_value.split(",") if origin.strip()]
+    return frozenset(origins)
+
+
+def _clear_cors_cache() -> None:
+    """테스트용: CORS 허용 오리진 캐시를 비운다 (#322)."""
+    _get_allowed_origins.cache_clear()
+
+
+def _is_origin_allowed(request_origin: str | None, allowed: frozenset[str]) -> bool:
+    """요청 오리진이 허용 목록에 있는지 확인한다 (#322).
+
+    Same-origin 요청(오리진이 None인 경우)은 항상 허용한다.
+
+    Args:
+        request_origin: 요청의 Origin 헤더값.
+        allowed: 허용된 오리진 목록.
+
+    Returns:
+        오리진이 허용되면 True, 아니면 False.
+    """
+    if request_origin is None:
+        # Same-origin 요청 (브라우저가 Origin 헤더를 보내지 않는 경우)
+        return True
+    return request_origin in allowed
+
+
+def _get_mime_type(file_path: Path) -> str:
+    """파일 경로에서 MIME 타입을 추론한다 (#323).
+
+    명시적 매핑을 우선 확인하고, 없으면 mimetypes 라이브러리를 사용한다.
+    그래도 None이 반환되면 기본값(application/octet-stream)을 사용한다.
+
+    매개변수:
+        file_path: MIME 타입을 추론할 파일 경로.
+
+    반환값:
+        MIME 타입 문자열.
+    """
+    suffix = file_path.suffix.lower()
+    if suffix in _EXPLICIT_MIME_TYPES:
+        return _EXPLICIT_MIME_TYPES[suffix]
+    guessed = mimetypes.guess_type(file_path.name)[0]
+    return guessed if guessed else _DEFAULT_MIME_TYPE
 
 
 def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
@@ -114,26 +194,64 @@ def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
                 )
                 self._write(500, {"error": "internal server error"})
                 return
-            self._write(response.status_code, response.body)
+            # FileResponse인지 ServiceResponse인지 확인하여 분기 처리 (#323)
+            if isinstance(response, FileResponse):
+                self._write_file(response)
+            else:
+                self._write(response.status_code, response.body)
 
-        def _send_cors_headers(self) -> None:
-            # 로컬 개발 도구로서 Studio 등 브라우저 클라이언트의 크로스오리진 요청을
-            # 허용한다 (#254). 기본값은 `*`이며, 환경변수로 특정 오리진만
-            # 허용하도록 제한해 공격 표면을 줄일 수 있다.
-            allow_origin = os.environ.get(_CORS_ALLOW_ORIGIN_ENV, _DEFAULT_CORS_ALLOW_ORIGIN)
-            self.send_header("Access-Control-Allow-Origin", allow_origin)
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type, X-API-Key")
-            self.send_header("Access-Control-Max-Age", "86400")
+        def _send_cors_headers(self, origin: str | None = None) -> None:
+            """CORS 헤더를 전송한다 (#322).
+
+            Args:
+                origin: 요청의 Origin 헤더값. None이면 same-origin으로 간주한다.
+            """
+            allowed = _get_allowed_origins()
+            # Same-origin이거나 허용 목록에 있으면 CORS 헤더를 보낸다.
+            if _is_origin_allowed(origin, allowed):
+                if origin is not None:
+                    # 크로스오리진 요청이면 허용된 오리진을 명시한다.
+                    self.send_header("Access-Control-Allow-Origin", origin)
+                    self.send_header("Access-Control-Allow-Credentials", "true")
+                else:
+                    # Same-origin 요청이면 특정 오리진 제한 없이 허용한다.
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+                self.send_header("Access-Control-Allow-Headers", "Content-Type, X-API-Key")
+                self.send_header("Access-Control-Max-Age", "86400")
 
         def _write(self, status_code: int, body: dict[str, JsonValue]) -> None:
             payload = json.dumps(body, ensure_ascii=False, default=str).encode("utf-8")
             self.send_response(status_code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(payload)))
-            self._send_cors_headers()
+            self._send_cors_headers(origin=self.headers.get("Origin"))
             self.end_headers()
             _ = self.wfile.write(payload)
+
+        def _write_file(self, response: FileResponse) -> None:
+            """파일 응답을 작성한다 (#323).
+
+            파일 내용을 읽어 MIME 타입과 함께 전송한다. Content-Disposition
+            헤더를 추가하여 브라우저가 다운로드로 처리하도록 한다.
+            """
+            try:
+                content = response.file_path.read_bytes()
+            except OSError as exc:
+                _logger.error("Failed to read file %s: %s", response.file_path, exc)
+                self._write(500, {"error": "failed to read file"})
+                return
+
+            mime_type = _get_mime_type(response.file_path)
+            filename = response.filename
+
+            self.send_response(response.status_code)
+            self.send_header("Content-Type", f"{mime_type}; charset=utf-8")
+            self.send_header("Content-Length", str(len(content)))
+            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+            self._send_cors_headers()
+            self.end_headers()
+            _ = self.wfile.write(content)
 
         def do_GET(self) -> None:  # noqa: N802 - http.server 규약
             self._dispatch("GET")
@@ -142,10 +260,10 @@ def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
             self._dispatch("POST")
 
         def do_OPTIONS(self) -> None:  # noqa: N802 - http.server 규약
-            # CORS preflight 요청에 응답한다 (#254). body 없이 204로 허용 헤더만 반환한다.
+            # CORS preflight 요청에 응답한다 (#322). body 없이 204로 허용 헤더만 반환한다.
             self.send_response(204)
             self.send_header("Content-Length", "0")
-            self._send_cors_headers()
+            self._send_cors_headers(origin=self.headers.get("Origin"))
             self.end_headers()
 
         def log_message(self, format: str, *args: object) -> None:

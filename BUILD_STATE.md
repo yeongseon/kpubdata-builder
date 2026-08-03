@@ -1,5 +1,7 @@
 # Build Run State Machine — KPubData Builder
 
+> **v0.4 계약 범위**: ADR 0002(#308)에 따라 v0.4에서는 동기식 build만 유지합니다. 아래 **비동기 Job 상태 머신** 섹션은 미래 확장을 위해 문서화하나, v0.4 호출 계약에는 포함되지 않습니다.
+
 ## 1. 상태 개요
 
 Builder의 build run은 다음 상태를 따릅니다.
@@ -106,7 +108,53 @@ Manifest는 **artifact 생성 직후, publish 이전**에 생성하는 것을 �
 
 publish가 요청된 경우에는 publish 결과를 반영한 후 manifest를 업데이트하거나, publish 기록을 별도 항목으로 추가할 수 있습니다. 단, **manifest 스키마 소유권은 항상 Builder에 있습니다.**
 
-## 8. 관련 문서
+## 8. 비동기 Job 상태 머신 (미래 계획)
+
+> **x-planned**: 이 섹션은 미래 비동기 모드를 위해 문서화되었습니다. v0.4 호출 계약에는 포함되지 않습니다.
+
+비동기 실행 모드에서는 build run이 다음 상태를 따릅니다.
+
+`queued → running → succeeded` 또는 `failed` 또는 `cancelled`
+
+### 8.1 상태 정의
+
+| 상태 | 의미 |
+| :--- | :--- |
+| `queued` | 실행 대기열에 진입하여 실행을 기다리는 상태 |
+| `running` | Builder가 source를 fetch하고 조립을 수행 중인 상태 |
+| `succeeded` | 모든 source가 성공하고 artifact/manifest가 생성된 상태 |
+| `failed` | source 실행 또는 조립 중 실패한 상태 |
+| `cancelled` | 사용자 요청 또는 타임아웃으로 실행이 취소된 상태 |
+
+### 8.2 상태 전이 다이어그램
+
+```mermaid
+stateDiagram-v2
+    [*] --> queued: build 생성 요청
+    queued --> running: worker가 할당됨
+    running --> succeeded: 모든 소스 성공
+    running --> failed: 소스 또는 실행 오류
+    running --> cancelled: 취소 요청
+    queued --> cancelled: 큐에서 제거됨
+    cancelled --> [*]
+    failed --> [*]
+    succeeded --> [*]
+```
+
+### 8.3 v0.4 계약에서의 제외
+
+ADR 0002(#308)에 따라 v0.4에서는 동기식 `POST /build`만 유지합니다:
+
+- 비동기 job 상태 조회 API(`GET /builds/{run_id}/status`)는 **구현되지 않습니다**
+- `contract/builder-api.yaml`에 `x-planned: true`로 표시된 엔드포인트는 codegen 및 계약 테스트에서 제외됩니다
+- 향후 비동기 모드가 추가될 때 이 문서를 참고하여 상태 머신을 구현합니다
+
+### 8.4 관련 ADR
+
+- ADR 0002(#308): Build 실행 모델 결정 (동기 vs 비동기)
+- ADR 0005(#311): API 계약 단일 소스 및 코드 생성 전략
+
+## 9. 관련 문서
 
 | 문서 | 설명 |
 | :--- | :--- |
