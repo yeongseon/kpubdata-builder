@@ -40,7 +40,6 @@ _DISPATCH_ROUTES: dict[tuple[str, str], str] = {
     ("/build", "POST"): "createBuild",
     ("/builds", "GET"): "listBuilds",
     ("/artifacts/{run_id}", "GET"): "listBuildArtifacts",
-    ("/builds", "GET"): "listBuilds",
 }
 
 # (path, method) 형태의 계약 필수 오퍼레이션. BuilderService.dispatch가 실제로
@@ -292,7 +291,6 @@ _OPERATION_STATUS_CODES: dict[str, set[int]] = {
     "createBuild": {200, 400, 502},
     "listBuilds": {200, 400},
     "listBuildArtifacts": {200, 400, 404},
-    "listBuilds": {200, 400},
 }
 
 
