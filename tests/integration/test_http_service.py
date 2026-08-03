@@ -99,8 +99,10 @@ def _service(tmp_path: Path) -> BuilderService:
 
 
 @pytest.fixture()
-def http_server(tmp_path: Path) -> Iterable[str]:
+def http_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterable[str]:
     """실제 HTTPServer를 임의 포트에 기동해 http.py를 경유한 왕복을 검증한다."""
+    # 테스트에서는 dev-mode를 설정하여 인증을 생략한다 (#321, ADR 0006).
+    monkeypatch.setenv("KPUBDATA_BUILDER_DEV_MODE", "true")
     server = HTTPServer(("127.0.0.1", 0), make_handler(_service(tmp_path)))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

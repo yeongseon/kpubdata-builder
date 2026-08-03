@@ -10,12 +10,11 @@
 
 ## 2. 실행 모델
 
-Builder는 두 가지 실행 모델을 가집니다.
+Builder는 **동기식 실행 모델**을 사용합니다.
 
-| 모델 | 설명 | 적합한 작업 |
+| 모델 | 설명 | 적용 범위 |
 | :--- | :--- | :--- |
-| **동기식** | 요청-응답 안에서 결과를 바로 반환 | `/validate`, `/preview` |
-| **비동기식** | build를 생성하고 상태를 폴링 | `/build`, `/artifacts/{run_id}` |
+| **동기식** | 요청-응답 안에서 결과를 바로 반환 | 모든 엔드포인트 (`/version`, `/validate`, `/preview`, `/build`, `/artifacts/{run_id}`, `/builds`) |
 
 원칙:
 
@@ -280,6 +279,13 @@ BuildSpec을 실행 전에 검증합니다. body의 `spec` 키에 YAML 문자열
 `kpubdata_builder.service.API_CONTRACT_VERSION`과 일치해야 합니다
 (`test_service_contract`가 강제). 소비자는 `GET /version`으로 계약 버전을 먼저
 확인할 수 있고, `POST /validate`·`POST /build` 응답에도 `api_version`이 실립니다.
+
+버전 문자열 일치 외에, `test_service_contract`의 **`TestResponseConformance`** 는
+실제 `dispatch()` 응답 본문이 선언된 OpenAPI 스키마에 부합하는지(wire-level
+conformance) 순수 파이썬 validator(`tests/unit/_openapi.py`)로 검증합니다
+(#209, ADR-0005 미해결 질문 #1). app.py 응답에서 필수 필드가 빠지거나 타입이
+바뀌되 YAML이 갱신되지 않는 드리프트를 CI에서 차단합니다. 정적 경로/상태코드
+대조(#317, #319)가 *선언* 일치를 본다면, 이 검사는 *실제 wire* 일치를 봅니다.
 
 | 계약 operationId | 상태 | 현재 구현 경로 |
 | :--- | :--- | :--- |

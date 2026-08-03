@@ -7,8 +7,8 @@ info:
     계약 버전 조회를 제공한다. CLI와 HTTP service mode(#36)가 동일한 도메인 계약을
     공유한다. 본 문서는 BuilderService(service/app.py)의 dispatch 라우팅과 실제
     wire 형태를 기계 판독용(OpenAPI 3.1) 단일 소스로 고정하며, Studio 같은 소비자가
-    타입 클라이언트를 생성하는 기준이 된다. 구현되지 않은 비동기/publish 엔드포인트는
-    드리프트를 막기 위해 계약에서 제거했다(#226).
+    타입 클라이언트를 생성하는 기준이 된다. v0.4에서는 동기식 build만 유지하며
+    비동기/publish 엔드포인트는 제외된다(ADR 0002, #226).
 servers:
   - url: http://localhost:8000
     description: 로컬 builder 개발 서버
