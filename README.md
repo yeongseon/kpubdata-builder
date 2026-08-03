@@ -266,7 +266,38 @@ kpubdata-builder preview specs/weather.yaml --limit 5
 kpubdata-builder build specs/weather.yaml --output-dir ./dist/weather
 ```
 
-### Python API 예시
+### 서비스 모드
+
+Builder HTTP 서비스를 실행하여 Studio 같은 외부 클라이언트와 연동할 수 있습니다.
+
+```bash
+# 서버 시작 (기본: 127.0.0.1:8000)
+kpubdata-builder serve
+
+# 커스텀 호스트/포트
+kpubdata-builder serve --host 0.0.0.0 --port 8080
+```
+
+#### CORS 설정
+
+브라우저 클라이언트(Studio 등)와의 연동을 위해 크로스-오리진 요청을 허용해야 합니다.
+
+```bash
+# 허용할 오리진 설정 (콤마로 구분)
+export KPUBDATA_BUILDER_ALLOWED_ORIGINS=http://localhost:5173,https://studio.example.com
+
+# 인증 키 설정 (선택)
+export KPUBDATA_BUILDER_API_KEY=your-secret-key
+
+# 서버 시작
+kpubdata-builder serve
+```
+
+**보안 참고:** default-deny 정책이 적용되므로, `KPUBDATA_BUILDER_ALLOWED_ORIGINS`를 설정하지 않으면 모든 크로스-오리진 요청이 거부됩니다. 로컬 개발 시에는 `http://localhost:5173`을 명시적으로 설정하세요.
+
+### 향후 API 예시(placeholder)
+
+서비스 모드가 정식 도입되면 아래와 같은 형태의 API 사용 예시가 추가될 예정입니다.
 
 ```python
 from pathlib import Path

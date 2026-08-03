@@ -14,7 +14,7 @@ from typing import cast
 import pytest
 
 from kpubdata_builder.service import BuilderService, ServiceResponse, dispatch
-from kpubdata_builder.service.http import make_handler
+from kpubdata_builder.service.http import _clear_cors_cache, make_handler
 from kpubdata_builder.spec import JsonValue
 
 VALID_SPEC_YAML = (
@@ -364,6 +364,13 @@ class TestBuildFailureResponseCode:
         assert (tmp_path / "run1" / "manifest.json").exists()
 
 
+@pytest.fixture(autouse=True)
+def clear_cors_cache() -> None:
+    """CORS 캐시를 각 테스트 전에 비운다 (#322)."""
+    _clear_cors_cache()
+    yield
+
+
 @pytest.fixture()
 def http_server(
     tmp_path: Path,
@@ -548,21 +555,81 @@ class TestHttpAdapter:
     def test_response_includes_cors_header(
         self, http_server: tuple[str, HTTPServer, threading.Thread]
     ) -> None:
-        # 일반 응답에도 CORS 헤더가 포함되어야 한다 (#254).
+        # Same-origin 요청(Oriign 헤더 없음)은 CORS 헤더가 포함되어야 한다 (#322).
         base_url, _, _ = http_server
         with urllib.request.urlopen(f"{base_url}/version", timeout=2.0) as response:
+            # Same-origin이면 `*`를 반환한다.
             assert response.headers["Access-Control-Allow-Origin"] == "*"
 
-    def test_cors_allow_origin_is_configurable(
+    def test_cors_default_denied_when_no_env(
         self,
         http_server: tuple[str, HTTPServer, threading.Thread],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        # 환경변수로 허용 Origin을 특정 값으로 제한할 수 있어야 한다 (#254 보안 강화).
-        monkeypatch.setenv("KPUBDATA_BUILDER_CORS_ALLOW_ORIGIN", "http://localhost:5173")
+        # 환경변수 미설정 시 크로스-오리진 요청은 CORS 헤더가 없어야 한다 (#322 default-deny).
+        # env를 명확하게 지우고 테스트
+        monkeypatch.delenv("KPUBDATA_BUILDER_ALLOWED_ORIGINS", raising=False)
         base_url, _, _ = http_server
-        with urllib.request.urlopen(f"{base_url}/version", timeout=2.0) as response:
+        # Origin 헤더를 포함한 요청 (크로스-오리진으로 간주)
+        req = urllib.request.Request(
+            f"{base_url}/version", headers={"Origin": "http://localhost:5173"}
+        )
+        with urllib.request.urlopen(req, timeout=2.0) as response:
+            # default-deny이므로 CORS 헤더가 없어야 함
+            assert "Access-Control-Allow-Origin" not in response.headers
+
+    def test_cors_allowed_origins_configurable(
+        self,
+        http_server: tuple[str, HTTPServer, threading.Thread],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # KPUBDATA_BUILDER_ALLOWED_ORIGINS로 허용 Origin을 설정할 수 있어야 한다 (#322).
+        monkeypatch.setenv("KPUBDATA_BUILDER_ALLOWED_ORIGINS", "http://localhost:5173")
+        base_url, _, _ = http_server
+        # Origin 헤더를 포함한 요청
+        req = urllib.request.Request(
+            f"{base_url}/version", headers={"Origin": "http://localhost:5173"}
+        )
+        with urllib.request.urlopen(req, timeout=2.0) as response:
             assert response.headers["Access-Control-Allow-Origin"] == "http://localhost:5173"
+
+    def test_cors_multiple_origins_configurable(
+        self,
+        http_server: tuple[str, HTTPServer, threading.Thread],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # 여러 Origin을 콤마로 구분하여 설정할 수 있어야 한다 (#322).
+        monkeypatch.setenv(
+            "KPUBDATA_BUILDER_ALLOWED_ORIGINS",
+            "http://localhost:5173,https://studio.example.com",
+        )
+        base_url, _, _ = http_server
+        # 첫 번째 오리진으로 요청
+        req = urllib.request.Request(
+            f"{base_url}/version", headers={"Origin": "http://localhost:5173"}
+        )
+        with urllib.request.urlopen(req, timeout=2.0) as response:
+            assert response.headers["Access-Control-Allow-Origin"] == "http://localhost:5173"
+        # 두 번째 오리진으로 요청
+        req = urllib.request.Request(
+            f"{base_url}/version", headers={"Origin": "https://studio.example.com"}
+        )
+        with urllib.request.urlopen(req, timeout=2.0) as response:
+            assert response.headers["Access-Control-Allow-Origin"] == "https://studio.example.com"
+
+    def test_cors_rejects_disallowed_origin(
+        self,
+        http_server: tuple[str, HTTPServer, threading.Thread],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # 허용 목록에 없는 Origin은 CORS 헤더가 없어야 한다 (#322).
+        monkeypatch.setenv("KPUBDATA_BUILDER_ALLOWED_ORIGINS", "http://localhost:5173")
+        base_url, _, _ = http_server
+        # 허용되지 않은 오리진으로 요청
+        req = urllib.request.Request(f"{base_url}/version", headers={"Origin": "http://evil.com"})
+        with urllib.request.urlopen(req, timeout=2.0) as response:
+            # 허용되지 않은 오리진이므로 CORS 헤더가 없어야 함
+            assert "Access-Control-Allow-Origin" not in response.headers
 
     def test_missing_api_key_returns_401_when_configured(
         self,

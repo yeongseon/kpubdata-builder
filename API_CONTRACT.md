@@ -318,7 +318,40 @@ Studio 연동을 위해 향후 구조화된 에러 봉투 형식을 도입할 �
 
 이 형식은 Studio와의 교차 레포 조율이 필요한 후속 작업에서 활성화될 예정입니다.
 
-## 9. Python API — BuilderService
+## 9. CORS 정책
+
+브라우저 클라이언트(Studio 등)와의 연동을 위한 크로스-오리진 요청 정책입니다 (#322).
+
+### 9.1 Default-Deny
+
+- 기본 정책은 **default-deny**입니다: 환경변수 미설정 시 모든 크로스-오리진 요청을 거부합니다.
+- Same-origin 요청(브라우저가 Origin 헤더를 보내지 않는 경우)은 항상 허용됩니다.
+
+### 9.2 허용 오리진 설정
+
+`KPUBDATA_BUILDER_ALLOWED_ORIGINS` 환경변수로 허용할 오리진을 콤마로 구분하여 설정합니다.
+
+```bash
+# 단일 오리진 허용
+export KPUBDATA_BUILDER_ALLOWED_ORIGINS=http://localhost:5173
+
+# 복수 오리진 허용
+export KPUBDATA_BUILDER_ALLOWED_ORIGINS=http://localhost:5173,https://studio.example.com
+```
+
+### 9.3 Preflight 요청
+
+`OPTIONS` 메서드로 preflight 요청을 지원합니다. 허용된 오리진에 대해 다음 헤더를 응답합니다:
+
+- `Access-Control-Allow-Methods: GET, POST, OPTIONS`
+- `Access-Control-Allow-Headers: Content-Type, X-API-Key`
+- `Access-Control-Max-Age: 86400` (24시간)
+
+### 9.4 인증 헤더
+
+`X-API-Key` 커스텀 헤더를 사용한 인증은 preflight 요청에서 허용 목록에 포함되어야 합니다.
+
+## 10. Python API — BuilderService
 
 Python 코드에서 직접 사용하는 경우 `BuilderService`를 통해 HTTP 없이 같은 로직을 호출할 수 있습니다.
 
@@ -342,7 +375,7 @@ response = service.build(spec_yaml_str, run_id="my-run-001")
 # response.body: {"status": "ok"|"failed", "outcomes": [...], ...}
 ```
 
-## 10. 관련 문서
+## 11. 관련 문서
 
 | 문서 | 설명 |
 | :--- | :--- |
