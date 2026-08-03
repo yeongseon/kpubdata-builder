@@ -16,7 +16,18 @@ Builder는 **동기식 실행 모델**을 사용합니다.
 | :--- | :--- | :--- |
 | **동기식** | 요청-응답 안에서 결과를 바로 반환 | 모든 엔드포인트 (`/version`, `/validate`, `/preview`, `/build`, `/artifacts/{run_id}`, `/builds`) |
 
-모든 엔드포인트는 동기식으로 요청을 처리하며, 빌드 실행 시에도 요청 스레드에서 완료될 때까지 기다린 후 결과를 반환합니다.
+원칙:
+
+- **검증, preview, build는 동기식**으로 제공합니다.
+- 비동기 build 모델(`POST /builds` / `GET /builds/{run_id}`)은 후속 ADR에서 구현 예정입니다.
+
+> **결정 기록**: ADR 0002에서 v0.4는 동기 `POST /build`만 유지하기로 결정했습니다.
+> 비동기 job 모델은 상태 머신·취소·멱등성 등 시맨틱을 완비한 뒤 별도 이슈에서 구현합니다.
+
+추가 방향:
+
+- 현재 엔드포인트는 build 단위 계약을 유지합니다.
+- 향후 버전에서는 Medallion stage별 artifact/preview 조회를 위해 `/builds/{id}/stages/{stage}/artifacts` 같은 stage-specific endpoint를 노출할 수 있습니다.
 
 ## 3. 응답 코드 정책
 
@@ -39,7 +50,7 @@ Builder는 **동기식 실행 모델**을 사용합니다.
 | `/version` | `GET` | Builder API 계약 버전 조회 | 동기식 |
 | `/validate` | `POST` | BuildSpec 검증 | 동기식 |
 | `/preview` | `POST` | 샘플 실행 및 소스별 스키마 preview | 동기식 |
-| `/build` | `POST` | 빌드 실행 | 동기식 |
+| `/build` | `POST` | 빌드 실행 (동기식) | 동기식 |
 | `/artifacts/{run_id}` | `GET` | 실행 워크스페이스 산출물 목록 조회 | 동기식 |
 | `/builds` | `GET` | 빌드 이력 목록 조회 (최신 수정 시각 기준 내림차순) | 동기식 |
 
@@ -280,10 +291,10 @@ conformance) 순수 파이썬 validator(`tests/unit/_openapi.py`)로 검증합�
 | :--- | :--- | :--- |
 | `validateSpec` | 구현됨 | `POST /validate` (동기) |
 | `previewBuild` | 구현됨 | `POST /preview` (동기) |
-| `createBuild` | 구현됨 | `POST /build` (동기; 계약은 비동기 `POST /builds` 지향) |
+| `createBuild` | 구현됨 | `POST /build` (동기) |
 | `listBuildArtifacts` | 구현됨 | `GET /artifacts/{run_id}` |
 | `listDatasets` | 계획(planned)/미구현 | — |
-| `getBuild` | 계획(planned)/미구현 | — |
+| `getBuild` | 계획(planned)/미구현 — 비동기 job 모델 | `GET /builds/{run_id}` (후속 ADR) |
 | `getBuildManifest` | 계획(planned)/미구현 | — |
 | `publishArtifacts` | 계획(planned)/미구현 | — |
 | (메타) | 구현됨 | `GET /version` → `{service, api_version}` |
