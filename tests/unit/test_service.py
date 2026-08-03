@@ -284,19 +284,40 @@ class TestDispatch:
 
 
 class TestApiKeyAuth:
-    """API 키 인증(#248): X-API-Key 검증."""
+    """API 키 인증(#248, #321, ADR 0006): X-API-Key 검증, fail-closed 정책."""
 
-    def test_auth_skipped_when_env_unset(
+    def test_auth_required_when_env_and_dev_mode_unset(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # KPUBDATA_BUILDER_API_KEY 미설정 시 인증 없이 통과한다(로컬 개발 편의).
+        # ADR 0006 fail-closed: dev-mode 미설정 + API 키 미설정 시 인증 거부 (401).
         monkeypatch.delenv("KPUBDATA_BUILDER_API_KEY", raising=False)
+        monkeypatch.delenv("KPUBDATA_BUILDER_DEV_MODE", raising=False)
+        resp = dispatch(_service(tmp_path), "GET", "/version", None)
+        assert resp.status_code == 401
+        assert resp.body == {"error": "unauthorized"}
+
+    def test_auth_skipped_in_dev_mode(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # dev-mode 설정 시 API 키가 없어도 인증 생략 (로컬 개발 편의).
+        monkeypatch.delenv("KPUBDATA_BUILDER_API_KEY", raising=False)
+        monkeypatch.setenv("KPUBDATA_BUILDER_DEV_MODE", "true")
+        resp = dispatch(_service(tmp_path), "GET", "/version", None)
+        assert resp.status_code == 200
+
+    def test_auth_skipped_in_dev_mode_variant(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # dev-mode="1"도 인증 생략.
+        monkeypatch.delenv("KPUBDATA_BUILDER_API_KEY", raising=False)
+        monkeypatch.setenv("KPUBDATA_BUILDER_DEV_MODE", "1")
         resp = dispatch(_service(tmp_path), "GET", "/version", None)
         assert resp.status_code == 200
 
     def test_rejects_missing_api_key_when_configured(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        monkeypatch.delenv("KPUBDATA_BUILDER_DEV_MODE", raising=False)
         monkeypatch.setenv("KPUBDATA_BUILDER_API_KEY", "secret")
         resp = dispatch(_service(tmp_path), "GET", "/version", None)
         assert resp.status_code == 401
@@ -305,6 +326,7 @@ class TestApiKeyAuth:
     def test_rejects_wrong_api_key_when_configured(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        monkeypatch.delenv("KPUBDATA_BUILDER_DEV_MODE", raising=False)
         monkeypatch.setenv("KPUBDATA_BUILDER_API_KEY", "secret")
         resp = dispatch(_service(tmp_path), "GET", "/version", None, api_key="wrong")
         assert resp.status_code == 401
@@ -312,6 +334,7 @@ class TestApiKeyAuth:
     def test_accepts_matching_api_key(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        monkeypatch.delenv("KPUBDATA_BUILDER_DEV_MODE", raising=False)
         monkeypatch.setenv("KPUBDATA_BUILDER_API_KEY", "secret")
         resp = dispatch(_service(tmp_path), "GET", "/version", None, api_key="secret")
         assert resp.status_code == 200
@@ -320,6 +343,7 @@ class TestApiKeyAuth:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # /build처럼 비용이 큰 엔드포인트도 예외 없이 보호돼야 한다.
+        monkeypatch.delenv("KPUBDATA_BUILDER_DEV_MODE", raising=False)
         monkeypatch.setenv("KPUBDATA_BUILDER_API_KEY", "secret")
         resp = dispatch(
             _service(tmp_path), "POST", "/build", {"spec": VALID_SPEC_YAML, "run_id": "auth1"}
@@ -341,8 +365,32 @@ class TestBuildFailureResponseCode:
 @pytest.fixture()
 def http_server(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> Iterable[tuple[str, HTTPServer, threading.Thread]]:
     """실제 HTTPServer를 임의 포트에 띄워서 어댑터 레벨 동작을 검증한다."""
+    # 테스트에서는 dev-mode를 설정하여 인증을 생략한다 (#321, ADR 0006).
+    monkeypatch.setenv("KPUBDATA_BUILDER_DEV_MODE", "true")
+    service = _service(tmp_path)
+    server = HTTPServer(("127.0.0.1", 0), make_handler(service))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://{server.server_address[0]}:{server.server_address[1]}"
+    try:
+        yield base_url, server, thread
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=1.0)
+
+
+@pytest.fixture()
+def http_server_with_auth(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterable[tuple[str, HTTPServer, threading.Thread]]:
+    """인증이 활성화된 HTTPServer (dev-mode 미설정, API 키 설정)."""
+    monkeypatch.delenv("KPUBDATA_BUILDER_DEV_MODE", raising=False)
+    monkeypatch.setenv("KPUBDATA_BUILDER_API_KEY", "secret")
     service = _service(tmp_path)
     server = HTTPServer(("127.0.0.1", 0), make_handler(service))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -516,23 +564,20 @@ class TestHttpAdapter:
 
     def test_missing_api_key_returns_401_when_configured(
         self,
-        http_server: tuple[str, HTTPServer, threading.Thread],
-        monkeypatch: pytest.MonkeyPatch,
+        http_server_with_auth: tuple[str, HTTPServer, threading.Thread],
     ) -> None:
         # 어댑터가 X-API-Key 헤더를 dispatch로 전달해야 한다 (#248).
-        monkeypatch.setenv("KPUBDATA_BUILDER_API_KEY", "secret")
-        base_url, _, _ = http_server
+        base_url, _, _ = http_server_with_auth
         with pytest.raises(urllib.error.HTTPError) as exc_info:
             urllib.request.urlopen(f"{base_url}/version", timeout=2.0)
         assert exc_info.value.code == 401
 
     def test_valid_api_key_header_is_accepted(
         self,
-        http_server: tuple[str, HTTPServer, threading.Thread],
-        monkeypatch: pytest.MonkeyPatch,
+        http_server_with_auth: tuple[str, HTTPServer, threading.Thread],
     ) -> None:
-        monkeypatch.setenv("KPUBDATA_BUILDER_API_KEY", "secret")
-        base_url, _, _ = http_server
+        # http_server_with_auth fixture가 이미 API 키를 설정하므로 monkeypatch 불필요
+        base_url, _, _ = http_server_with_auth
         req = urllib.request.Request(f"{base_url}/version", headers={"X-API-Key": "secret"})
         with urllib.request.urlopen(req, timeout=2.0) as response:
             assert response.status == 200
