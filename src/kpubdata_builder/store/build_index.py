@@ -51,14 +51,15 @@ class BuildIndex:
     - WAL 모드 + busy_timeout으로 동시성 안전 장치
     """
 
-    def __init__(self, output_root: Path) -> None:
+    def __init__(self, output_root: Path, *, index_path: Path | None = None) -> None:
         """인덱스를 초기화한다.
 
         Args:
             output_root: 빌드 출력 루트 디렉터리 (인덱스는 output_root/_builds.sqlite)
+            index_path: 인덱스 파일 경로 오버라이드 (rebuild_index의 원자적 교체용 임시 파일 등)
         """
         self._output_root = output_root
-        self._index_path = output_root / _INDEX_FILENAME
+        self._index_path = index_path if index_path is not None else output_root / _INDEX_FILENAME
         self._local = threading.local()
         self._init_db()
 
@@ -238,8 +239,13 @@ class BuildIndex:
             pass
 
     def close(self) -> None:
-        """연결을 닫는다."""
+        """연결을 닫는다.
+
+        파일을 이름 변경(rename)만으로 안전하게 이관할 수 있도록,
+        닫기 전에 WAL 내용을 메인 DB 파일로 체크포인트한다.
+        """
         if hasattr(self._local, "conn"):
+            self._local.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             self._local.conn.close()
             delattr(self._local, "conn")
 
@@ -247,8 +253,9 @@ class BuildIndex:
 def rebuild_index(output_root: Path) -> int:
     """파일시스템 스캔으로 인덱스를 재구축한다.
 
-    output_root 아래의 모든 manifest.json을 스캔하여 인덱스를 다시 빌드한다.
-    기존 인덱스는 삭제되고 새로 생성된다.
+    output_root 아래의 모든 manifest.json을 스캔하여 새 인덱스를 .tmp 파일에
+    빌드한 뒤, 기존 인덱스를 .bak으로 백업하고 .tmp를 원자적으로 rename하여
+    교체한다 (#366). 스캔 도중 실패해도 기존 인덱스는 그대로 남는다.
 
     Args:
         output_root: 빌드 출력 루트 디렉터리
@@ -258,40 +265,59 @@ def rebuild_index(output_root: Path) -> int:
     """
     import json
 
-    index_path = output_root / _INDEX_FILENAME
-    # 기존 인덱스 삭제
-    if index_path.exists():
-        index_path.unlink()
-
-    index = BuildIndex(output_root)
-    count = 0
-
     if not output_root.exists():
         return 0
 
-    for run_dir in output_root.iterdir():
-        if not run_dir.is_dir():
-            continue
-        manifest_path = run_dir / "manifest.json"
-        if not manifest_path.exists():
-            continue
+    index_path = output_root / _INDEX_FILENAME
+    tmp_path = output_root / f"{_INDEX_FILENAME}.tmp"
+    backup_path = output_root / f"{_INDEX_FILENAME}.bak"
 
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            continue
+    # 이전 실행이 중단되어 남은 임시 파일 정리
+    tmp_path.unlink(missing_ok=True)
 
-        status = "failed" if manifest.get("errors") else "ok"
-        started_at = manifest.get("started_at")
-        finished_at = manifest.get("finished_at")
+    index = BuildIndex(output_root, index_path=tmp_path)
+    try:
+        count = 0
+        for run_dir in output_root.iterdir():
+            if not run_dir.is_dir():
+                continue
+            manifest_path = run_dir / "manifest.json"
+            if not manifest_path.exists():
+                continue
 
-        index.insert_or_replace(
-            run_id=run_dir.name,
-            status=status,  # type: ignore[arg-type]
-            started_at=started_at,
-            finished_at=finished_at,
-        )
-        count += 1
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+
+            status = "failed" if manifest.get("errors") else "ok"
+            started_at = manifest.get("started_at")
+            finished_at = manifest.get("finished_at")
+
+            index.insert_or_replace(
+                run_id=run_dir.name,
+                status=status,  # type: ignore[arg-type]
+                started_at=started_at,
+                finished_at=finished_at,
+            )
+            count += 1
+    finally:
+        index.close()
+
+    # 원자적 교체: 기존 인덱스를 .bak으로 백업 후 .tmp를 원본 자리로 rename
+    backup_path.unlink(missing_ok=True)
+    if index_path.exists():
+        index_path.rename(backup_path)
+
+    try:
+        tmp_path.rename(index_path)
+    except OSError:
+        # 교체 실패 시 백업에서 복원
+        if backup_path.exists():
+            backup_path.rename(index_path)
+        raise
+    else:
+        backup_path.unlink(missing_ok=True)
 
     return count
 
