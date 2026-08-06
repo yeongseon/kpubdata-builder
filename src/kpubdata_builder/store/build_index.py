@@ -248,7 +248,7 @@ def rebuild_index(output_root: Path) -> int:
     """파일시스템 스캔으로 인덱스를 재구축한다.
 
     output_root 아래의 모든 manifest.json을 스캔하여 인덱스를 다시 빌드한다.
-    기존 인덱스는 삭제되고 새로 생성된다.
+    원자적 교체 패턴(.bak/.tmp swap)을 사용하여 크래시 발생 시 인덱스 손실을 방지한다.
 
     Args:
         output_root: 빌드 출력 루트 디렉터리
@@ -257,43 +257,64 @@ def rebuild_index(output_root: Path) -> int:
         재구축된 빌드 수
     """
     import json
+    import shutil
 
     index_path = output_root / _INDEX_FILENAME
-    # 기존 인덱스 삭제
+    backup_path = output_root / f"{_INDEX_FILENAME}.bak"
+
+    # 기존 인덱스 백업
     if index_path.exists():
-        index_path.unlink()
+        shutil.copy2(index_path, backup_path)
 
-    index = BuildIndex(output_root)
-    count = 0
+    try:
+        # 기존 인덱스 삭제 후 새로 생성
+        if index_path.exists():
+            index_path.unlink()
 
-    if not output_root.exists():
-        return 0
+        index = BuildIndex(output_root)
+        count = 0
 
-    for run_dir in output_root.iterdir():
-        if not run_dir.is_dir():
-            continue
-        manifest_path = run_dir / "manifest.json"
-        if not manifest_path.exists():
-            continue
+        if output_root.exists():
+            for run_dir in output_root.iterdir():
+                if not run_dir.is_dir():
+                    continue
+                manifest_path = run_dir / "manifest.json"
+                if not manifest_path.exists():
+                    continue
 
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            continue
+                try:
+                    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    continue
 
-        status = "failed" if manifest.get("errors") else "ok"
-        started_at = manifest.get("started_at")
-        finished_at = manifest.get("finished_at")
+                status = "failed" if manifest.get("errors") else "ok"
+                started_at = manifest.get("started_at")
+                finished_at = manifest.get("finished_at")
 
-        index.insert_or_replace(
-            run_id=run_dir.name,
-            status=status,  # type: ignore[arg-type]
-            started_at=started_at,
-            finished_at=finished_at,
-        )
-        count += 1
+                index.insert_or_replace(
+                    run_id=run_dir.name,
+                    status=status,
+                    started_at=started_at,
+                    finished_at=finished_at,
+                    spec_digest=None,
+                    error=None,
+                )
+                count += 1
 
-    return count
+        index.close()
+
+        # 성공 시 백업 삭제
+        if backup_path.exists():
+            backup_path.unlink()
+
+        return count
+
+    except Exception:
+        # 실패 시 복구
+        if backup_path.exists():
+            shutil.copy2(backup_path, index_path)
+
+        raise
 
 
 __all__ = ["BuildIndex", "BuildEntry", "rebuild_index", "SCHEMA_VERSION"]
