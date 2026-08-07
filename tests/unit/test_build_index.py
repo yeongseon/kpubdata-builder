@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from kpubdata_builder.store import SCHEMA_VERSION, BuildIndex, rebuild_index
 
 
@@ -273,3 +275,59 @@ class TestRebuildIndex:
         builds = index.list_builds()
         assert len(builds) == 1
         assert builds[0].run_id == "good"
+
+    def test_rebuild_leaves_no_tmp_or_bak_after_success(self, tmp_path: Path) -> None:
+        """정상 재구축 후에는 .tmp/.bak 잔여 파일이 남지 않는다 (#366)."""
+        index = BuildIndex(tmp_path)
+        index.close()
+
+        rebuild_index(tmp_path)
+
+        assert (tmp_path / "_builds.sqlite").exists()
+        assert not (tmp_path / "_builds.sqlite.tmp").exists()
+        assert not (tmp_path / "_builds.sqlite.bak").exists()
+
+    def test_rebuild_cleans_up_stale_tmp_file(self, tmp_path: Path) -> None:
+        """이전 실행이 중단되어 남은 .tmp 파일이 있어도 재구축은 정상 동작한다 (#366)."""
+        stale_tmp = tmp_path / "_builds.sqlite.tmp"
+        stale_tmp.write_text("stale garbage")
+
+        count = rebuild_index(tmp_path)
+
+        assert count == 0
+        assert not stale_tmp.exists()
+
+    def test_rebuild_restores_backup_when_swap_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """.tmp -> 원본 교체가 실패하면 기존 인덱스를 백업에서 복원한다 (#366)."""
+        index = BuildIndex(tmp_path)
+        index.insert_or_replace(
+            run_id="old",
+            status="ok",
+            started_at="2025-01-01T09:00:00Z",
+            finished_at="2025-01-01T09:05:00Z",
+        )
+        index.close()
+
+        index_path = tmp_path / "_builds.sqlite"
+        tmp_index_path = tmp_path / "_builds.sqlite.tmp"
+        original_rename = Path.rename
+
+        def flaky_rename(self: Path, target: Path) -> Path:
+            if self == tmp_index_path:
+                raise OSError("simulated rename failure")
+            return original_rename(self, target)
+
+        monkeypatch.setattr(Path, "rename", flaky_rename)
+
+        with pytest.raises(OSError):
+            rebuild_index(tmp_path)
+
+        monkeypatch.undo()
+
+        assert index_path.exists()
+        assert not (tmp_path / "_builds.sqlite.bak").exists()
+
+        restored = BuildIndex(tmp_path)
+        assert restored.get("old") is not None
