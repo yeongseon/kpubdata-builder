@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: KPubData Builder Service API
-  version: "1.0.0"
+  version: "1.1.0"
   description: >-
     Builder 중심 서비스 계약. BuildSpec 검증, preview, build 실행, artifact 조회,
     계약 버전 조회를 제공한다. CLI와 HTTP service mode(#36)가 동일한 도메인 계약을
@@ -15,6 +15,7 @@ servers:
 
 security:
   - ApiKeyAuth: []
+  - bearerAuth: []
 
 paths:
   /version:
@@ -187,6 +188,13 @@ components:
       description: >-
         서버에 KPUBDATA_BUILDER_API_KEY가 설정된 경우 필수. 미설정 시(로컬 개발 기본값)
         인증 없이 모든 요청이 허용된다 (#248).
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >-
+        Google OIDC ID 토큰 (ADR 0009). Authorization: Bearer <jwt>.
+        OIDC_ISSUER 미설정 시 비활성 — 기존 ApiKeyAuth 배포에 영향 없음 (#385).
 
   responses:
     Unauthorized:
