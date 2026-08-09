@@ -140,6 +140,47 @@ class BuilderService:
             200, {"service": "kpubdata-builder", "api_version": API_CONTRACT_VERSION}
         )
 
+    def catalog(self) -> ServiceResponse:
+        """사용 가능한 provider/dataset 카탈로그를 반환한다 (#416, BL2).
+
+        kpubdata Client의 catalog에서 provider별 dataset 목록을 구성한다.
+        시크릿 값은 노출하지 않고 필요 여부만 표시한다.
+        """
+        try:
+            client = self._client_factory()
+            cat = getattr(client, "_catalog", None)
+            if cat is None:
+                return ServiceResponse(502, {"error": "catalog unavailable: client has no catalog"})
+            providers_data: list[JsonValue] = []
+            for provider_name in (
+                "datago",
+                "bok",
+                "law",
+                "seoul",
+                "kosis",
+                "lofin",
+                "localdata",
+                "semas",
+            ):
+                try:
+                    items = cat.list(provider=provider_name)
+                    datasets: list[JsonValue] = [
+                        {
+                            "name": item.dataset_key,
+                            "title": item.name,
+                            "requires_service_key": bool(
+                                getattr(item, "raw_metadata", {}).get("service_key_param")
+                            ),
+                        }
+                        for item in items
+                    ]
+                    providers_data.append({"name": provider_name, "datasets": datasets})
+                except Exception:
+                    continue
+            return ServiceResponse(200, {"providers": providers_data})
+        except Exception as exc:
+            return ServiceResponse(502, {"error": f"catalog unavailable: {exc}"})
+
     def validate(self, spec_yaml: str) -> ServiceResponse:
         """BuildSpec을 파싱·검증한다."""
         try:
@@ -437,6 +478,9 @@ def dispatch(
 
     if method == "GET" and path == "/version":
         return service.version()
+
+    if method == "GET" and path == "/catalog":
+        return service.catalog()
 
     if method == "POST" and path == "/validate":
         spec = _spec_from_body(body)
