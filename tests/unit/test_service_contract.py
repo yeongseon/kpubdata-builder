@@ -34,6 +34,7 @@ _CONTRACT_PATH = Path(__file__).parents[2] / "contract" / "builder-api.yaml"
 # service/app.py:dispatch의 라우팅 규칙을 기계적으로 추출하기 어렵기 때문에
 # 명시적으로 선언하여 유지보수성을 높인다.
 _DISPATCH_ROUTES: dict[tuple[str, str], str] = {
+    ("/healthz", "GET"): "healthz",
     ("/version", "GET"): "getVersion",
     ("/validate", "POST"): "validateSpec",
     ("/preview", "POST"): "previewBuild",
@@ -45,6 +46,7 @@ _DISPATCH_ROUTES: dict[tuple[str, str], str] = {
 # (path, method) 형태의 계약 필수 오퍼레이션. BuilderService.dispatch가 실제로
 # 라우팅하는 동기 엔드포인트와 1:1로 대응한다.
 _REQUIRED_OPERATIONS = [
+    ("/healthz", "get"),
     ("/version", "get"),
     ("/validate", "post"),
     ("/preview", "post"),
@@ -110,6 +112,7 @@ def test_service_api_version_matches_contract() -> None:
 # 계약이 기술하는 모든 오퍼레이션은 BuilderService에 실제로 구현돼 있어야 한다.
 # 구현 경로 이름은 계약과 1:1로 일치한다(#226: aspirational 비동기/publish 라우트 제거).
 _IMPLEMENTED_OPERATIONS = {
+    "healthz",  # GET /healthz (무인증, #372)
     "getVersion",  # GET /version
     "validateSpec",  # POST /validate
     "previewBuild",  # POST /preview
@@ -285,6 +288,7 @@ def test_planned_operations_excluded_from_implementation_check() -> None:
 # 각 operation이 YAML에 선언한 상태 코드와 실제 구현이 반환하는 상태 코드의
 # 매핑. service/app.py:dispatch와 각 service 메서드를 분석하여 작성한다.
 _OPERATION_STATUS_CODES: dict[str, set[int]] = {
+    "healthz": {200},
     "getVersion": {200},
     "validateSpec": {200, 400},
     "previewBuild": {200, 400},
@@ -330,9 +334,10 @@ def test_declared_status_codes_match_implementation() -> None:
         # YAML에 선언된 상태 코드 추출
         declared_codes = _extract_declared_status_codes(operation)
 
-        # 실제 구현의 상태 코드 (401 인증 오류는 모든 엔드포인트에 공통이므로 추가)
+        # 401은 인증 게이트 안의 엔드포인트에 공통. 단 security: [] (무인증, #372)는 제외.
+        is_unauthenticated = operation.get("security") == []
         implemented_codes = _OPERATION_STATUS_CODES.get(operation_id, set())
-        all_implemented_codes = implemented_codes | {401}
+        all_implemented_codes = implemented_codes | (set() if is_unauthenticated else {401})
 
         assert declared_codes == all_implemented_codes, (
             f"상태 코드 불일치: {method} {path} (operationId: {operation_id})\n"

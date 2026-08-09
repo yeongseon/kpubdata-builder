@@ -55,4 +55,9 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 # KPUBDATA_BUILDER_PORT(기본 8000)가 이 포트를 가리킨다.
 EXPOSE 8000
 
+# 무인증 /healthz로 liveness probe (#372). python-slim에 curl/wget이 없으므로
+# 표준 라이브러리 urllib를 사용한다. 포트는 KPUBDATA_BUILDER_PORT를 따른다.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD python -c "import os,urllib.request; urllib.request.urlopen('http://localhost:'+os.environ.get('KPUBDATA_BUILDER_PORT','8000')+'/healthz',timeout=3)"
+
 ENTRYPOINT ["docker-entrypoint.sh"]

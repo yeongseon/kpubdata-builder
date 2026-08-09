@@ -705,6 +705,21 @@ class TestHttpAdapter:
         with urllib.request.urlopen(req, timeout=2.0) as response:
             assert response.status == 200
 
+    def test_healthz_accessible_without_api_key(
+        self,
+        http_server_with_auth: tuple[str, HTTPServer, threading.Thread],
+    ) -> None:
+        # /healthz는 인증 게이트 밖에서 무인증 노출된다 (#372).
+        # 프로브가 자격증명을 실을 수 없으므로 키 없이 200 + {"status":"ok"}만 반환.
+        base_url, _, _ = http_server_with_auth
+        with urllib.request.urlopen(f"{base_url}/healthz", timeout=2.0) as response:
+            assert response.status == 200
+            body = cast(dict[str, object], json.loads(response.read()))
+        assert body == {"status": "ok"}
+        # 버전·서비스 메타 정보가 누출되지 않아야 한다.
+        assert "api_version" not in body
+        assert "service" not in body
+
 
 class TestHttpRobustness:
     """#218 (JSON 500 handler) 과 #219 (DoS hardening) 검증."""
