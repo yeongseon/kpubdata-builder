@@ -47,7 +47,6 @@ nav:
   - 프로젝트:
       - 요구사항 (PRD): PRD.md
       - 로드맵: ROADMAP.md
-      - 작업 계획: PLAN.md
       - 변경 이력: CHANGELOG.md
   - ADR:
       - Builder as Orchestrator: adrs/0001-builder-as-orchestrator.md
