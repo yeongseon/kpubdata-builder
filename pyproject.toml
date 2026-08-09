@@ -46,6 +46,7 @@ docs = [
 ]
 parquet = ["pyarrow>=15,<26"]
 huggingface = ["huggingface-hub>=0.23,<2"]
+auth = ["pyjwt[crypto]>=2.8,<3"]
 publish = ["huggingface-hub>=0.23,<2", "xmltodict>=0.13,<2", "kaggle>=1.6,<2"]
 dev = [
   "build>=1.2,<2",
@@ -54,6 +55,8 @@ dev = [
   "pytest-cov>=5,<8",
   "ruff>=0.5,<1",
   "types-PyYAML>=6.0",
+  # auth extra를 dev에 포함해 CI(mypy/ruff/pytest)에서 항상 타입 체크 가능 (#385).
+  "pyjwt[crypto]>=2.8,<3",
 ]
 
 [tool.hatch.build.targets.wheel]
