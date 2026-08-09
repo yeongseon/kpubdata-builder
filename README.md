@@ -238,7 +238,7 @@ docker run --rm -p 8000:8000 -e KPUBDATA_BUILDER_DEV=1 kpubdata-builder:latest
 docker build -t kpubdata-builder:latest .
 
 # 여러 extra / 최소 이미지
-docker build --build-arg EXTRAS=publish,parquet -t kpubdata-builder:full .
+docker build --build-arg EXTRAS="publish parquet" -t kpubdata-builder:full .
 docker build --build-arg EXTRAS= -t kpubdata-builder:minimal .
 ```
 
