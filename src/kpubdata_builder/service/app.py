@@ -356,6 +356,7 @@ def dispatch(
     query: str = "",
     *,
     api_key: str | None = None,
+    bearer_token: str | None = None,
 ) -> ServiceResponse | FileResponse:
     """(method, path)를 BuilderService 연산으로 라우팅한다.
 
@@ -367,9 +368,9 @@ def dispatch(
     """
     # 인증 게이트 (#384): Principal을 얻지 못하면 401.
     # principal은 아직 연산에 전달하지 않지만, 인가(C1/C2 run 소유권) 훅용으로 계산한다.
-    principal = authenticate(api_key)
+    principal = authenticate(api_key=api_key, bearer_token=bearer_token)
     if isinstance(principal, AuthError):
-        return ServiceResponse(401, {"error": "unauthorized"})
+        return ServiceResponse(principal.status_code, {"error": "unauthorized"})
 
     if method == "GET" and path == "/version":
         return service.version()

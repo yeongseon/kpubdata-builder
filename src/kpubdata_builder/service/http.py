@@ -25,6 +25,7 @@ from urllib.parse import urlsplit
 
 from ..spec import JsonValue
 from .app import BuilderService, FileResponse, dispatch
+from .auth import validate_oidc_config
 
 # 단일 요청이 메모리를 고갈시키거나 단일 스레드 서버를 멈추게 하지 않도록 body 크기를
 # 제한한다. spec YAML 요청에 충분하면서도 남용을 막는 보수적 상한 (#186).
@@ -184,6 +185,7 @@ def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
                     body,
                     query=split.query,
                     api_key=self.headers.get("X-API-Key"),
+                    bearer_token=self.headers.get("Authorization"),
                 )
             except Exception:
                 _logger.error(
@@ -326,6 +328,8 @@ def serve(
         port: 바인딩 포트.
         max_workers: 동시에 요청을 처리할 최대 스레드 수.
     """
+    # 기동 시 OIDC 설정 검증 (fail-closed, #385). OIDC 비활성 시 no-op.
+    validate_oidc_config()
     server = BoundedThreadingHTTPServer(
         (host, port), make_handler(service), max_workers=max_workers
     )
