@@ -411,11 +411,13 @@ def test_publish_kaggle_end_to_end(
     assert "publish: dataset.sample -> kaggle" in captured.out
     assert "artifacts: 1" in captured.out
 
+    def test_serve_invokes_http_server(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # serve 명령이 http.serve를 올바른 host/port로 호출해야 한다 (#249).
+        # 외부 환경의 KPUBDATA_BUILDER_MAX_WORKERS 누출을 차단 (#374 review).
+        monkeypatch.delenv("KPUBDATA_BUILDER_MAX_WORKERS", raising=False)
 
-def test_serve_invokes_http_server(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    # serve 명령이 http.serve를 올바른 host/port로 호출해야 한다 (#249).
     import kpubdata_builder.service.http as http_module
     from kpubdata_builder.service import BuilderService
 

@@ -323,9 +323,10 @@ def serve(
     클라이언트가 서버 전체를 멈추지 않으면서도 (#219), 동시 처리 스레드 수에
     상한을 두어 DoS를 방지한다 (#253).
 
-    SIGTERM/SIGINT를 받으면 serve_forever를 중단하고 진행 중 요청이 끝나도록
+    SIGTERM을 받으면 serve_forever를 중단하고 진행 중 요청이 끝나도록
     우아한 종료(graceful shutdown)를 수행한다 (#374). ACA/K8s 롤링 업데이트가
     컨테이너에 SIGTERM을 보낼 때 작업이 강제로 절단되지 않는다.
+    SIGINT(Ctrl-C)는 건드리지 않아 KeyboardInterrupt가 자연히 전파된다.
 
     매개변수:
         service: 노출할 BuilderService.
@@ -345,15 +346,14 @@ def serve(
 
     import signal
 
-    # SIGTERM(컨테이너 오케스트레이터)과 SIGINT(Ctrl-C) 모두 우아한 종료로 연결.
+    # SIGTERM만 커스텀 핸들러로 연결 (컨테이너 오케스트레이터).
+    # SIGINT는 건드리지 않아 Ctrl-C의 KeyboardInterrupt가 자연히 전파된다.
     previous_term = signal.signal(signal.SIGTERM, _shutdown)
-    previous_int = signal.signal(signal.SIGINT, _shutdown)
     try:
         server.serve_forever()
     finally:
         server.server_close()
         signal.signal(signal.SIGTERM, previous_term)
-        signal.signal(signal.SIGINT, previous_int)
 
 
 __all__ = ["BoundedThreadingHTTPServer", "make_handler", "serve"]
