@@ -354,4 +354,4 @@ def export(self, artifact, target, output_dir) -> ExportResult:
 ### 상위 ADR
 | ADR | 제목 | 상태 |
 | :--- | :--- | :--- |
-| [ADR 0004](./docs/adrs/0004-plugin-exporter-contract.md) | Plugin Exporter API 계약 안정화 | 승인됨 |
+| [ADR 0004](./adrs/0004-plugin-exporter-contract.md) | Plugin Exporter API 계약 안정화 | 승인됨 |

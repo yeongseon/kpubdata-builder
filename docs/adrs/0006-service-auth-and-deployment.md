@@ -2,7 +2,7 @@
 
 - 상태: 승인됨(Accepted)
 - 관련 이슈: #312, #237, #248, #253
-- 관련 문서: [API_CONTRACT.md](../../API_CONTRACT.md), [ARCHITECTURE.md](../../ARCHITECTURE.md)
+- 관련 문서: [API_CONTRACT.md](../API_CONTRACT.md), [ARCHITECTURE.md](../ARCHITECTURE.md)
 
 ## 결정 (승인됨)
 

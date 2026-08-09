@@ -142,8 +142,10 @@ src/kpubdata_builder/
 ├── tabular/         # Polars 기반 표 처리
 ├── exporters/       # 데이터 형식 변환 (Markdown, JSONL 등)
 ├── publishers/      # 결과물 업로드 (HF, GitHub 등)
-├── spec.py          # 빌드 기획서(BuildSpec) 정의
-└── manifest.py      # 빌드 명세서 생성 로직
+├── service/         # HTTP 서비스 모드 (app.py, http.py, auth.py)
+├── store/           # BuildIndex (SQLite 파생 인덱스, ADR 0003)
+├── spec/            # 빌드 기획서(BuildSpec) 정의 및 검증
+└── manifest/        # 빌드 명세서 생성 로직
 ```
 
 ### 이 파일을 수정해야 할 때

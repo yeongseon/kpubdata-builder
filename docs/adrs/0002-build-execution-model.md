@@ -2,7 +2,7 @@
 
 - 상태: 승인됨(Accepted)
 - 관련 이슈: #308, #241, #209, kpubdata-studio#102
-- 관련 문서: [API_CONTRACT.md](../../API_CONTRACT.md), [BUILD_STATE.md](../../BUILD_STATE.md)
+- 관련 문서: [API_CONTRACT.md](../API_CONTRACT.md), [BUILD_STATE.md](../BUILD_STATE.md)
 
 ## 결정 (승인됨)
 
