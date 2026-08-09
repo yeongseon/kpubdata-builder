@@ -14,9 +14,7 @@ Studio 같은 외부 UI가 Builder를 호출할 수 있도록 validate/preview/b
 from __future__ import annotations
 
 import heapq
-import hmac
 import json
-import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,6 +31,7 @@ from ..stages._path_safety import ensure_within, validate_path_segment
 from ..stages.bronze.build import SourceClient
 from ..store import BuildIndex
 from ..tabular import DEFAULT_PREVIEW_LIMIT
+from .auth import AuthError, authenticate
 
 # Build list entry type for API responses
 _BuildListEntry = dict[str, str | None]
@@ -41,39 +40,6 @@ _BuildListEntry = dict[str, str | None]
 # (test_service_contract가 강제), 응답에 실어 Studio 같은 소비자가 하위 호환을
 # 협상할 수 있게 한다 (#209).
 API_CONTRACT_VERSION = "1.0.0"
-
-# 서버가 요구하는 API 키. 환경변수로만 주입한다 (#248).
-# ADR 0006에 따라 fail-closed로 동작: dev-mode 미설정 + API 키 미설정 시 인증을 거부한다.
-_API_KEY_ENV = "KPUBDATA_BUILDER_API_KEY"
-_DEV_MODE_ENV = "KPUBDATA_BUILDER_DEV_MODE"
-
-
-def _is_dev_mode() -> bool:
-    """로컬 개발 모드인지 확인한다 (#321, ADR 0006).
-
-    KPUBDATA_BUILDER_DEV_MODE가 'true'/'1'이면 dev-mode로 간주하여 인증을 생략한다.
-    프로덕션 배포에서는 이 환경변수를 설정하지 않아야 한다.
-    """
-    return os.environ.get(_DEV_MODE_ENV, "").lower() in ("true", "1")
-
-
-def _verify_api_key(api_key: str | None) -> bool:
-    """요청의 X-API-Key를 서버에 설정된 키와 비교한다 (#248, #321, ADR 0006).
-
-    ADR 0006 fail-closed 정책:
-    - dev-mode인 경우: 인증을 생략한다 (로컬 개발 편의).
-    - dev-mode가 아닌 경우:
-      - API 키가 설정되어 있으면 키를 검증한다.
-      - API 키가 미설정이면 인증을 거부한다 (False 반환).
-    """
-    if _is_dev_mode():
-        return True
-
-    expected = os.environ.get(_API_KEY_ENV)
-    if not expected:
-        # fail-closed: dev-mode 미설정 + API 키 미설정 시 인증 거부
-        return False
-    return api_key is not None and hmac.compare_digest(api_key, expected)
 
 
 @dataclass(frozen=True)
@@ -394,18 +360,19 @@ def dispatch(
     """(method, path)를 BuilderService 연산으로 라우팅한다.
 
     GET /healthz는 인증 없이 반환하고 (#372), 그 외 엔드포인트는
-    X-API-Key(또는 Bearer) 검증 후 라우팅한다 (#248).
+    authenticate()로 Principal을 얻어 인증 게이트를 통과한 후 라우팅한다.
+    dev-mode이면 인증 생략, 그 외는 fail-closed(401)로 동작한다 (#248, #384).
 
     반환값:
         ServiceResponse 또는 FileResponse (#323).
     """
     # /healthz는 인증 게이트 밖에서 무인증 노출 (#372).
-    # liveness/readiness probe(ACA/AKS/App Gateway)가 자격증명을 실을 수 없으므로,
-    # 버전·메타 정보 없이 {"status":"ok"}만 반환한다.
     if method == "GET" and path == "/healthz":
         return ServiceResponse(200, {"status": "ok"})
 
-    if not _verify_api_key(api_key):
+    # 인증 게이트 (#384): Principal을 얻지 못하면 401.
+    principal = authenticate(api_key=api_key)
+    if isinstance(principal, AuthError):
         return ServiceResponse(401, {"error": "unauthorized"})
 
     if method == "GET" and path == "/version":
