@@ -14,6 +14,7 @@ KPubData Builder의 주요 설계 결정을 기록합니다. 각 ADR은 배경·
 | [0008](./0008-async-build-job-model.md) | 비동기 build job 모델: 상태·실패·취소·멱등성·부분 산출물 | 제안됨 | #334 |
 | [0009](./0009-user-authentication-google-oidc.md) | 사용자 인증 모델: Google OIDC ID 토큰 검증 | 제안됨 | #383 |
 | [0010](./0010-artifactstore-state-backend.md) | ArtifactStore 추상화 + BuildIndex 백엔드 분리 | 제안됨 | #375 |
+| [0011](./0011-buildspec-assistant-grounding.md) | BuildSpec 어시스턴트 그라운딩 계약 | 제안됨 | #415 |
 
 ## 작성 규칙
 

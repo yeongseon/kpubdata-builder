@@ -60,6 +60,7 @@ nav:
       - 비동기 build job 모델(제안): adrs/0008-async-build-job-model.md
       - 사용자 인증 모델(제안): adrs/0009-user-authentication-google-oidc.md
       - ArtifactStore·상태 백엔드(제안): adrs/0010-artifactstore-state-backend.md
+      - BuildSpec 어시스턴트 그라운딩(제안): adrs/0011-buildspec-assistant-grounding.md
 
 markdown_extensions:
   - admonition
