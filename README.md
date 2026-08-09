@@ -95,13 +95,13 @@ build/{run_id}/
 
 | 변수명 | 설명 | 기본값 | 필수 여부 |
 | :--- | :--- | :--- | :--- |
-| `KPUBDATA_BUILDER_API_KEY` | API 인증 키 (X-API-Key 헤더로 전송) | 없음 | 프로덕션 권장 |
-| `KPUBDATA_BUILDER_ALLOWED_ORIGINS` | CORS 허용 오리진 (쉼표로 구분) | 없음 | 선택사항 |
+| `KPUBDATA_BUILDER_API_KEY` | API 인증 키 (`X-API-Key` 헤더). 미설정 시 모든 요청 401 (fail-closed) | 없음 | **필수** (프로덕션) |
+| `KPUBDATA_BUILDER_DEV_MODE` | `true`/`1`이면 인증 생략 (**로컬 개발 전용**, ADR 0006) | 미설정 | 선택 |
+| `KPUBDATA_BUILDER_ALLOWED_ORIGINS` | CORS 허용 오리진 (콤마 구분, default-deny) | 미설정 | 선택 |
 
-**보안 정책**:
-- **로컬 개발**: `KPUBDATA_BUILDER_API_KEY` 미설정 시 인증을 건너뜁니다 (편의성).
-- **프로덕션**: 반드시 API 키를 설정하고 `X-API-Key` 헤더를 통한 인증을 사용하세요.
-- **fail-closed**: Docker 컨테이너는 보안 기본값을 안전 측으로 유지합니다 (ADR 0006).
+> **fail-closed (ADR 0006)**: `KPUBDATA_BUILDER_API_KEY` 미설정 + `DEV_MODE` 미설정 → 모든 요청 401.
+> 로컬 개발에서 인증 없이 띄우려면 `KPUBDATA_BUILDER_DEV_MODE=1`을 명시하세요.
+> Docker 컨테이너는 `DEV_MODE` 없이 `API_KEY`가 없으면 기동 자체를 거부합니다 (`docker-entrypoint.sh`).
 
 ### CLI 인자
 
