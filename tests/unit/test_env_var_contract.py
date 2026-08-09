@@ -61,6 +61,4 @@ class TestEnvVarContract:
         readme_vars = _readme_env_vars()
         stale = readme_vars - code_vars
         if stale:
-            pytest.fail(
-                f"README에 있지만 코드에 없는 환경변수 (잘못된 안내): {sorted(stale)}"
-            )
+            pytest.fail(f"README에 있지만 코드에 없는 환경변수 (잘못된 안내): {sorted(stale)}")
