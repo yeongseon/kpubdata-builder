@@ -374,7 +374,7 @@ def dispatch(
     # 인증 게이트 (#384): Principal을 얻지 못하면 401.
     principal = authenticate(api_key=api_key, bearer_token=bearer_token)
     if isinstance(principal, AuthError):
-        return ServiceResponse(principal.status_code, {"error": "unauthorized"})
+        return ServiceResponse(principal.status_code, {"error": principal.reason})
 
     if method == "GET" and path == "/version":
         return service.version()

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hmac
 import os
+import threading
 from dataclasses import dataclass
 
 # 서버가 요구하는 API 키. 환경변수로만 주입한다 (#248).
@@ -82,6 +83,7 @@ def _verify_api_key(api_key: str | None) -> Principal | AuthError:
 # JWKS 클라이언트는 지연 생성·캐시한다. OIDC 비활성 시 None.
 _jwks_client: object | None = None
 _jwks_url_cached: str | None = None
+_jwks_lock = threading.Lock()
 
 
 def _oidc_issuers() -> list[str]:
@@ -147,15 +149,16 @@ def validate_oidc_config() -> None:
 
 
 def _get_jwks_client() -> object:
-    """PyJWKClient 를 지연 생성·캐시한다."""
+    """PyJWKClient 를 지연 생성·캐시한다 (thread-safe)."""
     global _jwks_client, _jwks_url_cached
-    url = _oidc_jwks_url()
-    if _jwks_client is None or _jwks_url_cached != url:
-        from jwt import PyJWKClient
+    with _jwks_lock:
+        url = _oidc_jwks_url()
+        if _jwks_client is None or _jwks_url_cached != url:
+            from jwt import PyJWKClient
 
-        ttl = int(os.environ.get(_OIDC_JWKS_TTL_ENV, "") or _DEFAULT_JWKS_TTL_SECONDS)
-        _jwks_client = PyJWKClient(url, cache_jwk_set=True, lifespan=ttl)
-        _jwks_url_cached = url
+            ttl = int(os.environ.get(_OIDC_JWKS_TTL_ENV, "") or _DEFAULT_JWKS_TTL_SECONDS)
+            _jwks_client = PyJWKClient(url, cache_jwk_set=True, lifespan=ttl)
+            _jwks_url_cached = url
     return _jwks_client
 
 
@@ -172,9 +175,7 @@ def _verify_bearer_token(token: str) -> Principal | AuthError:
     try:
         client = _get_jwks_client()
         signing_key = client.get_signing_key_from_jwt(token)  # type: ignore[attr-defined]
-    except (PyJWKClientError, ConnectionError):
-        return AuthError(reason="auth service unavailable (jwks)", status_code=503)
-    except Exception:
+    except (PyJWKClientError, ConnectionError, OSError):
         return AuthError(reason="auth service unavailable (jwks)", status_code=503)
 
     audience = os.environ.get(_OIDC_AUDIENCE_ENV, "").strip()
