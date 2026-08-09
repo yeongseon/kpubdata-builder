@@ -399,6 +399,12 @@ def dispatch(
     반환값:
         ServiceResponse 또는 FileResponse (#323).
     """
+    # /healthz는 인증 게이트 밖에서 무인증 노출 (#372).
+    # liveness/readiness probe(ACA/AKS/App Gateway)가 자격증명을 실을 수 없으므로,
+    # 버전·메타 정보 없이 {"status":"ok"}만 반환한다.
+    if method == "GET" and path == "/healthz":
+        return ServiceResponse(200, {"status": "ok"})
+
     if not _verify_api_key(api_key):
         return ServiceResponse(401, {"error": "unauthorized"})
 

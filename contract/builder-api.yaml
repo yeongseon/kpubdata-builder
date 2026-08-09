@@ -17,6 +17,19 @@ security:
   - ApiKeyAuth: []
 
 paths:
+  /healthz:
+    get:
+      operationId: healthz
+      summary: 무인증 liveness probe (버전·메타 정보 없이 status만)
+      security: []
+      responses:
+        "200":
+          description: 서비스 정상
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
   /version:
     get:
       operationId: getVersion
@@ -329,6 +342,15 @@ components:
           type: string
         api_version:
           type: string
+
+    HealthResponse:
+      type: object
+      required: [status]
+      description: liveness probe 응답 (버전·메타 정보 없이 status만, #372)
+      properties:
+        status:
+          type: string
+          const: "ok"
 
     ValidateResponse:
       type: object
