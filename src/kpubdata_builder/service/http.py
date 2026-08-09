@@ -44,6 +44,9 @@ _DEFAULT_MAX_WORKERS = 10
 # KPUBDATA_BUILDER_ALLOWED_ORIGINS=http://localhost:5173,https://studio.example.com).
 _ALLOWED_ORIGINS_ENV = "KPUBDATA_BUILDER_ALLOWED_ORIGINS"
 
+# 프리플라이트가 허가하는 요청 헤더. Bearer 인증(ADR 0009)을 위해 Authorization 포함 (#382).
+_CORS_ALLOWED_HEADERS = "Content-Type, X-API-Key, Authorization"
+
 # MIME 타입 기본값 (#323). mimetypes.guess_type이 None을 반환할 때 사용.
 _DEFAULT_MIME_TYPE = "application/octet-stream"
 
@@ -217,7 +220,7 @@ def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
                     # Same-origin 요청이면 특정 오리진 제한 없이 허용한다.
                     self.send_header("Access-Control-Allow-Origin", "*")
                 self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-                self.send_header("Access-Control-Allow-Headers", "Content-Type, X-API-Key")
+                self.send_header("Access-Control-Allow-Headers", _CORS_ALLOWED_HEADERS)
                 self.send_header("Access-Control-Max-Age", "86400")
 
         def _write(self, status_code: int, body: dict[str, JsonValue]) -> None:
@@ -249,7 +252,7 @@ def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
             self.send_header("Content-Type", f"{mime_type}; charset=utf-8")
             self.send_header("Content-Length", str(len(content)))
             self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
-            self._send_cors_headers()
+            self._send_cors_headers(origin=self.headers.get("Origin"))
             self.end_headers()
             _ = self.wfile.write(content)
 
