@@ -36,6 +36,7 @@ _CONTRACT_PATH = Path(__file__).parents[2] / "contract" / "builder-api.yaml"
 _DISPATCH_ROUTES: dict[tuple[str, str], str] = {
     ("/healthz", "GET"): "healthz",
     ("/version", "GET"): "getVersion",
+    ("/catalog", "GET"): "getCatalog",
     ("/validate", "POST"): "validateSpec",
     ("/preview", "POST"): "previewBuild",
     ("/build", "POST"): "createBuild",
@@ -48,6 +49,7 @@ _DISPATCH_ROUTES: dict[tuple[str, str], str] = {
 _REQUIRED_OPERATIONS = [
     ("/healthz", "get"),
     ("/version", "get"),
+    ("/catalog", "get"),
     ("/validate", "post"),
     ("/preview", "post"),
     ("/build", "post"),
@@ -112,13 +114,14 @@ def test_service_api_version_matches_contract() -> None:
 # 계약이 기술하는 모든 오퍼레이션은 BuilderService에 실제로 구현돼 있어야 한다.
 # 구현 경로 이름은 계약과 1:1로 일치한다(#226: aspirational 비동기/publish 라우트 제거).
 _IMPLEMENTED_OPERATIONS = {
-    "healthz",  # GET /healthz (무인증, #372)
-    "getVersion",  # GET /version
-    "validateSpec",  # POST /validate
-    "previewBuild",  # POST /preview
-    "createBuild",  # POST /build
-    "listBuildArtifacts",  # GET /artifacts/{run_id}
-    "listBuilds",  # GET /builds
+    "healthz",
+    "getVersion",
+    "getCatalog",
+    "validateSpec",
+    "previewBuild",
+    "createBuild",
+    "listBuildArtifacts",
+    "listBuilds",
 }
 
 
@@ -290,6 +293,7 @@ def test_planned_operations_excluded_from_implementation_check() -> None:
 _OPERATION_STATUS_CODES: dict[str, set[int]] = {
     "healthz": {200},
     "getVersion": {200},
+    "getCatalog": {200, 502},
     "validateSpec": {200, 400},
     "previewBuild": {200, 400},
     "createBuild": {200, 400, 502},
