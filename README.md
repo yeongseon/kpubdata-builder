@@ -229,8 +229,21 @@ docker run --rm -p 8000:8000 -e KPUBDATA_BUILDER_DEV=1 kpubdata-builder:latest
 
 `kpubdata`는 `uv sync --no-sources`로 PyPI에서 설치되므로, 빌드 시 형제 디렉터리
 (`../kpubdata`)가 필요하지 않습니다 (버전 핀 정책은 [CONTRIBUTING.md](./CONTRIBUTING.md)
-참고). Parquet/Hugging Face export 등의 선택 의존성이 필요하면 Dockerfile의
-`uv sync` 라인에 `--extra parquet --extra huggingface`를 추가하세요.
+참고). 배포 이미지는 빌드 타임 `EXTRAS` ARG로 extra 그룹을 선택하며, **기본값은
+`publish`** 입니다 — HuggingFace/Kaggle 게시 타깃이 런타임 `ImportError`로 실패하지
+않도록 `huggingface-hub`/`kaggle`/`xmltodict`를 기본 포함합니다 (#373).
+
+```bash
+# 기본(publish extra 포함)
+docker build -t kpubdata-builder:latest .
+
+# 여러 extra / 최소 이미지
+docker build --build-arg EXTRAS=publish,parquet -t kpubdata-builder:full .
+docker build --build-arg EXTRAS= -t kpubdata-builder:minimal .
+```
+
+> 참고: exporter(parquet/Hugging Face 레이아웃)는 polars·표준 라이브러리만 쓰므로
+> extras 없이도 동작합니다. extras가 필요한 것은 **publisher**(huggingface_hub/kaggle)입니다.
 
 ### API 인증
 
