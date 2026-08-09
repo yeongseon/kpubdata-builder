@@ -202,11 +202,11 @@ ADR 0006). 설정은 환경변수로 주입합니다 — `docker-entrypoint.sh`�
 | `KPUBDATA_BUILDER_PORT` | 바인딩 포트 | `8000` | 선택 |
 | `KPUBDATA_BUILDER_OUTPUT_DIR` | 실행 워크스페이스 루트 | `/data` | 선택 |
 | `KPUBDATA_BUILDER_HOST` | 바인딩 호스트 | `0.0.0.0` | 선택 |
-| `KPUBDATA_BUILDER_DEV` | `1`이면 API 키 없이 기동 (로컬 개발 전용) | 미설정 | 선택 |
+| `KPUBDATA_BUILDER_DEV_MODE` | `true`/`1`이면 API 키 없이 기동 (로컬 개발 전용) | 미설정 | 선택 |
 
 > **fail-closed (ADR 0006)**: 컨테이너는 `KPUBDATA_BUILDER_API_KEY`가 없으면 기동을
 > 거부합니다. `service/app.py`의 "키 미설정 = 인증 생략" 동작은 로컬 개발 편의 전용이며
-> 컨테이너로 누출되지 않습니다. 로컬에서 인증 없이 띄우려면 `KPUBDATA_BUILDER_DEV=1`을
+> 컨테이너로 누출되지 않습니다. 로컬에서 인증 없이 띄우려면 `KPUBDATA_BUILDER_DEV_MODE=1`을
 > 명시하세요.
 
 ```bash
@@ -224,7 +224,7 @@ curl -s -H "X-API-Key: ${API_KEY}" http://localhost:8000/version
 # {"service": "kpubdata-builder", "api_version": "1.0.0"}
 
 # 로컬 개발 — 인증 생략 (dev-mode)
-docker run --rm -p 8000:8000 -e KPUBDATA_BUILDER_DEV=1 kpubdata-builder:latest
+docker run --rm -p 8000:8000 -e KPUBDATA_BUILDER_DEV_MODE=1 kpubdata-builder:latest
 ```
 
 `kpubdata`는 `uv sync --no-sources`로 PyPI에서 설치되므로, 빌드 시 형제 디렉터리
