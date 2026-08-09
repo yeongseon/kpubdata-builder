@@ -715,7 +715,8 @@ class TestHttpAdapter:
         with urllib.request.urlopen(f"{base_url}/healthz", timeout=2.0) as response:
             assert response.status == 200
             body = cast(dict[str, object], json.loads(response.read()))
-        assert body == {"status": "ok"}
+        assert body["status"] == "ok"
+        assert "request_id" in body
         # 버전·서비스 메타 정보가 누출되지 않아야 한다.
         assert "api_version" not in body
         assert "service" not in body
