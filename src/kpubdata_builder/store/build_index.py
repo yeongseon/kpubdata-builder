@@ -21,7 +21,7 @@ else:
 
 # 스키마 버전: 인덱스 구조 변경 시 증가
 # 스키마 버전 2: status 어휘를 ok/failed/cancelled로 확장 (#334 비동기 job 모델 대비)
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # 빌드 인덱스 status 어휘. ADR 0003 파생 캐시. manifest.json이 정본.
 BuildStatus = Literal["ok", "failed", "cancelled"]
@@ -40,6 +40,7 @@ class BuildEntry:
     finished_at: str | None
     spec_digest: str | None
     error: str | None
+    created_by: str | None = None
 
 
 class BuildIndex:
@@ -107,7 +108,8 @@ class BuildIndex:
                         started_at TEXT,
                         finished_at TEXT,
                         spec_digest TEXT,
-                        error TEXT
+                        error TEXT,
+                        created_by TEXT
                     )
                     """
                 )
@@ -141,6 +143,7 @@ class BuildIndex:
         finished_at: str | None,
         spec_digest: str | None = None,
         error: str | None = None,
+        created_by: str | None = None,
     ) -> None:
         """빌드 엔트리를 삽입 또는 대체한다.
 
@@ -151,16 +154,17 @@ class BuildIndex:
             finished_at: 빌드 완료 시각 (ISO 8601)
             spec_digest: spec 해시 (선택)
             error: 오류 메시지 (실패 시)
+            created_by: 빌드를 요청한 주체 라벨 (선택, #388)
         """
         try:
             with self._transaction():
                 self._conn.execute(
                     """
                     INSERT OR REPLACE INTO builds
-                    (run_id, status, started_at, finished_at, spec_digest, error)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    (run_id, status, started_at, finished_at, spec_digest, error, created_by)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (run_id, status, started_at, finished_at, spec_digest, error),
+                    (run_id, status, started_at, finished_at, spec_digest, error, created_by),
                 )
         except Exception:
             # ADR 0003: 인덱스 쓰기 실패가 빌드 실패의 원인이 되어서는 안 됨
@@ -177,7 +181,7 @@ class BuildIndex:
         """
         cur = self._conn.execute(
             """
-            SELECT run_id, status, started_at, finished_at, spec_digest, error
+            SELECT run_id, status, started_at, finished_at, spec_digest, error, created_by
             FROM builds
             ORDER BY finished_at DESC
             LIMIT ?
@@ -192,6 +196,7 @@ class BuildIndex:
                 finished_at=row[3],
                 spec_digest=row[4],
                 error=row[5],
+                created_by=row[6],
             )
             for row in cur
         ]
@@ -207,7 +212,7 @@ class BuildIndex:
         """
         cur = self._conn.execute(
             """
-            SELECT run_id, status, started_at, finished_at, spec_digest, error
+            SELECT run_id, status, started_at, finished_at, spec_digest, error, created_by
             FROM builds
             WHERE run_id = ?
             """,
@@ -223,6 +228,7 @@ class BuildIndex:
             finished_at=row[3],
             spec_digest=row[4],
             error=row[5],
+            created_by=row[6],
         )
 
     def delete(self, run_id: str) -> None:
@@ -299,6 +305,7 @@ def rebuild_index(output_root: Path) -> int:
                 status=status,  # type: ignore[arg-type]
                 started_at=started_at,
                 finished_at=finished_at,
+                created_by=manifest.get("created_by"),
             )
             count += 1
     finally:

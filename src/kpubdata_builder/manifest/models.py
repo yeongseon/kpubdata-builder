@@ -54,6 +54,7 @@ class BuildManifest:
     provenance: tuple[SourceProvenance, ...] = ()
     build_environment: BuildEnvironment | None = None
     inputs_fingerprint: str | None = None
+    created_by: str | None = None
 
 
 __all__ = ["MANIFEST_SCHEMA_VERSION", "BuildManifest"]
