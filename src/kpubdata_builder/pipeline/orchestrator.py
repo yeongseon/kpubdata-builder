@@ -263,6 +263,7 @@ def run_build(
     client: SourceClient,
     output_root: Path,
     run_id: str | None = None,
+    created_by: str | None = None,
 ) -> BuildResult:
     """BuildSpec을 Medallion 파이프라인으로 실행한다.
 
@@ -330,6 +331,7 @@ def run_build(
         provenance=tuple(provenance),
         build_environment=capture_build_environment(),
         inputs_fingerprint=compute_inputs_fingerprint(provenance),
+        created_by=created_by,
     )
     manifest_path = context.output_root / context.run_id / "manifest.json"
     manifest_writer(manifest, manifest_path)

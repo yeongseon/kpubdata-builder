@@ -47,6 +47,11 @@ class Principal:
     kind: str
     identifier: str | None = None
 
+    @property
+    def label(self) -> str:
+        """manifest created_by용 라벨 (#388)."""
+        return f"{self.kind}:{self.identifier}" if self.identifier else self.kind
+
 
 @dataclass(frozen=True)
 class AuthError:

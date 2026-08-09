@@ -148,7 +148,9 @@ class BuilderService:
         ]
         return ServiceResponse(200, {"dataset_id": spec_or_error.dataset_id, "previews": previews})
 
-    def build(self, spec_yaml: str, *, run_id: str | None = None) -> ServiceResponse:
+    def build(
+        self, spec_yaml: str, *, run_id: str | None = None, created_by: str | None = None
+    ) -> ServiceResponse:
         """파이프라인을 실행하고 결과를 반환한다.
 
         응답 코드 정책:
@@ -166,6 +168,7 @@ class BuilderService:
             client=self._client_factory(),
             output_root=self._output_root,
             run_id=run_id,
+            created_by=created_by,
         )
         outcomes: list[JsonValue] = [
             {
@@ -203,6 +206,7 @@ class BuilderService:
                 status=result.status,  # type: ignore[arg-type]
                 started_at=started_at,
                 finished_at=finished_at,
+                created_by=manifest_data.get("created_by"),
             )
         except Exception:
             # 인덱스 갱신 실패는 무시 (ADR 0003)
@@ -418,7 +422,7 @@ def dispatch(
             except ValueError as exc:
                 return ServiceResponse(400, {"error": str(exc)})
             run_id = run_id_value
-        return service.build(spec, run_id=run_id)
+        return service.build(spec, run_id=run_id, created_by=principal.label)
 
     if method == "GET" and path.startswith("/artifacts/"):
         # /artifacts/{run_id}/{file_path} 형식이면 파일 제공, 아니면 목록 반환
