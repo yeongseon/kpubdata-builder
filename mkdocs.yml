@@ -56,6 +56,7 @@ nav:
       - API 계약 단일 소스: adrs/0005-api-contract-single-source.md
       - 서비스 인증 & 배포: adrs/0006-service-auth-and-deployment.md
       - 버전 호환성 정책: adrs/0007-kpubdata-version-compatibility-policy.md
+      - 비동기 build job 모델(제안): adrs/0008-async-build-job-model.md
 
 markdown_extensions:
   - admonition
