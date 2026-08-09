@@ -15,6 +15,7 @@ import logging
 import mimetypes
 import os
 import traceback
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -136,6 +137,7 @@ def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
         timeout = _SOCKET_TIMEOUT_SECONDS
 
         def _dispatch(self, method: str) -> None:
+            self._request_id = uuid.uuid4().hex[:12]
             try:
                 length = int(self.headers.get("Content-Length", 0) or 0)
             except ValueError:
@@ -196,6 +198,7 @@ def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
                     method,
                     path,
                     traceback.format_exc(),
+                    extra={"request_id": getattr(self, "_request_id", None)},
                 )
                 self._write(500, {"error": "internal server error"})
                 return
@@ -226,10 +229,14 @@ def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
                 self.send_header("Access-Control-Max-Age", "86400")
 
         def _write(self, status_code: int, body: dict[str, JsonValue]) -> None:
+            if hasattr(self, "_request_id"):
+                body.setdefault("request_id", self._request_id)
             payload = json.dumps(body, ensure_ascii=False, default=str).encode("utf-8")
             self.send_response(status_code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(payload)))
+            if hasattr(self, "_request_id"):
+                self.send_header("X-Request-ID", self._request_id)
             self._send_cors_headers(origin=self.headers.get("Origin"))
             self.end_headers()
             _ = self.wfile.write(payload)
