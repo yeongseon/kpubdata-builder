@@ -393,8 +393,8 @@ def dispatch(
 ) -> ServiceResponse | FileResponse:
     """(method, path)를 BuilderService 연산으로 라우팅한다.
 
-    라우팅 전에 X-API-Key를 검증한다 (#248). KPUBDATA_BUILDER_API_KEY가
-    설정되지 않으면 인증을 건너뛴다.
+    GET /healthz는 인증 없이 반환하고 (#372), 그 외 엔드포인트는
+    X-API-Key(또는 Bearer) 검증 후 라우팅한다 (#248).
 
     반환값:
         ServiceResponse 또는 FileResponse (#323).
