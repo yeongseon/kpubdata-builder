@@ -547,9 +547,11 @@ class TestHttpAdapter:
         with urllib.request.urlopen(req, timeout=2.0) as response:
             assert response.status == 204
             assert response.headers["Access-Control-Allow-Origin"] == "*"
-            assert "POST" in response.headers["Access-Control-Allow-Methods"]
-            assert "OPTIONS" in response.headers["Access-Control-Allow-Methods"]
-            assert response.headers["Access-Control-Allow-Headers"] == "Content-Type, X-API-Key"
+            assert response.headers["Access-Control-Allow-Methods"] == "GET, POST, OPTIONS"
+            assert (
+                response.headers["Access-Control-Allow-Headers"]
+                == "Content-Type, X-API-Key, Authorization"
+            )
             assert response.headers["Access-Control-Max-Age"] == "86400"
 
     def test_response_includes_cors_header(
@@ -577,6 +579,58 @@ class TestHttpAdapter:
         with urllib.request.urlopen(req, timeout=2.0) as response:
             # default-deny이므로 CORS 헤더가 없어야 함
             assert "Access-Control-Allow-Origin" not in response.headers
+
+    def test_cors_file_download_respects_allowlist(
+        self,
+        http_server: tuple[str, HTTPServer, threading.Thread],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # 파일 응답(_write_file)도 CORS 허용 목록을 따라야 한다 (#382).
+        # 이전에는 _write_file이 Origin을 전달하지 않아 same-origin으로 취급되어
+        # 허용되지 않은 오리진에도 Access-Control-Allow-Origin: * 를 보냈다.
+        monkeypatch.delenv("KPUBDATA_BUILDER_ALLOWED_ORIGINS", raising=False)
+        base_url, _, _ = http_server
+        build_req = urllib.request.Request(
+            f"{base_url}/build",
+            data=json.dumps({"spec": VALID_SPEC_YAML, "run_id": "run1"}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(build_req, timeout=5.0) as response:
+            assert response.status == 200
+        # 크로스오리진 파일 다운로드 요청
+        req = urllib.request.Request(
+            f"{base_url}/artifacts/run1/manifest.json",
+            headers={"Origin": "http://localhost:5173"},
+        )
+        with urllib.request.urlopen(req, timeout=2.0) as response:
+            assert response.status == 200
+            # default-deny: 허용 목록에 없는 오리진은 CORS 헤더를 받지 않는다
+            assert "Access-Control-Allow-Origin" not in response.headers
+
+    def test_cors_file_download_allowed_origin_echoed(
+        self,
+        http_server: tuple[str, HTTPServer, threading.Thread],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # 허용된 오리진의 파일 다운로드는 해당 오리진을 echo 해야 한다 (#382).
+        monkeypatch.setenv("KPUBDATA_BUILDER_ALLOWED_ORIGINS", "http://localhost:5173")
+        base_url, _, _ = http_server
+        build_req = urllib.request.Request(
+            f"{base_url}/build",
+            data=json.dumps({"spec": VALID_SPEC_YAML, "run_id": "run1"}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(build_req, timeout=5.0) as response:
+            assert response.status == 200
+        req = urllib.request.Request(
+            f"{base_url}/artifacts/run1/manifest.json",
+            headers={"Origin": "http://localhost:5173"},
+        )
+        with urllib.request.urlopen(req, timeout=2.0) as response:
+            assert response.status == 200
+            assert response.headers["Access-Control-Allow-Origin"] == "http://localhost:5173"
 
     def test_cors_allowed_origins_configurable(
         self,
