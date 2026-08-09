@@ -28,6 +28,9 @@ _OIDC_JWKS_URL_ENV = "OIDC_JWKS_URL"
 _OIDC_JWKS_TTL_ENV = "OIDC_JWKS_TTL"
 _DEFAULT_JWKS_TTL_SECONDS = 3600
 _TOKEN_LEEWAY_SECONDS = 60
+_OIDC_ALLOWED_HD_ENV = "OIDC_ALLOWED_HD"
+_OIDC_ALLOWED_SUBJECTS_ENV = "OIDC_ALLOWED_SUBJECTS"
+_OIDC_ALLOWED_EMAILS_ENV = "OIDC_ALLOWED_EMAILS"
 
 
 @dataclass(frozen=True)
@@ -99,6 +102,20 @@ def _oidc_jwks_url() -> str:
     return issuer.rstrip("/") + "/.well-known/jwks.json"
 
 
+def _oidc_allowlists() -> tuple[set[str], set[str], set[str]]:
+    """(hd, subjects, emails) 허용 목록. Google은 공개 IdP라 필수 방어 (#386)."""
+
+    def _parse(env_name: str) -> set[str]:
+        raw = os.environ.get(env_name, "")
+        return {s.strip() for s in raw.replace(" ", ",").split(",") if s.strip()}
+
+    return (
+        _parse(_OIDC_ALLOWED_HD_ENV),
+        _parse(_OIDC_ALLOWED_SUBJECTS_ENV),
+        _parse(_OIDC_ALLOWED_EMAILS_ENV),
+    )
+
+
 def validate_oidc_config() -> None:
     """서버 기동 시 호출 (serve). OIDC 설정 오류면 RuntimeError (fail-closed, #385).
 
@@ -119,6 +136,14 @@ def validate_oidc_config() -> None:
         raise RuntimeError(
             "OIDC is enabled but pyjwt is not installed; install with: uv sync --extra auth"
         ) from e
+    # 허용 목록 필수 — Google은 공개 IdP (계정만 있으면 유효 토큰 획득, #386).
+    hd, subs, emails = _oidc_allowlists()
+    if not (hd or subs or emails):
+        raise RuntimeError(
+            "OIDC_ISSUER is set but no allowlist is configured "
+            "(OIDC_ALLOWED_HD/SUBJECTS/EMAILS); refusing to start — "
+            "Google is a public IdP (fail-closed, ADR 0009, #386)."
+        )
 
 
 def _get_jwks_client() -> object:
@@ -168,6 +193,17 @@ def _verify_bearer_token(token: str) -> Principal | AuthError:
 
     if not payload.get("email_verified", False):
         return AuthError(reason="email not verified")
+
+    # 허용 목록 검사 (Google 공개 IdP, #386). 설정된 목록 중 하나라도 매칭되면 통과.
+    hd_set, sub_set, email_set = _oidc_allowlists()
+    if hd_set or sub_set or email_set:
+        matched = (
+            (bool(hd_set) and str(payload.get("hd", "")) in hd_set)
+            or (bool(sub_set) and str(payload.get("sub", "")) in sub_set)
+            or (bool(email_set) and str(payload.get("email", "")) in email_set)
+        )
+        if not matched:
+            return AuthError(reason="principal not in allowlist", status_code=403)
 
     sub = str(payload.get("sub", ""))
     # 로그 추적용 식별자로 sub 앞 8자만(전체 sub 노출 최소화).

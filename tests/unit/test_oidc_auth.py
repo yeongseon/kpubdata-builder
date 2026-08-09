@@ -209,3 +209,59 @@ class TestValidateOidcConfig:
         monkeypatch.delenv("OIDC_AUDIENCE", raising=False)
         with pytest.raises(RuntimeError, match="OIDC_AUDIENCE"):
             validate_oidc_config()
+
+    def test_rejects_when_no_allowlist(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OIDC_ISSUER", _ISSUER)
+        monkeypatch.setenv("OIDC_AUDIENCE", _AUDIENCE)
+        with pytest.raises(RuntimeError, match="allowlist"):
+            validate_oidc_config()
+
+
+class TestAllowlistGate:
+    """허용 목록 게이트 (#386). Google은 공개 IdP — 허용 목록 없이는 인터넷 전체에 노출."""
+
+    def test_hd_allowlist_match(self, oidc_env: bytes, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OIDC_ALLOWED_HD", "example.com")
+        token = _make_token(oidc_env, hd="example.com")
+        result = authenticate(bearer_token=f"Bearer {token}")
+        assert isinstance(result, Principal)
+        assert result.kind == "oidc"
+
+    def test_hd_allowlist_miss(self, oidc_env: bytes, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OIDC_ALLOWED_HD", "other.com")
+        token = _make_token(oidc_env, hd="example.com")
+        result = authenticate(bearer_token=f"Bearer {token}")
+        assert isinstance(result, AuthError)
+        assert result.status_code == 403
+
+    def test_subject_allowlist_match(
+        self, oidc_env: bytes, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OIDC_ALLOWED_SUBJECTS", "user-1234567890")
+        token = _make_token(oidc_env)
+        result = authenticate(bearer_token=f"Bearer {token}")
+        assert isinstance(result, Principal)
+
+    def test_email_allowlist_match(self, oidc_env: bytes, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OIDC_ALLOWED_EMAILS", "user@example.com")
+        token = _make_token(oidc_env)
+        result = authenticate(bearer_token=f"Bearer {token}")
+        assert isinstance(result, Principal)
+
+    def test_hd_missing_rejected_when_hd_required(
+        self, oidc_env: bytes, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OIDC_ALLOWED_HD", "example.com")
+        token = _make_token(oidc_env)
+        result = authenticate(bearer_token=f"Bearer {token}")
+        assert isinstance(result, AuthError)
+        assert result.status_code == 403
+
+    def test_multiple_lists_match_any(
+        self, oidc_env: bytes, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OIDC_ALLOWED_HD", "other.com")
+        monkeypatch.setenv("OIDC_ALLOWED_EMAILS", "user@example.com")
+        token = _make_token(oidc_env, hd="example.com")
+        result = authenticate(bearer_token=f"Bearer {token}")
+        assert isinstance(result, Principal)
