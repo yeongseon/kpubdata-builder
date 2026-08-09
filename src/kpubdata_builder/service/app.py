@@ -148,7 +148,13 @@ class BuilderService:
         except SpecLoadError as exc:
             return ServiceResponse(400, {"status": "error", "error": str(exc)})
         except ValidationError as exc:
-            return ServiceResponse(400, {"status": "invalid", "problems": list(exc.problems)})
+            body: dict[str, JsonValue] = {"status": "invalid", "problems": list(exc.problems)}
+            if exc.structured_problems:
+                body["structured_problems"] = [
+                    {"code": p.code, "path": p.path, "message": p.message, "hint": p.hint}
+                    for p in exc.structured_problems
+                ]
+            return ServiceResponse(400, body)
         return ServiceResponse(
             200,
             {
@@ -381,7 +387,13 @@ class BuilderService:
         except SpecLoadError as exc:
             return ServiceResponse(400, {"status": "error", "error": str(exc)})
         except ValidationError as exc:
-            return ServiceResponse(400, {"status": "invalid", "problems": list(exc.problems)})
+            body: dict[str, JsonValue] = {"status": "invalid", "problems": list(exc.problems)}
+            if exc.structured_problems:
+                body["structured_problems"] = [
+                    {"code": p.code, "path": p.path, "message": p.message, "hint": p.hint}
+                    for p in exc.structured_problems
+                ]
+            return ServiceResponse(400, body)
         return spec
 
 

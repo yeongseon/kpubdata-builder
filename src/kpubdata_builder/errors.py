@@ -10,6 +10,13 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from .spec.validator import ValidationProblem
+
 
 class BuildError(Exception):
     """모든 빌더 오류의 기반 예외.
@@ -29,10 +36,17 @@ class ValidationError(BuildError):
 
     속성:
         problems: 검증 단계에서 수집된 개별 오류 메시지 목록.
+        structured_problems: 구조화된 문제 객체 목록 (#417). None이면 구형.
     """
 
-    def __init__(self, problems: list[str]) -> None:
+    def __init__(
+        self,
+        problems: list[str],
+        *,
+        structured: Sequence[ValidationProblem] | None = None,
+    ) -> None:
         self.problems = problems
+        self.structured_problems = structured
         super().__init__(f"Validation failed: {'; '.join(problems)}")
 
 
@@ -75,8 +89,9 @@ class DatasetValidationError(BuildError):
         problems: 데이터셋 검증 단계에서 수집된 개별 위반 메시지 목록.
     """
 
-    def __init__(self, problems: list[str]) -> None:
+    def __init__(self, problems: list[str], *, structured: list[object] | None = None) -> None:
         self.problems = problems
+        self.structured_problems = structured
         super().__init__(f"Dataset validation failed: {'; '.join(problems)}")
 
 
