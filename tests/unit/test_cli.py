@@ -411,19 +411,22 @@ def test_publish_kaggle_end_to_end(
     assert "publish: dataset.sample -> kaggle" in captured.out
     assert "artifacts: 1" in captured.out
 
+    def test_serve_invokes_http_server(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # serve 명령이 http.serve를 올바른 host/port로 호출해야 한다 (#249).
+        # 외부 환경의 KPUBDATA_BUILDER_MAX_WORKERS 누출을 차단 (#374 review).
+        monkeypatch.delenv("KPUBDATA_BUILDER_MAX_WORKERS", raising=False)
 
-def test_serve_invokes_http_server(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    # serve 명령이 http.serve를 올바른 host/port로 호출해야 한다 (#249).
     import kpubdata_builder.service.http as http_module
     from kpubdata_builder.service import BuilderService
 
     captured_kwargs: dict[str, object] = {}
 
-    def fake_serve(service: object, *, host: str, port: int) -> None:
+    def fake_serve(service: object, *, host: str, port: int, max_workers: int) -> None:
         captured_kwargs["host"] = host
         captured_kwargs["port"] = port
+        captured_kwargs["max_workers"] = max_workers
         # --output-dir가 BuilderService.output_root로 올바르게 전달되는지 확인한다 (#249 review).
         assert isinstance(service, BuilderService)
         captured_kwargs["output_root"] = service._output_root
@@ -444,9 +447,11 @@ def test_serve_invokes_http_server(
     out = capsys.readouterr().out
 
     assert exit_code == 0
+    # --max-workers 미지정 → 기본값(10)이 전달된다 (#374).
     assert captured_kwargs == {
         "host": "0.0.0.0",
         "port": 9123,
+        "max_workers": 10,
         "output_root": tmp_path,
     }
     assert "serving kpubdata-builder" in out
