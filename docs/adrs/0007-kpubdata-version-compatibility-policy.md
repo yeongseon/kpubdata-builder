@@ -2,7 +2,7 @@
 
 - 상태: 승인됨(Accepted)
 - 관련 이슈: #213, kpubdata#233
-- 관련 문서: [CONTRIBUTING.md](../../CONTRIBUTING.md) §3-1, [pyproject.toml](../../pyproject.toml)
+- 관련 문서: [CONTRIBUTING.md](../CONTRIBUTING.md) §3-1, pyproject.toml
 
 ## 결정 (승인됨)
 
@@ -101,7 +101,7 @@ min-deps:
       run: uv run --no-sync pytest
 ```
 
-### 3. 문서화 ([CONTRIBUTING.md](../../CONTRIBUTING.md) §3-1 확장)
+### 3. 문서화 ([CONTRIBUTING.md](../CONTRIBUTING.md) §3-1 확장)
 - 로컬 개발과 CI/배포 환경의 의존성 해석 차이를 명시
 - 핀 범위(`>=0.5.0,<0.6`)의 의미와 이슈 #213 링크를 추가
 - 하한 테스트 잡의 목적과 절차를 설명

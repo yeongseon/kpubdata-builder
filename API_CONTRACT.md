@@ -53,8 +53,13 @@ Builder는 **동기식 실행 모델**을 사용합니다.
 | `/build` | `POST` | 빌드 실행 (동기식) | 동기식 |
 | `/artifacts/{run_id}` | `GET` | 실행 워크스페이스 산출물 목록 조회 | 동기식 |
 | `/builds` | `GET` | 빌드 이력 목록 조회 (최신 수정 시각 기준 내림차순) | 동기식 |
+| `/healthz` | `GET` | 무인증 liveness probe (`{"status":"ok"}`) | 동기식 |
 
 ## 5. 엔드포인트 상세
+
+### 5.0 `GET /healthz` (#372)
+
+무인증 liveness/readiness probe용. 인증 게이트 밖에서 처리되어 버전·메타 정보 없이 `{"status":"ok"}`만 반환합니다.
 
 ### 5.1 `GET /version`
 
@@ -65,7 +70,7 @@ Builder API 계약 버전을 반환합니다.
 ```json
 {
   "service": "kpubdata-builder",
-  "api_version": "1.0.0"
+  "api_version": "1.1.0"
 }
 ```
 
@@ -344,12 +349,28 @@ export KPUBDATA_BUILDER_ALLOWED_ORIGINS=http://localhost:5173,https://studio.exa
 `OPTIONS` 메서드로 preflight 요청을 지원합니다. 허용된 오리진에 대해 다음 헤더를 응답합니다:
 
 - `Access-Control-Allow-Methods: GET, POST, OPTIONS`
-- `Access-Control-Allow-Headers: Content-Type, X-API-Key`
+- `Access-Control-Allow-Headers: Content-Type, X-API-Key, Authorization`
 - `Access-Control-Max-Age: 86400` (24시간)
 
-### 9.4 인증 헤더
+### 9.4 인증 (#248, ADR 0006/0009)
 
-`X-API-Key` 커스텀 헤더를 사용한 인증은 preflight 요청에서 허용 목록에 포함되어야 합니다.
+두 인증 경로를 지원합니다 (API 1.1.0+, #387):
+
+| 방식 | 헤더 | 용도 | 환경변수 |
+| :--- | :--- | :--- | :--- |
+| API Key | `X-API-Key: <secret>` | 서비스 계정 (스케줄 워크플로) | `KPUBDATA_BUILDER_API_KEY` |
+| Bearer (OIDC) | `Authorization: Bearer <jwt>` | 사람 사용자 (Studio, ADR 0009) | `OIDC_ISSUER` + `OIDC_AUDIENCE` |
+
+**fail-closed** (ADR 0006): `KPUBDATA_BUILDER_API_KEY` 미설정 + dev-mode 미설정 시 모든 요청 401.
+
+**OIDC 활성 시** (ADR 0009, #385/#386):
+- `OIDC_ISSUER` + `OIDC_AUDIENCE` + 허용 목록(`OIDC_ALLOWED_HD`/`SUBJECTS`/`EMAILS`) 필수.
+- 미설정 시 Bearer 비활성 — 기존 배포 무영향.
+
+**응답 코드**:
+- `401`: 인증 실패 (토큰 만료·무효·키 불일치) — 재로그인 필요
+- `403`: 인가 실패 (허용 목록 밖) — 재로그인 무의미, 관리자에게 권한 요청
+- `503`: JWKS 일시 장애 — 잠시 후 재시도
 
 ## 10. Python API — BuilderService
 
