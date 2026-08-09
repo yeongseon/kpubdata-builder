@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import heapq
 import json
+import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,7 +32,46 @@ from ..stages._path_safety import ensure_within, validate_path_segment
 from ..stages.bronze.build import SourceClient
 from ..store import BuildIndex
 from ..tabular import DEFAULT_PREVIEW_LIMIT
-from .auth import AuthError, authenticate
+from .auth import AuthError, Principal, authenticate
+
+_OWNERSHIP_ENV = "ENFORCE_OWNERSHIP"
+
+
+def _enforce_ownership() -> bool:
+    """run 소유권 강제가 활성화되어 있는지 (#389). 기본 off — 하위 호환."""
+    return os.environ.get(_OWNERSHIP_ENV, "").lower() in ("true", "1")
+
+
+def _read_manifest_created_by(service: BuilderService, run_id: str) -> str | None:
+    """manifest.json에서 created_by를 읽는다 (#389). 없거나 읽을 수 없으면 None."""
+    manifest_path = service._output_root / run_id / "manifest.json"
+    if not manifest_path.exists():
+        return None
+    try:
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        return cast(str | None, data.get("created_by"))
+    except Exception:
+        return None
+
+
+def _check_ownership(
+    service: BuilderService, run_id: str, principal: Principal
+) -> ServiceResponse | None:
+    """소유권을 검사한다 (#389). 통과 시 None, 거부 시 403 ServiceResponse.
+
+    - ENFORCE_OWNERSHIP off → 항상 None (통과).
+    - dev/service principal → 모든 run 접근 가능 (관리자 권한).
+    - oidc principal → created_by가 본인과 일치해야 함. NULL이면 거부.
+    """
+    if not _enforce_ownership():
+        return None
+    if principal.kind in ("dev", "service"):
+        return None
+    created_by = _read_manifest_created_by(service, run_id)
+    if created_by is not None and created_by == principal.label:
+        return None
+    return ServiceResponse(403, {"error": "forbidden: not run owner"})
+
 
 # Build list entry type for API responses
 _BuildListEntry = dict[str, str | None]
@@ -277,7 +317,9 @@ class BuilderService:
 
         return FileResponse(status_code=200, file_path=requested_file, filename=filename)
 
-    def list_builds(self, *, limit: int = 50) -> ServiceResponse:
+    def list_builds(
+        self, *, limit: int = 50, principal: Principal | None = None
+    ) -> ServiceResponse:
         """실행 이력 목록을 최신 완료 시각 기준 내림차순 반환한다.
 
         ADR 0003에 따라 SQLite 인덱스를 우선 조회하고, 인덱스가 없거나
@@ -287,7 +329,8 @@ class BuilderService:
         try:
             entries = self._build_index.list_builds(limit=limit)
             if entries:
-                # 인덱스가 있으면 반환
+                if _enforce_ownership() and principal and principal.kind == "oidc":
+                    entries = [e for e in entries if e.created_by == principal.label]
                 index_builds: list[_BuildListEntry] = [
                     {
                         "run_id": entry.run_id,
@@ -425,15 +468,14 @@ def dispatch(
         return service.build(spec, run_id=run_id, created_by=principal.label)
 
     if method == "GET" and path.startswith("/artifacts/"):
-        # /artifacts/{run_id}/{file_path} 형식이면 파일 제공, 아니면 목록 반환
         rest = path[len("/artifacts/") :]
         parts = rest.split("/", 1)
         run_id = parts[0]
+        ownership_error = _check_ownership(service, run_id, principal)
+        if ownership_error is not None:
+            return ownership_error
         if len(parts) == 2 and parts[1]:
-            # 파일 요청: /artifacts/{run_id}/{file_path}
-            file_path = parts[1]
-            return service.serve_artifact_file(run_id, file_path)
-        # 목록 요청: /artifacts/{run_id}
+            return service.serve_artifact_file(run_id, parts[1])
         return service.artifacts(run_id)
 
     if method == "GET" and path == "/builds":
@@ -455,7 +497,7 @@ def dispatch(
             if not isinstance(limit_value, int) or isinstance(limit_value, bool) or limit_value < 1:
                 return ServiceResponse(400, {"error": "'limit' must be a positive integer"})
             limit = limit_value
-        return service.list_builds(limit=limit)
+        return service.list_builds(limit=limit, principal=principal)
 
     return ServiceResponse(404, {"error": f"not found: {method} {path}"})
 
