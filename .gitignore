@@ -39,3 +39,6 @@ staging/
 
 # mkdocs build output
 site/
+
+# Agent tooling scratch (opencode/omo sessions, not source)
+.omc/
