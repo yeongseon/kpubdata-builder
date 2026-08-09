@@ -323,6 +323,10 @@ def serve(
     클라이언트가 서버 전체를 멈추지 않으면서도 (#219), 동시 처리 스레드 수에
     상한을 두어 DoS를 방지한다 (#253).
 
+    SIGTERM/SIGINT를 받으면 serve_forever를 중단하고 진행 중 요청이 끝나도록
+    우아한 종료(graceful shutdown)를 수행한다 (#374). ACA/K8s 롤링 업데이트가
+    컨테이너에 SIGTERM을 보낼 때 작업이 강제로 절단되지 않는다.
+
     매개변수:
         service: 노출할 BuilderService.
         host: 바인딩 호스트.
@@ -332,10 +336,24 @@ def serve(
     server = BoundedThreadingHTTPServer(
         (host, port), make_handler(service), max_workers=max_workers
     )
+
+    def _shutdown(_signum: int, _frame: object) -> None:
+        # 별도 스레드에서 shutdown해야 serve_forever 블록이 풀린다 (http.server 권장 패턴).
+        import threading
+
+        threading.Thread(target=server.shutdown, daemon=True).start()
+
+    import signal
+
+    # SIGTERM(컨테이너 오케스트레이터)과 SIGINT(Ctrl-C) 모두 우아한 종료로 연결.
+    previous_term = signal.signal(signal.SIGTERM, _shutdown)
+    previous_int = signal.signal(signal.SIGINT, _shutdown)
     try:
         server.serve_forever()
     finally:
         server.server_close()
+        signal.signal(signal.SIGTERM, previous_term)
+        signal.signal(signal.SIGINT, previous_int)
 
 
 __all__ = ["BoundedThreadingHTTPServer", "make_handler", "serve"]

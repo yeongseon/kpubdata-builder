@@ -421,9 +421,10 @@ def test_serve_invokes_http_server(
 
     captured_kwargs: dict[str, object] = {}
 
-    def fake_serve(service: object, *, host: str, port: int) -> None:
+    def fake_serve(service: object, *, host: str, port: int, max_workers: int) -> None:
         captured_kwargs["host"] = host
         captured_kwargs["port"] = port
+        captured_kwargs["max_workers"] = max_workers
         # --output-dir가 BuilderService.output_root로 올바르게 전달되는지 확인한다 (#249 review).
         assert isinstance(service, BuilderService)
         captured_kwargs["output_root"] = service._output_root
@@ -444,9 +445,11 @@ def test_serve_invokes_http_server(
     out = capsys.readouterr().out
 
     assert exit_code == 0
+    # --max-workers 미지정 → 기본값(10)이 전달된다 (#374).
     assert captured_kwargs == {
         "host": "0.0.0.0",
         "port": 9123,
+        "max_workers": 10,
         "output_root": tmp_path,
     }
     assert "serving kpubdata-builder" in out

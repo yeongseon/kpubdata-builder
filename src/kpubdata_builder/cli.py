@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -133,6 +134,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--output-dir",
         default="build",
         help="Run workspace root directory (default: build).",
+    )
+    serve_cmd.add_argument(
+        "--max-workers",
+        type=int,
+        default=None,
+        help="Max concurrent request threads (default: 10, or KPUBDATA_BUILDER_MAX_WORKERS).",
     )
 
     rebuild_cmd = subparsers.add_parser(
@@ -347,19 +354,28 @@ def _run_publish(
     return 0
 
 
-def _run_serve(*, output_dir: str, host: str, port: int) -> int:
+def _run_serve(*, output_dir: str, host: str, port: int, max_workers: int | None) -> int:
     """BuilderService를 HTTP 서버로 실행한다 (#249).
 
     매개변수:
         output_dir: 실행 워크스페이스 루트.
         host: 바인딩 호스트.
         port: 바인딩 포트.
+        max_workers: 동시 요청 스레드 상한. None이면 KPUBDATA_BUILDER_MAX_WORKERS env,
+            그것도 없으면 기본값(10)을 쓴다 (#374).
 
     반환값:
-        int: 종료 코드. Ctrl-C로 중단 시 0.
+        int: 종료 코드. Ctrl-C/ SIGTERM 우아한 종료 시 0.
     """
     from .service import BuilderService
-    from .service.http import serve
+    from .service.http import _DEFAULT_MAX_WORKERS, serve
+
+    # 우선순위: --max-workers 플래그 > KPUBDATA_BUILDER_MAX_WORKERS env > 기본값.
+    if max_workers is None:
+        env_workers = os.environ.get("KPUBDATA_BUILDER_MAX_WORKERS")
+        max_workers = int(env_workers) if env_workers else _DEFAULT_MAX_WORKERS
+    if max_workers < 1:
+        raise SystemExit(f"max_workers must be >= 1, got {max_workers}")
 
     service = BuilderService(
         output_root=Path(output_dir),
@@ -367,11 +383,12 @@ def _run_serve(*, output_dir: str, host: str, port: int) -> int:
     )
     # 장시간 실행 명령이므로 시작 로그가 파이프 버퍼링에 갈리지 않도록 즉시 flush한다.
     print(
-        f"serving kpubdata-builder on http://{host}:{port} (output: {output_dir})",
+        f"serving kpubdata-builder on http://{host}:{port} "
+        f"(output: {output_dir}, max_workers: {max_workers})",
         flush=True,
     )
     try:
-        serve(service, host=host, port=port)
+        serve(service, host=host, port=port, max_workers=max_workers)
     except KeyboardInterrupt:
         print("\nshutting down", file=sys.stderr)
     return 0
@@ -434,6 +451,7 @@ def dispatch(args: argparse.Namespace) -> int:
             output_dir=args.output_dir,
             host=args.host,
             port=args.port,
+            max_workers=args.max_workers,
         )
     if command == "rebuild-index":
         return _run_rebuild_index(output_dir=args.output_dir)
