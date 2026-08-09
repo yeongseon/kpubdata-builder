@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: KPubData Builder Service API
-  version: "1.1.0"
+  version: "1.2.0"
   description: >-
     Builder 중심 서비스 계약. BuildSpec 검증, preview, build 실행, artifact 조회,
     계약 버전 조회를 제공한다. CLI와 HTTP service mode(#36)가 동일한 도메인 계약을
@@ -44,6 +44,22 @@ paths:
                 $ref: "#/components/schemas/VersionResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
+
+  /catalog:
+    get:
+      operationId: getCatalog
+      summary: provider/dataset 카탈로그 조회 (BL2, #416)
+      responses:
+        "200":
+          description: 사용 가능한 provider와 dataset 목록
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CatalogResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "502":
+          description: 카탈로그 조회 실패
 
   /validate:
     post:
@@ -359,6 +375,53 @@ components:
         status:
           type: string
           const: "ok"
+
+    CatalogResponse:
+      type: object
+      required: [providers]
+      description: provider/dataset 카탈로그 (#416, BL2)
+      properties:
+        providers:
+          type: array
+          items:
+            $ref: "#/components/schemas/CatalogProvider"
+
+    CatalogProvider:
+      type: object
+      required: [name, datasets]
+      properties:
+        name:
+          type: string
+        datasets:
+          type: array
+          items:
+            $ref: "#/components/schemas/CatalogDataset"
+
+    CatalogDataset:
+      type: object
+      required: [name, title, requires_service_key]
+      properties:
+        name:
+          type: string
+        title:
+          type: string
+        requires_service_key:
+          type: boolean
+
+    StructuredProblem:
+      type: object
+      required: [code, path, message]
+      description: 구조화된 검증 문제 (#417, BL3)
+      properties:
+        code:
+          type: string
+        path:
+          type: string
+        message:
+          type: string
+        hint:
+          type: string
+          nullable: true
 
     ValidateResponse:
       type: object
