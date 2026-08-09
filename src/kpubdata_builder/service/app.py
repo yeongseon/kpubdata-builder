@@ -360,7 +360,8 @@ def dispatch(
     """(method, path)를 BuilderService 연산으로 라우팅한다.
 
     GET /healthz는 인증 없이 반환하고 (#372), 그 외 엔드포인트는
-    X-API-Key(또는 Bearer) 검증 후 라우팅한다 (#248).
+    authenticate()로 Principal을 얻어 인증 게이트를 통과한 후 라우팅한다.
+    dev-mode이면 인증 생략, 그 외는 fail-closed(401)로 동작한다 (#248, #384).
 
     반환값:
         ServiceResponse 또는 FileResponse (#323).
@@ -372,7 +373,7 @@ def dispatch(
     # 인증 게이트 (#384): Principal을 얻지 못하면 401.
     principal = authenticate(api_key=api_key)
     if isinstance(principal, AuthError):
-        return ServiceResponse(principal.status_code, {"error": "unauthorized"})
+        return ServiceResponse(401, {"error": "unauthorized"})
 
     if method == "GET" and path == "/version":
         return service.version()
