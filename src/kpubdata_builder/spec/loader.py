@@ -17,7 +17,7 @@ from typing import cast
 import yaml
 
 from ..errors import SpecLoadError
-from .models import BuildSpec, ExportTarget, JsonValue, SourceRef, SplitSpec
+from .models import BuildSpec, ExportTarget, JsonValue, SchemaContract, SourceRef, SplitSpec
 
 
 def parse_spec(data: dict[str, object]) -> BuildSpec:
@@ -212,6 +212,8 @@ def _parse_sources(value: object) -> tuple[SourceRef, ...]:
             raise TypeError(f"sources[{index}].normalization_mode must be a string")
         if not isinstance(alias_obj, str):
             raise TypeError(f"sources[{index}].alias must be a string")
+        schema_obj = mapping.get("schema")
+        schema = _parse_schema(schema_obj, prefix=prefix) if schema_obj is not None else None
         parsed_sources.append(
             SourceRef(
                 provider=provider,
@@ -219,9 +221,31 @@ def _parse_sources(value: object) -> tuple[SourceRef, ...]:
                 params=params,
                 normalization_mode=normalization_mode_obj,
                 alias=alias_obj,
+                schema=schema,
             )
         )
     return tuple(parsed_sources)
+
+
+def _parse_schema(value: object, *, prefix: str) -> SchemaContract:
+    """sources[].schema 매핑을 SchemaContract로 변환한다 (#437).
+
+    required/dtypes/casts 세 필드를 파싱한다. dtype/cast 값은 문자열이어야 하고,
+    실제 polars dtype 으로 해석 가능한지는 validator.py 가 검증한다 (로더는 구조만).
+    """
+    mapping = _ensure_mapping(value, field_name=f"{prefix}.schema")
+    required = _parse_string_list(
+        mapping.get("required", []), field_name=f"{prefix}.schema.required"
+    )
+    dtypes = cast(
+        dict[str, str],
+        _parse_string_dict(mapping.get("dtypes", {}), field_name=f"{prefix}.schema.dtypes"),
+    )
+    casts = cast(
+        dict[str, str],
+        _parse_string_dict(mapping.get("casts", {}), field_name=f"{prefix}.schema.casts"),
+    )
+    return SchemaContract(required=required, dtypes=dtypes, casts=casts)
 
 
 def _parse_exports(value: object) -> tuple[ExportTarget, ...]:

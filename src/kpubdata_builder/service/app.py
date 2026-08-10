@@ -99,7 +99,7 @@ def _apply_ownership(
 # Builder API 계약 버전. contract/builder-api.yaml의 info.version과 일치해야 하며
 # (test_service_contract가 강제), 응답에 실어 Studio 같은 소비자가 하위 호환을
 # 협상할 수 있게 한다 (#209).
-API_CONTRACT_VERSION = "1.2.0"
+API_CONTRACT_VERSION = "1.3.0"
 
 
 @dataclass(frozen=True)

@@ -165,7 +165,12 @@ def _run_source_pipeline(
             params=source.params,
         )
 
-        silver = build_silver_dataset(bronze)
+        silver = build_silver_dataset(
+            bronze,
+            required_columns=source.schema.required if source.schema else (),
+            casts=source.schema.casts if source.schema else None,
+            column_dtypes=source.schema.dtypes if source.schema else None,
+        )
         # 검증에 실패한 Silver 데이터셋이 Gold/패키징으로 흘러가지 않도록 소스를
         # 실패 처리한다. 검증은 더 이상 권고용이 아니라 게이트다 (#189).
         if not silver.validation.ok:
