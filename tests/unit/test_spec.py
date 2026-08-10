@@ -36,7 +36,6 @@ def test_build_spec_instantiation() -> None:
     )
 
     assert spec.dataset_id == "dataset.sample"
-    assert spec.transforms == ()
     assert spec.metadata == {}
     assert spec.publish is False
 
@@ -57,14 +56,12 @@ def test_parse_spec_converts_nested_to_typed_objects() -> None:
 
 
 def test_parse_spec_applies_optional_defaults() -> None:
-    """transforms/metadata/publish default when omitted from YAML."""
+    """metadata/publish default when omitted from YAML."""
     spec = parse_spec(_valid_payload())
 
-    assert spec.transforms == ()
     assert spec.metadata == {}
     assert spec.publish is False
     assert spec.sources[0].params == {}
-    assert spec.sources[0].normalization_mode == "canonical"
     assert spec.sources[0].alias == ""
     assert spec.exports[0].options == {}
 
@@ -72,13 +69,11 @@ def test_parse_spec_applies_optional_defaults() -> None:
 def test_parse_spec_preserves_provided_optionals() -> None:
     """Provided optional fields are carried through unchanged."""
     payload = _valid_payload()
-    payload["transforms"] = ["normalize", "dedupe"]
     payload["metadata"] = {"owner": "kpubdata"}
     payload["publish"] = True
     sources = payload["sources"]
     assert isinstance(sources, list)
     sources[0]["params"] = {"year": 2024}
-    sources[0]["normalization_mode"] = "raw"
     sources[0]["alias"] = "aq"
     exports = payload["exports"]
     assert isinstance(exports, list)
@@ -86,11 +81,9 @@ def test_parse_spec_preserves_provided_optionals() -> None:
 
     spec = parse_spec(payload)
 
-    assert spec.transforms == ("normalize", "dedupe")
     assert spec.metadata == {"owner": "kpubdata"}
     assert spec.publish is True
     assert spec.sources[0].params == {"year": 2024}
-    assert spec.sources[0].normalization_mode == "raw"
     assert spec.sources[0].alias == "aq"
     assert spec.exports[0].options == {"compression": "gzip"}
 
@@ -179,8 +172,6 @@ def test_load_spec_round_trips_from_yaml(tmp_path: Path) -> None:
 dataset_id: dataset.sample
 title: Sample Dataset
 description: Sample description
-transforms:
-  - normalize
 metadata:
   owner: kpubdata
 publish: true
@@ -202,7 +193,6 @@ exports:
     spec = load_spec(spec_path)
 
     assert spec.dataset_id == "dataset.sample"
-    assert spec.transforms == ("normalize",)
     assert spec.metadata == {"owner": "kpubdata"}
     assert spec.publish is True
     assert spec.sources[0].params == {"year": 2024}
@@ -240,3 +230,21 @@ exports:
 
     assert spec.dataset_id == "dataset.sample"
     assert spec.sources[0].provider == "datago"
+
+
+def test_parse_spec_rejects_removed_transforms_field() -> None:
+    """transforms 필드는 제거됨 (#438). 키를 만나면 명시적 에러 (조용히 무시 방지)."""
+    payload = _valid_payload()
+    payload["transforms"] = ["normalize"]
+    with pytest.raises(SpecLoadError, match="transforms"):
+        _ = parse_spec(payload)
+
+
+def test_parse_spec_rejects_removed_normalization_mode_field() -> None:
+    """sources[].normalization_mode 필드는 제거됨 (#438). 키를 만나면 에러."""
+    payload = _valid_payload()
+    sources = payload["sources"]
+    assert isinstance(sources, list)
+    sources[0]["normalization_mode"] = "raw"
+    with pytest.raises(SpecLoadError, match="normalization_mode"):
+        _ = parse_spec(payload)

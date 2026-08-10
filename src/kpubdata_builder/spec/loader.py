@@ -36,7 +36,10 @@ def parse_spec(data: dict[str, object]) -> BuildSpec:
         dataset_id = _require_string(data, "dataset_id")
         title = _require_string(data, "title")
         description = _require_string(data, "description")
-        transforms = _parse_string_list(data.get("transforms", []), field_name="transforms")
+        # transforms 필드는 제거됨 (#438). VAL-1 의 sources[].schema.casts 가 대체.
+        # 조용히 무시하지 않고 명시적 에러로 사용자에게 알린다.
+        if "transforms" in data:
+            raise ValueError("'transforms' is removed; use sources[].schema.casts instead (#438)")
         metadata = _parse_string_dict(data.get("metadata", {}), field_name="metadata")
         publish = _parse_bool(data.get("publish", False), field_name="publish")
         sources = _parse_sources(_require_present(data, "sources"))
@@ -51,7 +54,6 @@ def parse_spec(data: dict[str, object]) -> BuildSpec:
         description=description,
         sources=sources,
         exports=exports,
-        transforms=transforms,
         metadata=metadata,
         publish=publish,
         splits=splits,
@@ -206,10 +208,14 @@ def _parse_sources(value: object) -> tuple[SourceRef, ...]:
         params = _parse_json_mapping(
             mapping.get("params", {}), field_name=f"sources[{index}].params"
         )
-        normalization_mode_obj = mapping.get("normalization_mode", "canonical")
+        # normalization_mode 필드는 제거됨 (#438). sources[].schema 가 대체.
+        # 조용히 무시하지 않고 명시적 에러로 알린다.
+        if "normalization_mode" in mapping:
+            raise TypeError(
+                f"sources[{index}].normalization_mode is removed; "
+                "use sources[].schema instead (#438)"
+            )
         alias_obj = mapping.get("alias", "")
-        if not isinstance(normalization_mode_obj, str):
-            raise TypeError(f"sources[{index}].normalization_mode must be a string")
         if not isinstance(alias_obj, str):
             raise TypeError(f"sources[{index}].alias must be a string")
         parsed_sources.append(
@@ -217,7 +223,6 @@ def _parse_sources(value: object) -> tuple[SourceRef, ...]:
                 provider=provider,
                 dataset=dataset,
                 params=params,
-                normalization_mode=normalization_mode_obj,
                 alias=alias_obj,
             )
         )
