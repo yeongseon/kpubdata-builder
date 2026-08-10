@@ -14,6 +14,8 @@ from typing import cast
 import pytest
 
 from kpubdata_builder.service import BuilderService, ServiceResponse, dispatch
+from kpubdata_builder.service.app import _OWNERSHIP_ENV
+from kpubdata_builder.service.auth import Principal
 from kpubdata_builder.service.http import _clear_cors_cache, make_handler
 from kpubdata_builder.spec import JsonValue
 
@@ -1037,3 +1039,85 @@ class TestArtifactFileServing:
         # 알 수 없는 확장자 → 기본값
         assert _get_mime_type(tmp_path / "data.unknown") == "application/octet-stream"
         assert _get_mime_type(tmp_path / "data") == "application/octet-stream"
+
+
+class TestOwnershipEnforcement:
+    """ENFORCE_OWNERSHIP 회귀: 인덱스 폴백 시에도 소유권이 강제되어야 한다 (#433).
+
+    list_builds의 SQLite 인덱스 분기에만 소유권 필터가 있고, 파일시스템 폴백에는
+    없어 ENFORCE_OWNERSHIP=true 여도 타인의 run_id가 노출되는 버그 회귀 테스트.
+    ADR 0003이 폴백을 정상 동작 모드로 설계하므로 예외 상황이 아님.
+    """
+
+    def _build_as(self, service: BuilderService, run_id: str, created_by: str) -> None:
+        """created_by를 명시적으로 기록하며 빌드 (테스트 단순화용 주입)."""
+        dispatch(
+            service,
+            "POST",
+            "/build",
+            {"spec": VALID_SPEC_YAML, "run_id": run_id},
+        )
+        mpath = service._output_root / run_id / "manifest.json"
+        data = json.loads(mpath.read_text(encoding="utf-8"))
+        data["created_by"] = created_by
+        mpath.write_text(json.dumps(data), encoding="utf-8")
+
+    def test_fallback_filters_other_owners_when_index_empty(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """인덱스가 비었을 때 폴백이 다른 사용자의 run을 노출하면 안 된다 (#433)."""
+        monkeypatch.setenv(_OWNERSHIP_ENV, "true")
+        service = _service(tmp_path)
+        self._build_as(service, "runA", "oidc:userA")
+        monkeypatch.setattr(service._build_index, "list_builds", lambda limit: [])
+
+        user_b = Principal(kind="oidc", identifier="userB")
+        resp = service.list_builds(principal=user_b)
+
+        assert resp.status_code == 200
+        builds = cast(list[dict[str, object]], resp.body["builds"])
+        run_ids = [cast(str, b["run_id"]) for b in builds]
+        assert "runA" not in run_ids, (
+            "폴백 경로가 다른 사용자의 run_id를 노출함 — 소유권 필터 누락 (#433)"
+        )
+
+    def test_fallback_filters_other_owners_when_index_raises(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """인덱스 조회가 예외로 실패해도 폴백은 소유권을 강제해야 한다 (#433).
+
+        SQLite 잠금 경합 등으로 list_builds가 예외를 던질 때, ENFORCE_OWNERSHIP+
+        oidc 조합이면 타인 run이 폴백으로 새어나가면 안 됨 (fail-closed).
+        """
+        monkeypatch.setenv(_OWNERSHIP_ENV, "true")
+        service = _service(tmp_path)
+        self._build_as(service, "runA", "oidc:userA")
+
+        def _raise(_limit: int) -> list:
+            raise RuntimeError("simulated sqlite lock contention")
+
+        monkeypatch.setattr(service._build_index, "list_builds", _raise)
+
+        user_b = Principal(kind="oidc", identifier="userB")
+        resp = service.list_builds(principal=user_b)
+
+        assert resp.status_code == 200
+        builds = cast(list[dict[str, object]], resp.body["builds"])
+        run_ids = [cast(str, b["run_id"]) for b in builds]
+        assert "runA" not in run_ids
+
+    def test_owner_sees_own_run_in_fallback(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """소유자 본인은 폴백에서도 자신의 run을 볼 수 있어야 한다 (양성 회귀)."""
+        monkeypatch.setenv(_OWNERSHIP_ENV, "true")
+        service = _service(tmp_path)
+        self._build_as(service, "runA", "oidc:userA")
+        monkeypatch.setattr(service._build_index, "list_builds", lambda limit: [])
+
+        user_a = Principal(kind="oidc", identifier="userA")
+        resp = service.list_builds(principal=user_a)
+
+        builds = cast(list[dict[str, object]], resp.body["builds"])
+        run_ids = [cast(str, b["run_id"]) for b in builds]
+        assert "runA" in run_ids
