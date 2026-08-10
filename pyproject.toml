@@ -46,7 +46,10 @@ docs = [
 ]
 parquet = ["pyarrow>=15,<26"]
 huggingface = ["huggingface-hub>=0.23,<2"]
-auth = ["pyjwt[crypto]>=2.8,<3"]
+# PyJWT 2.9+ 부터 issuer=list 지원 (#434). auth.py:_verify_bearer_token 이
+# list(=여러 issuer)를 jwt.decode(issuer=...)로 넘기므로, 하한을 되돌리면
+# 2.8.x 환경에서 모든 토큰이 InvalidIssuerError 로 거부된다.
+auth = ["pyjwt[crypto]>=2.9,<3"]
 publish = ["huggingface-hub>=0.23,<2", "xmltodict>=0.13,<2", "kaggle>=1.6,<2"]
 dev = [
   "build>=1.2,<2",
@@ -56,7 +59,7 @@ dev = [
   "ruff>=0.5,<1",
   "types-PyYAML>=6.0",
   # auth extra를 dev에 포함해 CI(mypy/ruff/pytest)에서 항상 타입 체크 가능 (#385).
-  "pyjwt[crypto]>=2.8,<3",
+  "pyjwt[crypto]>=2.9,<3",
 ]
 
 [tool.hatch.build.targets.wheel]
