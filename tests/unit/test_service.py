@@ -1207,3 +1207,32 @@ class TestCatalog:
         service = BuilderService(output_root=tmp_path, client_factory=lambda: _BrokenClient())
         resp = service.catalog()
         assert resp.status_code == 502
+
+
+class TestRunIdRouteValidation:
+    """/artifacts/{run_id} 라우트가 run_id를 소유권 검사보다 먼저 검증 (#439).
+
+    _read_manifest_created_by 가 URL에서 온 run_id로 검증 없이 경로를 조립하므로,
+    "../" 등 unsafe 세그먼트가 _check_ownership 보다 먼저 validate_path_segment
+    에 도달해야 한다.
+    """
+
+    def test_unsafe_run_id_returns_400_before_ownership(self, tmp_path: Path) -> None:
+        """unsafe run_id(``..``)는 _check_ownership 전에 400 (#439)."""
+        resp = dispatch(_service(tmp_path), "GET", "/artifacts/../bad", None)
+        assert resp.status_code == 400
+        err = str(resp.body.get("error", "")).lower()
+        assert "run_id" in err or "safe" in err
+
+    def test_blank_run_id_returns_400(self, tmp_path: Path) -> None:
+        resp = dispatch(_service(tmp_path), "GET", "/artifacts/", None)
+        assert resp.status_code == 400
+        assert "run_id" in str(resp.body.get("error", "")).lower()
+
+    def test_safe_run_id_still_reaches_ownership_check(self, tmp_path: Path) -> None:
+        """safe run_id는 validate 통과 후 artifacts(또는 소유권 검사)로 (#439 양성)."""
+        service = _service(tmp_path)
+        service.build(VALID_SPEC_YAML, run_id="run1")
+        # ENFORCE_OWNERSHIP off(기본) → 200
+        resp = dispatch(service, "GET", "/artifacts/run1", None)
+        assert resp.status_code == 200
