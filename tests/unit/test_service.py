@@ -60,6 +60,18 @@ class _FakeResult:
         return self._items
 
 
+class _FakeCatalog:
+    """``client.datasets`` 흉내 — DatasetRef 목록을 provider 필터로 반환."""
+
+    def __init__(self, items: list[object] | None = None) -> None:
+        self._items = items or []
+
+    def list(self, *, provider: str | None = None) -> list[object]:
+        if provider is None:
+            return self._items
+        return [i for i in self._items if getattr(i, "provider", None) == provider]
+
+
 class _FakeDataset:
     def __init__(self, items: list[dict[str, JsonValue]]) -> None:
         self._items = items
@@ -69,8 +81,13 @@ class _FakeDataset:
 
 
 class _FakeClient:
-    def __init__(self, data: dict[str, list[dict[str, JsonValue]]]) -> None:
+    def __init__(
+        self,
+        data: dict[str, list[dict[str, JsonValue]]],
+        catalog_items: list[object] | None = None,
+    ) -> None:
         self._data = data
+        self.datasets = _FakeCatalog(catalog_items)
 
     def dataset(self, source_key: str) -> _FakeDataset:
         if source_key not in self._data:
@@ -1121,3 +1138,72 @@ class TestOwnershipEnforcement:
         builds = cast(list[dict[str, object]], resp.body["builds"])
         run_ids = [cast(str, b["run_id"]) for b in builds]
         assert "runA" in run_ids
+
+
+class _FakeCatalogRef:
+    """DatasetRef 흉내 — catalog() 가 접근하는 속성만 노출."""
+
+    def __init__(
+        self, provider: str, dataset_key: str, name: str, *, service_key: bool = False
+    ) -> None:
+        self.provider = provider
+        self.dataset_key = dataset_key
+        self.name = name
+        self.raw_metadata: dict[str, object] = (
+            {"service_key_param": "serviceKey"} if service_key else {}
+        )
+
+
+class TestCatalog:
+    """catalog 동적 provider 조회 (#436). ADR 0011 — 하드코딩 금지."""
+
+    def _service_with_catalog(self, tmp_path: Path, refs: list[object]) -> BuilderService:
+        client = _FakeClient({}, catalog_items=refs)
+        return BuilderService(output_root=tmp_path, client_factory=lambda: client)
+
+    def test_catalog_groups_datasets_by_provider(self, tmp_path: Path) -> None:
+        refs = [
+            _FakeCatalogRef("datago", "air_quality", "대기오염", service_key=True),
+            _FakeCatalogRef("datago", "village_fcst", "단기예보"),
+            _FakeCatalogRef("bok", "base_rate", "기준금리"),
+        ]
+        resp = self._service_with_catalog(tmp_path, refs).catalog()
+
+        assert resp.status_code == 200
+        providers = cast(list[dict[str, object]], resp.body["providers"])
+        names = [cast(str, p["name"]) for p in providers]
+        assert "datago" in names
+        assert "bok" in names
+
+        datago = next(p for p in providers if p["name"] == "datago")
+        datago_datasets = cast(list[dict[str, object]], datago["datasets"])
+        assert len(datago_datasets) == 2
+        aq = next(d for d in datago_datasets if d["name"] == "air_quality")
+        assert aq["requires_service_key"] is True
+        vf = next(d for d in datago_datasets if d["name"] == "village_fcst")
+        assert vf["requires_service_key"] is False
+
+    def test_catalog_includes_unlisted_providers(self, tmp_path: Path) -> None:
+        """하드코딩 8개에 없는 provider도 동적 조회로 떠야 한다 (#436)."""
+        refs = [_FakeCatalogRef("newprovider", "new_ds", "새 데이터셋")]
+        resp = self._service_with_catalog(tmp_path, refs).catalog()
+
+        assert resp.status_code == 200
+        providers = cast(list[dict[str, object]], resp.body["providers"])
+        names = [cast(str, p["name"]) for p in providers]
+        assert "newprovider" in names
+
+    def test_catalog_empty_when_no_datasets(self, tmp_path: Path) -> None:
+        resp = self._service_with_catalog(tmp_path, []).catalog()
+        assert resp.status_code == 200
+        assert resp.body["providers"] == []
+
+    def test_catalog_returns_502_when_client_raises(self, tmp_path: Path) -> None:
+        class _BrokenClient:
+            @property
+            def datasets(self) -> object:
+                raise RuntimeError("client init failed")
+
+        service = BuilderService(output_root=tmp_path, client_factory=lambda: _BrokenClient())
+        resp = service.catalog()
+        assert resp.status_code == 502

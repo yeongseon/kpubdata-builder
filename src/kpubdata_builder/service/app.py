@@ -24,6 +24,8 @@ from typing import cast
 from urllib.parse import parse_qs
 
 import yaml
+from kpubdata import Client
+from kpubdata.core.models import DatasetRef
 
 from ..errors import SpecLoadError, ValidationError
 from ..pipeline import preview_build, run_build
@@ -159,45 +161,45 @@ class BuilderService:
         )
 
     def catalog(self) -> ServiceResponse:
-        """사용 가능한 provider/dataset 카탈로그를 반환한다 (#416, BL2).
+        """사용 가능한 provider/dataset 카탈로그를 반환한다 (#416, BL2, #436).
 
-        kpubdata Client의 catalog에서 provider별 dataset 목록을 구성한다.
-        시크릿 값은 노출하지 않고 필요 여부만 표시한다.
+        kpubdata Client의 공개 ``datasets.list()`` 로 모든 데이터셋을 조회한 뒤
+        provider별로 그룹화한다 (ADR 0011 — Builder가 provider 목록을
+        하드코딩하지 않는다). 이전에는 ``getattr(client, "_catalog")`` private
+        접근 + 8개 provider 하드코딩 튜플을 써서 kpubdata에 provider가 추가돼도
+        카탈로그에 안 떴다 (#436). 시크릿 값은 노출하지 않고 필요 여부만 표시한다.
         """
         try:
-            client = self._client_factory()
-            cat = getattr(client, "_catalog", None)
-            if cat is None:
-                return ServiceResponse(502, {"error": "catalog unavailable: client has no catalog"})
-            providers_data: list[JsonValue] = []
-            for provider_name in (
-                "datago",
-                "bok",
-                "law",
-                "seoul",
-                "kosis",
-                "lofin",
-                "localdata",
-                "semas",
-            ):
-                try:
-                    items = cat.list(provider=provider_name)
-                    datasets: list[JsonValue] = [
-                        {
-                            "name": item.dataset_key,
-                            "title": item.name,
-                            "requires_service_key": bool(
-                                getattr(item, "raw_metadata", {}).get("service_key_param")
-                            ),
-                        }
-                        for item in items
-                    ]
-                    providers_data.append({"name": provider_name, "datasets": datasets})
-                except Exception:
-                    continue
-            return ServiceResponse(200, {"providers": providers_data})
+            # client_factory는 SourceClient(Protocol)을 반환타입으로 선언하지만
+            # catalog는 kpubdata.Client의 공개 datasets API를 쓴다. 런타임엔 항상
+            # kpubdata.Client이므로 cast로 타입을 확정한다 (#436).
+            client = cast(Client, self._client_factory())
+            all_datasets = client.datasets.list()
         except Exception as exc:
             return ServiceResponse(502, {"error": f"catalog unavailable: {exc}"})
+
+        # provider별 그룹화 (등록 순서 보존 위해 dict 사용).
+        grouped: dict[str, list[DatasetRef]] = {}
+        for ds in all_datasets:
+            grouped.setdefault(ds.provider, []).append(ds)
+
+        providers_data: list[JsonValue] = [
+            {
+                "name": provider_name,
+                "datasets": [
+                    {
+                        "name": item.dataset_key,
+                        "title": item.name,
+                        "requires_service_key": bool(
+                            getattr(item, "raw_metadata", {}).get("service_key_param")
+                        ),
+                    }
+                    for item in items
+                ],
+            }
+            for provider_name, items in grouped.items()
+        ]
+        return ServiceResponse(200, {"providers": providers_data})
 
     def validate(self, spec_yaml: str) -> ServiceResponse:
         """BuildSpec을 파싱·검증한다."""
