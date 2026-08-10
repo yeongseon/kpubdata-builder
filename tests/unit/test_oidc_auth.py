@@ -265,3 +265,108 @@ class TestAllowlistGate:
         token = _make_token(oidc_env, hd="example.com")
         result = authenticate(bearer_token=f"Bearer {token}")
         assert isinstance(result, Principal)
+
+
+class _FakeDiscoveryResp:
+    """urllib urlopen 반환 흉내 (context manager + read)."""
+
+    def __init__(self, body: bytes) -> None:
+        self._body = body
+
+    def read(self) -> bytes:
+        return self._body
+
+    def __enter__(self) -> _FakeDiscoveryResp:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        pass
+
+
+class TestJwksDiscovery:
+    """OIDC discovery (RFC 8414) 기반 JWKS URL 해석 (#435).
+
+    기존 ``issuer + /.well-known/jwks.json`` 추정이 Google에서 404 → 503 실패를
+    일으킨 문제 수정. discovery 문서의 jwks_uri를 읽고 TTL 캐시한다.
+    """
+
+    def _clear_cache(self) -> None:
+        import kpubdata_builder.service.auth as auth_module
+
+        auth_module._discovery_cache.clear()
+
+    def test_discover_reads_jwks_uri(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """discovery 문서의 jwks_uri 필드를 반환한다 (Google 경로)."""
+        import urllib.request
+
+        import kpubdata_builder.service.auth as auth_module
+
+        self._clear_cache()
+        captured: list[str] = []
+        doc = b'{"issuer":"https://accounts.google.com","jwks_uri":"https://www.googleapis.com/oauth2/v3/certs"}'
+
+        def _fake_urlopen(url: str, timeout: float) -> _FakeDiscoveryResp:
+            captured.append(url)
+            return _FakeDiscoveryResp(doc)
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+
+        result = auth_module._discover_jwks_uri("https://accounts.google.com")
+        assert result == "https://www.googleapis.com/oauth2/v3/certs"
+        assert "accounts.google.com/.well-known/openid-configuration" in captured[0]
+
+    def test_oidc_jwks_url_explicit_bypasses_discovery(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """OIDC_JWKS_URL 명시 시 discovery를 건너뛴다 (override)."""
+        import kpubdata_builder.service.auth as auth_module
+
+        monkeypatch.setenv("OIDC_JWKS_URL", "http://explicit/jwks.json")
+        assert auth_module._oidc_jwks_url() == "http://explicit/jwks.json"
+
+    def test_discover_caches_within_ttl(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """동일 issuer는 TTL 내 재조회 시 urlopen을 한 번만 부른다."""
+        import urllib.request
+
+        import kpubdata_builder.service.auth as auth_module
+
+        self._clear_cache()
+        call_count = [0]
+
+        def _fake_urlopen(url: str, timeout: float) -> _FakeDiscoveryResp:
+            call_count[0] += 1
+            return _FakeDiscoveryResp(b'{"jwks_uri":"https://cached/certs"}')
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+
+        first = auth_module._discover_jwks_uri("https://idp.example.com")
+        second = auth_module._discover_jwks_uri("https://idp.example.com")
+        assert first == second == "https://cached/certs"
+        assert call_count[0] == 1, "캐시 hit면 urlopen을 다시 부르지 않는다"
+
+    def test_discover_raises_when_jwks_uri_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """discovery 문서에 jwks_uri 필드가 없으면 RuntimeError."""
+        import urllib.request
+
+        import kpubdata_builder.service.auth as auth_module
+
+        self._clear_cache()
+        monkeypatch.setattr(
+            urllib.request,
+            "urlopen",
+            lambda url, timeout: _FakeDiscoveryResp(b'{"issuer":"https://idp.example.com"}'),
+        )
+
+        with pytest.raises(RuntimeError, match="jwks_uri"):
+            auth_module._discover_jwks_uri("https://idp.example.com")
+
+    def test_oidc_jwks_url_raises_when_no_issuer_no_explicit(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """OIDC_ISSUER 미설정 + OIDC_JWKS_URL 미설정 → RuntimeError (방어)."""
+        import kpubdata_builder.service.auth as auth_module
+
+        monkeypatch.delenv("OIDC_ISSUER", raising=False)
+        monkeypatch.delenv("OIDC_JWKS_URL", raising=False)
+        with pytest.raises(RuntimeError, match="OIDC_ISSUER"):
+            auth_module._oidc_jwks_url()
