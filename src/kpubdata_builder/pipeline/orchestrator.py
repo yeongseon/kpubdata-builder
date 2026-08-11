@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     import polars as pl
 
 from ..artifact import ArtifactDataset
-from ..errors import DatasetValidationError, ExportError, ValidationError
+from ..errors import DatasetValidationError, ValidationError
 from ..exporters import get_exporter
 from ..manifest import (
     BuildManifest,
@@ -121,7 +121,7 @@ def _record_output_paths(outputs: list[str], *paths: Path) -> None:
 
 def _execute_exports(
     gold_dir: Path,
-    table: "pl.DataFrame",
+    table: pl.DataFrame,
     exports: tuple[ExportTarget, ...],
     dataset_name: str,
 ) -> list[Path]:
@@ -136,13 +136,9 @@ def _execute_exports(
     반환값:
         생성된 파일 경로 목록.
 
-    예외:
-        ExportError: 내보내기 실패 시.
     """
-    import polars as pl
-
     artifact = ArtifactDataset(
-        records=tuple(table.iter_rows(named=True)),  # type: ignore[arg-type]
+        records=tuple(table.iter_rows(named=True)),
         statistics={"row_count": len(table)},
         provenance=(dataset_name,),
     )
@@ -323,13 +319,13 @@ def _run_source_pipeline(
         _record_output_paths(outputs, card_path)
 
         # BuildSpec.exports에 정의된 내보내기 도구 실행
-        export_paths = _execute_exports(
+        buildspec_export_paths = _execute_exports(
             gold_paths.gold_dir,
             gold.table,
             context.spec.exports,
             output_key,
         )
-        _record_output_paths(outputs, *export_paths)
+        _record_output_paths(outputs, *buildspec_export_paths)
 
         schema_summary = build_schema_summary(
             (column.name, column.dtype, column.nullable) for column in silver.schema.columns
