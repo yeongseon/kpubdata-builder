@@ -196,6 +196,30 @@ def _run_source_pipeline(
                         ", ".join(f"{f.kind}@{f.column}({f.count})" for f in findings),
                     )
 
+        # 품질 임계 게이트 (#446, QG-3). 기본 warn — 임계 위반 시 로그 경고.
+        if context.spec.quality is not None:
+            qp = context.spec.quality
+            stats = silver.statistics
+            if qp.max_duplicate_rate is not None and stats.duplicate_rate > qp.max_duplicate_rate:
+                logger.warning(
+                    "품질 위반: 중복 행 비율 %.4f > 임계 %.4f (#446)",
+                    stats.duplicate_rate,
+                    qp.max_duplicate_rate,
+                )
+            if qp.min_rows is not None and stats.row_count < qp.min_rows:
+                logger.warning("품질 위반: 행 수 %d < 최소 %d (#446)", stats.row_count, qp.min_rows)
+            for col, max_ratio in qp.max_null_ratio.items():
+                actual_nulls = stats.null_counts.get(col, 0)
+                if stats.row_count > 0:
+                    actual_ratio = actual_nulls / stats.row_count
+                    if actual_ratio > max_ratio:
+                        logger.warning(
+                            "품질 위반: 컬럼 %s null 비율 %.4f > 임계 %.4f (#446)",
+                            col,
+                            actual_ratio,
+                            max_ratio,
+                        )
+
         silver_paths = persist_silver_dataset(
             silver, output_root=context.output_root, run_id=context.run_id
         )
