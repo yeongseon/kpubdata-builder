@@ -19,7 +19,9 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..artifact import ArtifactDataset
 from ..errors import DatasetValidationError, ValidationError
+from ..exporters import get_exporter
 from ..manifest import (
     BuildManifest,
     SchemaSummary,
@@ -30,7 +32,7 @@ from ..manifest import (
     compute_inputs_fingerprint,
     manifest_writer,
 )
-from ..spec import BuildSpec, SourceRef
+from ..spec import BuildSpec, ExportTarget, SourceRef
 from ..spec.validator import validate_spec
 from ..stages.bronze.build import SourceClient, build_bronze_artifact
 from ..stages.bronze.models import BronzeArtifact, utc_now
@@ -111,6 +113,36 @@ def _retag_bronze_artifact(artifact: BronzeArtifact, *, output_key: str) -> Bron
 def _record_output_paths(outputs: list[str], *paths: Path) -> None:
     """생성된 산출물 경로를 manifest outputs에 모두 기록한다."""
     outputs.extend(str(path) for path in paths)
+
+
+def _execute_exports(
+    gold_dir: Path,
+    artifact: ArtifactDataset,
+    exports: tuple[ExportTarget, ...],
+) -> list[Path]:
+    """내보내기 도구를 실행하고 생성된 파일 경로를 반환한다.
+
+    매개변수:
+        gold_dir: Gold 패키지 디렉터리.
+        artifact: 내보내기 도구가 소비할 조립 산출물.
+        exports: 내보내기 대상 목록.
+
+    반환값:
+        생성된 파일 경로 목록.
+
+    """
+    output_paths: list[Path] = []
+    for export_target in exports:
+        exporter = get_exporter(export_target.kind)
+        result = exporter.export(artifact, export_target, gold_dir)
+        output_paths.append(result.output_path)
+        logger.info(
+            "exported %s to %s (size: %d bytes)",
+            export_target.kind,
+            result.output_path,
+            result.file_size,
+        )
+    return output_paths
 
 
 @dataclass(frozen=True)
@@ -273,6 +305,20 @@ def _run_source_pipeline(
         card_path = gold_paths.gold_dir / "README.md"
         _ = card_path.write_text(render_dataset_card(card), encoding="utf-8")
         _record_output_paths(outputs, card_path)
+
+        # BuildSpec.exports에 정의된 내보내기 도구 실행
+        export_artifact = ArtifactDataset(
+            records=tuple(gold.table.iter_rows(named=True)),
+            metadata={"title": context.spec.title, "description": context.spec.description},
+            statistics={"row_count": len(gold.table)},
+            provenance=(output_key,),
+        )
+        buildspec_export_paths = _execute_exports(
+            gold_paths.gold_dir,
+            export_artifact,
+            context.spec.exports,
+        )
+        _record_output_paths(outputs, *buildspec_export_paths)
 
         schema_summary = build_schema_summary(
             (column.name, column.dtype, column.nullable) for column in silver.schema.columns
