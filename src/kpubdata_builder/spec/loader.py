@@ -17,7 +17,15 @@ from typing import cast
 import yaml
 
 from ..errors import SpecLoadError
-from .models import BuildSpec, ExportTarget, JsonValue, SchemaContract, SourceRef, SplitSpec
+from .models import (
+    BuildSpec,
+    ExportTarget,
+    JsonValue,
+    PiiPolicy,
+    SchemaContract,
+    SourceRef,
+    SplitSpec,
+)
 
 
 def parse_spec(data: dict[str, object]) -> BuildSpec:
@@ -45,6 +53,7 @@ def parse_spec(data: dict[str, object]) -> BuildSpec:
         sources = _parse_sources(_require_present(data, "sources"))
         exports = _parse_exports(_require_present(data, "exports"))
         splits = _parse_splits(data.get("splits"))
+        pii = _parse_pii(data.get("pii"))
     except (KeyError, TypeError, ValueError) as exc:
         raise SpecLoadError(f"Failed to parse build spec: {exc}") from exc
 
@@ -57,6 +66,7 @@ def parse_spec(data: dict[str, object]) -> BuildSpec:
         metadata=metadata,
         publish=publish,
         splits=splits,
+        pii=pii,
     )
 
 
@@ -315,6 +325,25 @@ def _ensure_mapping(value: object, *, field_name: str) -> dict[str, object]:
             raise TypeError(f"{field_name} keys must be strings")
         parsed[key] = item
     return parsed
+
+
+def _parse_pii(value: object) -> PiiPolicy | None:
+    """pii 매핑을 PiiPolicy로 변환한다 (없으면 None, #441).
+
+    mode 는 block(기본)/warn/allow 중 하나. allow_columns 는 오탐 해제용 컬럼 목록.
+    """
+    if value is None:
+        return None
+    mapping = _ensure_mapping(value, field_name="pii")
+    mode_obj = mapping.get("mode", "block")
+    if not isinstance(mode_obj, str):
+        raise TypeError("pii.mode must be a string")
+    if mode_obj not in ("block", "warn", "allow"):
+        raise ValueError(f"pii.mode must be one of block/warn/allow, got {mode_obj!r}")
+    allow_columns = _parse_string_list(
+        mapping.get("allow_columns", []), field_name="pii.allow_columns"
+    )
+    return PiiPolicy(mode=mode_obj, allow_columns=allow_columns)
 
 
 __all__ = [
