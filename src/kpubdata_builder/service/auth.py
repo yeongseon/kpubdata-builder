@@ -15,6 +15,7 @@ from __future__ import annotations
 import hmac
 import os
 import threading
+import time
 from dataclasses import dataclass
 
 # 서버가 요구하는 API 키. 환경변수로만 주입한다 (#248).
@@ -28,6 +29,7 @@ _OIDC_AUDIENCE_ENV = "OIDC_AUDIENCE"
 _OIDC_JWKS_URL_ENV = "OIDC_JWKS_URL"
 _OIDC_JWKS_TTL_ENV = "OIDC_JWKS_TTL"
 _DEFAULT_JWKS_TTL_SECONDS = 3600
+_DISCOVERY_TIMEOUT_SECONDS = 5
 _TOKEN_LEEWAY_SECONDS = 60
 _OIDC_ALLOWED_HD_ENV = "OIDC_ALLOWED_HD"
 _OIDC_ALLOWED_SUBJECTS_ENV = "OIDC_ALLOWED_SUBJECTS"
@@ -89,6 +91,8 @@ def _verify_api_key(api_key: str | None) -> Principal | AuthError:
 _jwks_client: object | None = None
 _jwks_url_cached: str | None = None
 _jwks_lock = threading.Lock()
+# OIDC discovery 결과 캐시: issuer → (jwks_uri, expires_at). #435.
+_discovery_cache: dict[str, tuple[str, float]] = {}
 
 
 def _oidc_issuers() -> list[str]:
@@ -96,17 +100,49 @@ def _oidc_issuers() -> list[str]:
     return [s.strip() for s in raw.split(",") if s.strip()]
 
 
+def _discover_jwks_uri(issuer: str) -> str:
+    """OIDC discovery 문서에서 jwks_uri를 읽는다 (RFC 8414, #435).
+
+    issuer의 ``/.well-known/openid-configuration``을 조회해 ``jwks_uri`` 필드를
+    반환한다. Google/Auth0/Keycloak 등 IdP마다 JWKS 경로가 달라 경로 추정이
+    깨지던 기존 동작을 대체한다. 결과는 TTL 캐시된다.
+    """
+    import json
+    import urllib.request
+
+    now = time.monotonic()
+    cached = _discovery_cache.get(issuer)
+    if cached is not None:
+        jwks_uri, expires_at = cached
+        if now < expires_at:
+            return jwks_uri
+
+    base = issuer if issuer.startswith("http") else "https://" + issuer
+    discovery_url = base.rstrip("/") + "/.well-known/openid-configuration"
+    with urllib.request.urlopen(discovery_url, timeout=_DISCOVERY_TIMEOUT_SECONDS) as resp:
+        doc = json.loads(resp.read())
+    jwks_uri_raw = doc.get("jwks_uri")
+    if not isinstance(jwks_uri_raw, str) or not jwks_uri_raw:
+        raise RuntimeError(f"discovery at {discovery_url} has no jwks_uri")
+    ttl = int(os.environ.get(_OIDC_JWKS_TTL_ENV, "") or _DEFAULT_JWKS_TTL_SECONDS)
+    _discovery_cache[issuer] = (jwks_uri_raw, now + ttl)
+    return jwks_uri_raw
+
+
 def _oidc_jwks_url() -> str:
-    """JWKS URL. OIDC_JWKS_URL 우선, 없으면 첫 issuer의 well-known에서 유도."""
+    """JWKS URL. OIDC_JWKS_URL 명시 시 discovery를 건너뛴다 (#435).
+
+    명시 없으면 첫 issuer의 discovery 문서에서 jwks_uri를 읽는다 (RFC 8414).
+    기존 ``issuer + /.well-known/jwks.json`` 추정은 Google이 저 경로를 쓰지
+    않아 404 → 503 실패를 일으켰다.
+    """
     explicit = os.environ.get(_OIDC_JWKS_URL_ENV, "").strip()
     if explicit:
         return explicit
     issuers = _oidc_issuers()
-    # Google은 https://accounts.google.com 와 accounts.google.com 두 형태를 쓴다.
-    issuer = issuers[0]
-    if not issuer.startswith("http"):
-        issuer = "https://" + issuer
-    return issuer.rstrip("/") + "/.well-known/jwks.json"
+    if not issuers:
+        raise RuntimeError("OIDC_ISSUER not set")
+    return _discover_jwks_uri(issuers[0])
 
 
 def _oidc_allowlists() -> tuple[set[str], set[str], set[str]]:
