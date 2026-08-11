@@ -108,6 +108,24 @@ class PiiPolicy:
 
 
 @dataclass(frozen=True)
+class QualityPolicy:
+    """데이터 품질 임계 정책 (#446, QG-3).
+
+    Silver 통계(row_count/null_counts/duplicate_rate)에 대한 임계. 초과 시
+    위반으로 보고한다(orchestrator 가 warn/fail 처리).
+
+    속성:
+        max_duplicate_rate: 허용 최대 중복 행 비율 (0.0~1.0). 초과 시 위반.
+        max_null_ratio: 컬럼별 허용 최대 null 비율 (``{컬럼명: 비율}``).
+        min_rows: 최소 행 수. 미만 시 위반.
+    """
+
+    max_duplicate_rate: float | None = None
+    max_null_ratio: dict[str, float] = field(default_factory=dict)
+    min_rows: int | None = None
+
+
+@dataclass(frozen=True)
 class BuildSpec:
     """데이터셋 산출물을 위한 선언적 빌드 명세.
 
@@ -124,6 +142,7 @@ class BuildSpec:
         license: 데이터셋 라이선스/이용허락범위 (SPDX 식별자 또는 자유 텍스트).
             ``publish=True`` 시 반드시 선언해야 한다 (#443). kpubdata 가 라이선스
             메타데이터를 제공하지 않으므로 사용자 명시 선언만이 출처이다.
+        quality: 데이터 품질 임계 정책. None이면 검사를 생략한다 (하위 호환, #446).
 
     예시:
         >>> BuildSpec.from_yaml("specs/sample.yaml")
@@ -139,6 +158,7 @@ class BuildSpec:
     splits: SplitSpec | None = None
     pii: PiiPolicy | None = None
     license: str | None = None
+    quality: QualityPolicy | None = None
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> BuildSpec:

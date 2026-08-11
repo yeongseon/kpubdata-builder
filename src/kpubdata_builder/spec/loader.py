@@ -22,6 +22,7 @@ from .models import (
     ExportTarget,
     JsonValue,
     PiiPolicy,
+    QualityPolicy,
     SchemaContract,
     SourceRef,
     SplitSpec,
@@ -57,6 +58,7 @@ def parse_spec(data: dict[str, object]) -> BuildSpec:
         license_obj = data.get("license")
         if license_obj is not None and not isinstance(license_obj, str):
             raise TypeError("license must be a string")
+        quality = _parse_quality(data.get("quality"))
     except (KeyError, TypeError, ValueError) as exc:
         raise SpecLoadError(f"Failed to parse build spec: {exc}") from exc
 
@@ -71,6 +73,7 @@ def parse_spec(data: dict[str, object]) -> BuildSpec:
         splits=splits,
         pii=pii,
         license=license_obj,
+        quality=quality,
     )
 
 
@@ -348,6 +351,35 @@ def _parse_pii(value: object) -> PiiPolicy | None:
         mapping.get("allow_columns", []), field_name="pii.allow_columns"
     )
     return PiiPolicy(mode=mode_obj, allow_columns=allow_columns)
+
+
+def _parse_quality(value: object) -> QualityPolicy | None:
+    """quality 매핑을 QualityPolicy로 변환한다 (없으면 None, #446).
+
+    max_duplicate_rate/min_rows 는 스칼라, max_null_ratio 는 {컬럼명: 비율} 매핑.
+    """
+    if value is None:
+        return None
+    mapping = _ensure_mapping(value, field_name="quality")
+    max_dup = mapping.get("max_duplicate_rate")
+    if max_dup is not None and (not isinstance(max_dup, (int, float)) or isinstance(max_dup, bool)):
+        raise TypeError("quality.max_duplicate_rate must be a number")
+    min_rows = mapping.get("min_rows")
+    if min_rows is not None and (not isinstance(min_rows, int) or isinstance(min_rows, bool)):
+        raise TypeError("quality.min_rows must be an integer")
+    null_ratio_raw = mapping.get("max_null_ratio", {})
+    if not isinstance(null_ratio_raw, dict):
+        raise TypeError("quality.max_null_ratio must be a mapping")
+    max_null_ratio: dict[str, float] = {}
+    for k, v in cast(dict[object, object], null_ratio_raw).items():
+        if not isinstance(k, str) or not isinstance(v, (int, float)) or isinstance(v, bool):
+            raise TypeError("quality.max_null_ratio entries must be string→number pairs")
+        max_null_ratio[k] = float(v)
+    return QualityPolicy(
+        max_duplicate_rate=float(max_dup) if max_dup is not None else None,
+        max_null_ratio=max_null_ratio,
+        min_rows=min_rows,
+    )
 
 
 __all__ = [
