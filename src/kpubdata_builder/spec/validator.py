@@ -181,6 +181,32 @@ def _split_problems(spec: BuildSpec) -> list[ValidationProblem]:
                 hint="Use 'ratio' or 'key'",
             )
         )
+    # 시계열 데이터 누수 검사 (#444). ratio 모드에서 key가 시간 컬럼이면
+    # 랜덤 셔플이 미래 정보를 train 으로 색는다.
+    _TIME_INDICATORS = (
+        "date",
+        "time",
+        "dt",
+        "year",
+        "month",
+        "day",
+        "hour",
+        "timestamp",
+        "at",
+        "ts",
+    )
+    if split.mode == "ratio" and split.key:
+        key_lower = split.key.lower()
+        if any(ind in key_lower for ind in _TIME_INDICATORS):
+            problems.append(
+                _p(
+                    "time_column_random_split",
+                    "splits",
+                    f"splits.key {split.key!r} looks like a time column but mode is 'ratio' "
+                    "— random split causes time-series data leakage (#444)",
+                    hint="Use mode='key' for temporal splitting",
+                )
+            )
     return problems
 
 
