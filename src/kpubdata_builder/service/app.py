@@ -562,6 +562,13 @@ def dispatch(
         rest = path[len("/artifacts/") :]
         parts = rest.split("/", 1)
         run_id = parts[0]
+        # run_id를 소유권 검사보다 먼저 검증 (#439). _read_manifest_created_by 가
+        # 검증 없이 경로를 조립하므로 "../" 등 unsafe 세그먼트가 _check_ownership
+        # 보다 먼저 도달해야 한다.
+        try:
+            validate_path_segment(run_id, field_name="run_id")
+        except ValueError as exc:
+            return ServiceResponse(400, {"error": str(exc)})
         ownership_error = _check_ownership(service, run_id, principal)
         if ownership_error is not None:
             return ownership_error
