@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from datetime import datetime
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from ...spec import JsonValue
 from .models import BronzeArtifact, ProvenanceEvent, require_timezone_aware, utc_now
@@ -36,6 +36,14 @@ class SourceDataset(Protocol):
 
     def list(self, **params: JsonValue) -> DatasetResult:
         """하나의 파라미터 집합에 대해 레코드를 가져온다."""
+        ...
+
+
+@runtime_checkable
+class PaginatedSourceDataset(SourceDataset, Protocol):
+    """kpubdata Dataset.list_all() pagination 계약."""
+
+    def list_all(self, **params: JsonValue) -> Iterable[DatasetResult]:
         ...
 
 
@@ -73,8 +81,13 @@ def build_bronze_artifact(
     require_timezone_aware(resolved_fetched_at, field_name="fetched_at")
 
     dataset = client.dataset(source_key)
-    result = dataset.list(**resolved_params)
-    raw_records = tuple(result.items)
+    if isinstance(dataset, PaginatedSourceDataset):
+        raw_records = tuple(
+            record for batch in dataset.list_all(**resolved_params) for record in batch.items
+        )
+    else:
+        result = dataset.list(**resolved_params)
+        raw_records = tuple(result.items)
     provenance = ProvenanceEvent(
         source_key=source_key,
         fetch_params=resolved_params,

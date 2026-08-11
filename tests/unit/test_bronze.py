@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Generator
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -38,10 +39,26 @@ class FakeDataset:
         return FakeResult(items=self.records)
 
 
+class FakePaginatedDataset:
+    def __init__(self, pages: tuple[list[dict[str, JsonValue]], ...]) -> None:
+        self.pages = pages
+        self.list_calls = 0
+        self.list_all_params: dict[str, JsonValue] | None = None
+
+    def list(self, **params: JsonValue) -> DatasetResult:
+        self.list_calls += 1
+        return FakeResult(items=self.pages[0])
+
+    def list_all(self, **params: JsonValue) -> Generator[DatasetResult, None, None]:
+        self.list_all_params = dict(params)
+        for page in self.pages:
+            yield FakeResult(items=page)
+
+
 class FakeClient:
     """dataset 호출 여부를 기록하는 테스트용 클라이언트."""
 
-    def __init__(self, dataset: FakeDataset) -> None:
+    def __init__(self, dataset: SourceDataset) -> None:
         self.dataset_instance = dataset
         self.seen_source_key = ""
 
@@ -112,6 +129,24 @@ def test_build_bronze_artifact_fetches_raw_records_without_transforming() -> Non
         fetch_params={"lawd_cd": "11680", "deal_ymd": "202501"},
         fetched_at=fetched_at,
     )
+
+
+def test_build_bronze_artifact_uses_list_all_when_available() -> None:
+    fetched_at = datetime(2026, 5, 8, 12, 0, tzinfo=timezone.utc)
+    dataset = FakePaginatedDataset(([{"id": "1"}], [{"id": "2"}]))
+    client = FakeClient(dataset)
+
+    artifact = build_bronze_artifact(
+        client,
+        source_key="datago.apt_trade",
+        fetch_params={"page_size": 1},
+        fetched_at=fetched_at,
+    )
+
+    assert dataset.list_calls == 0
+    assert dataset.list_all_params == {"page_size": 1}
+    assert artifact.raw_records == ({"id": "1"}, {"id": "2"})
+    assert artifact.record_count == 2
 
 
 def test_persist_bronze_artifact_writes_jsonl_and_metadata(tmp_path: Path) -> None:
