@@ -110,6 +110,35 @@ def test_run_build_executes_full_pipeline_and_writes_workspace(tmp_path: Path) -
     ]
 
 
+def test_run_build_executes_export_targets(tmp_path: Path) -> None:
+    spec = BuildSpec(
+        dataset_id="apt_trade",
+        title="Apartment Trades",
+        description="seoul apartment trades",
+        sources=(SourceRef(provider="datago", dataset="apt_trade"),),
+        exports=(
+            ExportTarget(kind="jsonl", output_path="exports/data.jsonl"),
+            ExportTarget(kind="markdown", output_path="exports/README.md"),
+        ),
+    )
+    client = _FakeClient({"datago.apt_trade": [{"id": "1", "amount": 1000}]})
+
+    result = run_build(spec, client=client, output_root=tmp_path, run_id="run1")
+
+    assert result.status == "ok"
+    gold_dir = tmp_path / "run1" / "gold" / "datago.apt_trade"
+    jsonl_path = gold_dir / "exports" / "data.jsonl"
+    markdown_path = gold_dir / "exports" / "README.md"
+    assert jsonl_path.read_text(encoding="utf-8") == '{"amount": 1000, "id": "1"}\n'
+    assert "# Apartment Trades" in markdown_path.read_text(encoding="utf-8")
+    manifest = cast(
+        dict[str, JsonValue], json.loads(result.manifest_path.read_text(encoding="utf-8"))
+    )
+    outputs = cast(list[str], manifest["outputs"])
+    assert str(jsonl_path) in outputs
+    assert str(markdown_path) in outputs
+
+
 def test_run_build_writes_dataset_card_readme(tmp_path: Path) -> None:
     # 성공한 빌드의 gold 디렉터리에 dataset card README.md가 생성되는지 검증한다 (#37).
     spec = _spec(SourceRef(provider="datago", dataset="apt_trade"))
