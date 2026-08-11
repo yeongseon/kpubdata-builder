@@ -38,7 +38,12 @@ def build_drift_advisory_prompt(findings: list[DriftFinding]) -> str:
 
 출력 형식: JSON 배열
 [
-  {{"kind": "column_added", "column": "...", "cause": "upstream_schema_change", "explanation": "..."}}
+  {{
+    "kind": "column_added",
+    "column": "...",
+    "cause": "upstream_schema_change",
+    "explanation": "..."
+  }}
 ]
 
 주의: 이 해석은 참고용이다. 게이트 판정에 영향을 주지 않는다."""
