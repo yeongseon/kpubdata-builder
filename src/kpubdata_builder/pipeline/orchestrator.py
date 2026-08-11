@@ -41,6 +41,7 @@ from ..stages.gold.build import build_gold_package
 from ..stages.gold.card import build_dataset_card, render_dataset_card
 from ..stages.gold.persist import persist_gold_package
 from ..stages.silver.build import build_silver_dataset
+from ..stages.silver.drift import detect_drift, find_previous_silver
 from ..stages.silver.persist import persist_silver_dataset
 from ..stages.silver.pii import scan_pii
 from .context import BuildContext
@@ -219,6 +220,12 @@ def _run_source_pipeline(
                             actual_ratio,
                             max_ratio,
                         )
+
+        # 드리프트 감지 (#445, DRIFT-1). 직전 성공 run의 silver 와 비교한다.
+        prev_silver = find_previous_silver(context.output_root, context.run_id)
+        if prev_silver is not None:
+            for f in detect_drift(silver.schema, silver.statistics, *prev_silver):
+                logger.warning("드리프트 감지: %s @ %s — %s (#445)", f.kind, f.column, f.detail)
 
         silver_paths = persist_silver_dataset(
             silver, output_root=context.output_root, run_id=context.run_id
