@@ -18,10 +18,6 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    import polars as pl
 
 from ..artifact import ArtifactDataset
 from ..errors import DatasetValidationError, ValidationError
@@ -121,28 +117,20 @@ def _record_output_paths(outputs: list[str], *paths: Path) -> None:
 
 def _execute_exports(
     gold_dir: Path,
-    table: pl.DataFrame,
+    artifact: ArtifactDataset,
     exports: tuple[ExportTarget, ...],
-    dataset_name: str,
 ) -> list[Path]:
     """내보내기 도구를 실행하고 생성된 파일 경로를 반환한다.
 
     매개변수:
         gold_dir: Gold 패키지 디렉터리.
-        table: 내보낼 Polars 테이블.
+        artifact: 내보내기 도구가 소비할 조립 산출물.
         exports: 내보내기 대상 목록.
-        dataset_name: 데이터셋 이름.
 
     반환값:
         생성된 파일 경로 목록.
 
     """
-    artifact = ArtifactDataset(
-        records=tuple(table.iter_rows(named=True)),
-        statistics={"row_count": len(table)},
-        provenance=(dataset_name,),
-    )
-
     output_paths: list[Path] = []
     for export_target in exports:
         exporter = get_exporter(export_target.kind)
@@ -319,11 +307,16 @@ def _run_source_pipeline(
         _record_output_paths(outputs, card_path)
 
         # BuildSpec.exports에 정의된 내보내기 도구 실행
+        export_artifact = ArtifactDataset(
+            records=tuple(gold.table.iter_rows(named=True)),
+            metadata={"title": context.spec.title, "description": context.spec.description},
+            statistics={"row_count": len(gold.table)},
+            provenance=(output_key,),
+        )
         buildspec_export_paths = _execute_exports(
             gold_paths.gold_dir,
-            gold.table,
+            export_artifact,
             context.spec.exports,
-            output_key,
         )
         _record_output_paths(outputs, *buildspec_export_paths)
 
