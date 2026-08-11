@@ -729,7 +729,7 @@ wheels = [
 [[package]]
 name = "kpubdata"
 version = "0.5.0"
-source = { editable = "../kpubdata" }
+source = { editable = "/home/dahyeon/GitHub/kpubdata" }
 dependencies = [
     { name = "httpx" },
     { name = "typing-extensions", marker = "python_full_version < '3.11'" },
@@ -775,6 +775,7 @@ auth = [
 dev = [
     { name = "build" },
     { name = "mypy" },
+    { name = "pyjwt", extra = ["crypto"] },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "ruff" },
@@ -803,13 +804,14 @@ requires-dist = [
     { name = "huggingface-hub", marker = "extra == 'huggingface'", specifier = ">=0.23,<2" },
     { name = "huggingface-hub", marker = "extra == 'publish'", specifier = ">=0.23,<2" },
     { name = "kaggle", marker = "extra == 'publish'", specifier = ">=1.6,<2" },
-    { name = "kpubdata", editable = "../kpubdata" },
+    { name = "kpubdata", editable = "/home/dahyeon/GitHub/kpubdata" },
     { name = "mkdocs", marker = "extra == 'docs'", specifier = ">=1.6,<2" },
     { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9,<10" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10,<3" },
     { name = "polars", specifier = ">=1.0,<2" },
     { name = "pyarrow", marker = "extra == 'parquet'", specifier = ">=15,<26" },
-    { name = "pyjwt", extras = ["crypto"], marker = "extra == 'auth'", specifier = ">=2.8,<3" },
+    { name = "pyjwt", extras = ["crypto"], marker = "extra == 'auth'", specifier = ">=2.9,<3" },
+    { name = "pyjwt", extras = ["crypto"], marker = "extra == 'dev'", specifier = ">=2.9,<3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.2,<10" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5,<8" },
     { name = "pyyaml", specifier = ">=6.0,<7" },

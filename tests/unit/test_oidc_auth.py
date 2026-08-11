@@ -370,3 +370,19 @@ class TestJwksDiscovery:
         monkeypatch.delenv("OIDC_JWKS_URL", raising=False)
         with pytest.raises(RuntimeError, match="OIDC_ISSUER"):
             auth_module._oidc_jwks_url()
+
+
+def test_pyjwt_supports_issuer_list() -> None:
+    """pyjwt >=2.9만 issuer=list 지원 (#434). auth.py:_verify_bearer_token 참조.
+
+    auth.py 가 ``jwt.decode(..., issuer=_oidc_issuers())`` 로 list를 넘기는데,
+    2.8.x 는 ``payload["iss"] != issuer`` 단순 비교라 모든 토큰이 거부된다.
+    하한을 ``>=2.9`` 로 올린 것(#434)을 설치 환경에서 재확인한다 (#431 교집합 패턴).
+    """
+    import jwt
+
+    parts = jwt.__version__.split(".")
+    major, minor = int(parts[0]), int(parts[1])
+    assert (major, minor) >= (2, 9), (
+        f"pyjwt {jwt.__version__} < 2.9 — issuer list 미지원, auth.py 가 깨짐 (#434)"
+    )
