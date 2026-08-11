@@ -12,6 +12,7 @@ body 크기 제한, JSON 파싱/검증, query string 분리, 예외 시 JSON 500
     - POST /validate
     - POST /preview
     - POST /build
+    - GET  /builds/{run_id}/manifest
     - GET  /artifacts/{run_id}
     - GET  /builds
 
@@ -165,6 +166,18 @@ class TestBuildRoundTrip:
         assert body["status"] == "ok"
         assert body["run_id"] == "http-run"
         assert (tmp_path / "http-run" / "manifest.json").exists()
+
+    def test_get_build_manifest_returns_json_after_build(self, http_server: str) -> None:
+        _post(http_server, "/build", {"spec": VALID_SPEC_YAML, "run_id": "http-manifest"})
+
+        with urllib.request.urlopen(
+            f"{http_server}/builds/http-manifest/manifest", timeout=5.0
+        ) as resp:
+            assert resp.status == 200
+            body = cast(dict[str, object], json.loads(resp.read()))
+
+        assert body["build_id"] == "http-manifest"
+        assert body["schema_version"] == "1.0.0"
 
 
 class TestArtifactsRoundTrip:
