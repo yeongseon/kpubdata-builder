@@ -169,14 +169,16 @@ class BuilderService:
         접근 + 8개 provider 하드코딩 튜플을 써서 kpubdata에 provider가 추가돼도
         카탈로그에 안 떴다 (#436). 시크릿 값은 노출하지 않고 필요 여부만 표시한다.
         """
+        client = cast(Client, self._client_factory())
         try:
-            # client_factory는 SourceClient(Protocol)을 반환타입으로 선언하지만
-            # catalog는 kpubdata.Client의 공개 datasets API를 쓴다. 런타임엔 항상
-            # kpubdata.Client이므로 cast로 타입을 확정한다 (#436).
-            client = cast(Client, self._client_factory())
             all_datasets = client.datasets.list()
         except Exception as exc:
             return ServiceResponse(502, {"error": f"catalog unavailable: {exc}"})
+        finally:
+            try:
+                client.close()
+            except Exception:
+                pass
 
         # provider별 그룹화 (등록 순서 보존 위해 dict 사용).
         grouped: dict[str, list[DatasetRef]] = {}
@@ -233,7 +235,14 @@ class BuilderService:
         if isinstance(spec_or_error, ServiceResponse):
             return spec_or_error
 
-        result = preview_build(spec_or_error, client=self._client_factory(), limit=limit)
+        client = cast(Client, self._client_factory())
+        try:
+            result = preview_build(spec_or_error, client=client, limit=limit)
+        finally:
+            try:
+                client.close()
+            except Exception:
+                pass
         previews: list[JsonValue] = [
             {
                 "source_key": p.source_key,
@@ -275,13 +284,20 @@ class BuilderService:
         if isinstance(spec_or_error, ServiceResponse):
             return spec_or_error
 
-        result = run_build(
-            spec_or_error,
-            client=self._client_factory(),
-            output_root=self._output_root,
-            run_id=run_id,
-            created_by=created_by,
-        )
+        client = cast(Client, self._client_factory())
+        try:
+            result = run_build(
+                spec_or_error,
+                client=client,
+                output_root=self._output_root,
+                run_id=run_id,
+                created_by=created_by,
+            )
+        finally:
+            try:
+                client.close()
+            except Exception:
+                pass
         outcomes: list[JsonValue] = [
             {
                 "source_key": outcome.source_key,
