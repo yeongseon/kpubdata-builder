@@ -6,8 +6,6 @@ BuildSpec의 각 소스를 Bronze → Silver → Gold 순서로 실행하고, �
 부분 성공 정책(BUILD_STATE.md): 소스 중 하나라도 실패하면 전체 상태는 failed로
 기록하되, 성공한 소스의 산출물과 실패 정보를 매니페스트에 함께 남긴다.
 
-Export 단계 연결은 stage-aware exporter 도입(#28/v0.2) 시점으로 연기한다.
-
 주요 구성:
     - SourceBuildOutcome: 소스별 실행 결과
     - BuildResult: 전체 실행 결과
@@ -44,6 +42,7 @@ from ..stages.silver.build import build_silver_dataset
 from ..stages.silver.persist import persist_silver_dataset
 from ..stages.silver.pii import scan_pii
 from .context import BuildContext
+from .export import export_gold_package
 
 logger = logging.getLogger(__name__)
 
@@ -213,6 +212,7 @@ def _run_source_pipeline(
             silver,
             dataset_name=output_key,
             exports=context.spec.exports,
+            metadata={"title": context.spec.title, "description": context.spec.description},
             splits_spec=context.spec.splits,
         )
         gold_paths = persist_gold_package(
@@ -225,6 +225,8 @@ def _run_source_pipeline(
             gold_paths.package_path,
             *gold_paths.splits_paths.values(),
         )
+        export_paths = export_gold_package(gold, output_dir=gold_paths.gold_dir)
+        _record_output_paths(outputs, *export_paths)
 
         card = build_dataset_card(
             title=context.spec.title,
