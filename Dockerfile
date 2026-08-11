@@ -43,7 +43,8 @@ RUN if [ -z "${EXTRAS}" ]; then \
     else \
       _flags=""; for _e in ${EXTRAS}; do _flags="$_flags --extra $_e"; done; \
       uv sync --no-sources $_flags; \
-    fi
+    fi; \
+    rm -rf /root/.cache/uv /bin/uv /bin/uvx
 
 # 빌드 산출물(아티팩트·매니페스트) 영속 볼륨의 기본 위치.
 RUN mkdir -p /data
