@@ -1215,9 +1215,7 @@ class TestCatalog:
             _FakeCatalogRef("bok", "base_rate", "기준금리"),
             _FakeCatalogRef("krx", "stock", "주식"),
         ]
-        resp = self._service_with_catalog(
-            tmp_path, refs, auth_provider_names=("bok",)
-        ).catalog()
+        resp = self._service_with_catalog(tmp_path, refs, auth_provider_names=("bok",)).catalog()
 
         assert resp.status_code == 200
         providers = cast(list[dict[str, object]], resp.body["providers"])

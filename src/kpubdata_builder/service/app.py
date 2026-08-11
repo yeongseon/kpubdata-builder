@@ -211,9 +211,7 @@ class BuilderService:
                     {
                         "name": item.dataset_key,
                         "title": item.name,
-                        "requires_service_key": _requires_service_key(
-                            item, auth_provider_names
-                        ),
+                        "requires_service_key": _requires_service_key(item, auth_provider_names),
                     }
                     for item in items
                 ],
