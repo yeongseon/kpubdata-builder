@@ -20,6 +20,28 @@ JsonValue: TypeAlias = JsonPrimitive | list["JsonValue"] | dict[str, "JsonValue"
 
 
 @dataclass(frozen=True)
+class SchemaContract:
+    """소스 스키마 계약 — Silver 검증/정규화 규칙 (#437).
+
+    BuildSpec 의 ``sources[].schema`` 선언이 이 모델로 파싱되고,
+    orchestrator/preview 가 build_silver_dataset 의 인자로 전달한다.
+    이전까지는 게이트가 존재했지만 통과 조건이 없었다 (항상 ok).
+
+    속성:
+        required: 필수 컬럼 목록. validate_table 의 required_columns 로 전달.
+        dtypes: 컬럼별 기대 dtype (문자열, ``_NAMED_DTYPES`` 키). validate_table 의
+            column_dtypes 로 전달.
+        casts: 정규화 시 적용할 컬럼별 캐스팅 (문자열). normalize_table 의 casts 로
+            전달. 캐스팅으로 인한 null 손실은 audit=True 로 감지돼 TabularError 로
+            표면화된다 (#188).
+    """
+
+    required: tuple[str, ...] = ()
+    dtypes: dict[str, str] = field(default_factory=dict)
+    casts: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class SourceRef:
     """kpubdata의 정규화된 소스 쿼리를 가리키는 참조.
 
@@ -29,6 +51,7 @@ class SourceRef:
         params: list 호출에 전달할 원시 파라미터.
         normalization_mode: canonical/raw 같은 정규화 모드.
         alias: 조립 단계에서 사용할 사용자 정의 소스 이름.
+        schema: 소스 스키마 계약. None 이면 Silver 검증을 생략한다 (하위 호환, #437).
     """
 
     provider: str
@@ -36,6 +59,7 @@ class SourceRef:
     params: dict[str, JsonValue] = field(default_factory=dict)
     normalization_mode: str = "canonical"
     alias: str = ""
+    schema: SchemaContract | None = None
 
 
 @dataclass(frozen=True)

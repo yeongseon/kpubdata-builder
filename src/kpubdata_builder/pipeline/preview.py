@@ -75,7 +75,13 @@ def _preview_source(
         bronze = build_bronze_artifact(
             client, source_key=fetch_key, fetch_params=dict(source.params)
         )
-        silver = build_silver_dataset(bronze, preview_limit=limit)
+        silver = build_silver_dataset(
+            bronze,
+            preview_limit=limit,
+            required_columns=source.schema.required if source.schema else (),
+            casts=source.schema.casts if source.schema else None,
+            column_dtypes=source.schema.dtypes if source.schema else None,
+        )
         return SourcePreview(
             source_key=out_key,
             status="ok",

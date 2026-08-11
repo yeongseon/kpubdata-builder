@@ -18,6 +18,7 @@ from dataclasses import dataclass
 
 from ..errors import ValidationError
 from ..exporters import EXPORTER_REGISTRY
+from ..tabular.polars_helpers import _NAMED_DTYPES
 from .models import BuildSpec
 
 
@@ -113,6 +114,7 @@ def validate_spec(spec: BuildSpec) -> None:
             )
             break
     problems.extend(_split_problems(spec))
+    problems.extend(_schema_problems(spec))
     if problems:
         raise ValidationError([str(p) for p in problems], structured=problems)
 
@@ -177,6 +179,41 @@ def _split_problems(spec: BuildSpec) -> list[ValidationProblem]:
                 hint="Use 'ratio' or 'key'",
             )
         )
+    return problems
+
+
+def _schema_problems(spec: BuildSpec) -> list[ValidationProblem]:
+    """sources[].schema 계약 자체의 유효성을 검증한다 (#437).
+
+    dtypes/casts 의 문자열이 ``_NAMED_DTYPES`` 키로 해석 가능한지 확인한다.
+    로더(loader._parse_schema)는 구조만 검사하고, 여기서 의미를 검사한다 —
+    알 수 없는 dtype 문자열이 런타임(정규화/검증)에서야 실패하는 것을 막는다.
+    """
+    problems: list[ValidationProblem] = []
+    supported = sorted(_NAMED_DTYPES)
+    for i, source in enumerate(spec.sources):
+        if source.schema is None:
+            continue
+        for col, dtype in source.schema.dtypes.items():
+            if dtype.lower() not in _NAMED_DTYPES:
+                problems.append(
+                    _p(
+                        "unknown_dtype",
+                        f"sources[{i}].schema.dtypes.{col}",
+                        f"unknown dtype {dtype!r} for column {col!r}",
+                        hint=f"Use one of: {', '.join(supported)}",
+                    )
+                )
+        for col, cast in source.schema.casts.items():
+            if cast.lower() not in _NAMED_DTYPES:
+                problems.append(
+                    _p(
+                        "unknown_cast_dtype",
+                        f"sources[{i}].schema.casts.{col}",
+                        f"unknown cast dtype {cast!r} for column {col!r}",
+                        hint=f"Use one of: {', '.join(supported)}",
+                    )
+                )
     return problems
 
 
