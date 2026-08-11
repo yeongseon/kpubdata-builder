@@ -52,6 +52,17 @@ def _close_request_client(client: SourceClient) -> None:
         client.close()
 
 
+def _authenticated_provider_names(client: SourceClient) -> frozenset[str]:
+    authenticated_providers = cast(Client, client).iter_authenticated_providers()
+    return frozenset(provider.name for provider in authenticated_providers)
+
+
+def _requires_service_key(dataset: DatasetRef, auth_provider_names: frozenset[str]) -> bool:
+    return dataset.provider in auth_provider_names or bool(
+        dataset.raw_metadata.get("service_key_param")
+    )
+
+
 def _enforce_ownership() -> bool:
     """run 소유권 강제가 활성화되어 있는지 (#389). 기본 off — 하위 호환."""
     return os.environ.get(_OWNERSHIP_ENV, "").lower() in ("true", "1")
@@ -182,6 +193,7 @@ class BuilderService:
         client = self._client_factory()
         try:
             all_datasets = cast(Client, client).datasets.list()
+            auth_provider_names = _authenticated_provider_names(client)
         except Exception as exc:
             return ServiceResponse(502, {"error": f"catalog unavailable: {exc}"})
         finally:
@@ -199,8 +211,8 @@ class BuilderService:
                     {
                         "name": item.dataset_key,
                         "title": item.name,
-                        "requires_service_key": bool(
-                            getattr(item, "raw_metadata", {}).get("service_key_param")
+                        "requires_service_key": _requires_service_key(
+                            item, auth_provider_names
                         ),
                     }
                     for item in items
