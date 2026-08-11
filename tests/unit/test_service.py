@@ -85,14 +85,24 @@ class _FakeClient:
         self,
         data: dict[str, list[dict[str, JsonValue]]],
         catalog_items: list[object] | None = None,
+        auth_provider_names: tuple[str, ...] = (),
     ) -> None:
         self._data = data
         self.datasets = _FakeCatalog(catalog_items)
+        self._auth_provider_names = auth_provider_names
 
     def dataset(self, source_key: str) -> _FakeDataset:
         if source_key not in self._data:
             raise KeyError(f"unknown source: {source_key}")
         return _FakeDataset(self._data[source_key])
+
+    def iter_authenticated_providers(self) -> tuple[object, ...]:
+        return tuple(_FakeProvider(name) for name in self._auth_provider_names)
+
+
+class _FakeProvider:
+    def __init__(self, name: str) -> None:
+        self.name = name
 
 
 class _CloseTrackingClient(_FakeClient):
@@ -1205,8 +1215,14 @@ class _FakeCatalogRef:
 class TestCatalog:
     """catalog 동적 provider 조회 (#436). ADR 0011 — 하드코딩 금지."""
 
-    def _service_with_catalog(self, tmp_path: Path, refs: list[object]) -> BuilderService:
-        client = _FakeClient({}, catalog_items=refs)
+    def _service_with_catalog(
+        self,
+        tmp_path: Path,
+        refs: list[object],
+        *,
+        auth_provider_names: tuple[str, ...] = (),
+    ) -> BuilderService:
+        client = _FakeClient({}, catalog_items=refs, auth_provider_names=auth_provider_names)
         return BuilderService(output_root=tmp_path, client_factory=lambda: client)
 
     def test_catalog_groups_datasets_by_provider(self, tmp_path: Path) -> None:
@@ -1214,8 +1230,9 @@ class TestCatalog:
             _FakeCatalogRef("datago", "air_quality", "대기오염", service_key=True),
             _FakeCatalogRef("datago", "village_fcst", "단기예보"),
             _FakeCatalogRef("bok", "base_rate", "기준금리"),
+            _FakeCatalogRef("krx", "stock", "주식"),
         ]
-        resp = self._service_with_catalog(tmp_path, refs).catalog()
+        resp = self._service_with_catalog(tmp_path, refs, auth_provider_names=("bok",)).catalog()
 
         assert resp.status_code == 200
         providers = cast(list[dict[str, object]], resp.body["providers"])
@@ -1230,6 +1247,13 @@ class TestCatalog:
         assert aq["requires_service_key"] is True
         vf = next(d for d in datago_datasets if d["name"] == "village_fcst")
         assert vf["requires_service_key"] is False
+
+        bok = next(p for p in providers if p["name"] == "bok")
+        bok_datasets = cast(list[dict[str, object]], bok["datasets"])
+        assert bok_datasets[0]["requires_service_key"] is True
+        krx = next(p for p in providers if p["name"] == "krx")
+        krx_datasets = cast(list[dict[str, object]], krx["datasets"])
+        assert krx_datasets[0]["requires_service_key"] is False
 
     def test_catalog_includes_unlisted_providers(self, tmp_path: Path) -> None:
         """하드코딩 8개에 없는 provider도 동적 조회로 떠야 한다 (#436)."""
