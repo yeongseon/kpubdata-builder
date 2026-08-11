@@ -22,6 +22,11 @@ on:
         required: false
         type: string
         default: "--local-only"
+      timeout_minutes:
+        description: 퍼블리시 잡 제한 시간(분)
+        required: false
+        type: number
+        default: 60
     secrets:
       KPUBDATA_DATAGO_API_KEY:
         required: false
@@ -45,6 +50,7 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout_minutes || 60 }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
