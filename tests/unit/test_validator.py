@@ -189,3 +189,48 @@ def test_validate_spec_rejects_nan_split_ratio() -> None:
         validate_spec(spec)
 
     assert any("finite" in p for p in exc_info.value.problems)
+
+
+def test_validate_spec_requires_license_when_publish() -> None:
+    # publish=true 인데 license 가 없으면 재배포 가능성을 명시할 수 없다 (#443).
+    spec = BuildSpec(
+        dataset_id="dataset.sample",
+        title="Sample Dataset",
+        description="Sample description",
+        sources=_SRC,
+        exports=_EXP,
+        publish=True,
+    )
+
+    with pytest.raises(ValidationError) as exc_info:
+        validate_spec(spec)
+
+    codes = [p.code for p in (exc_info.value.structured_problems or [])]
+    assert "missing_license_for_publish" in codes
+
+
+def test_validate_spec_accepts_publish_with_license() -> None:
+    # publish=true + license 선언은 통과한다 (양성 회귀, #443).
+    spec = BuildSpec(
+        dataset_id="dataset.sample",
+        title="Sample Dataset",
+        description="Sample description",
+        sources=_SRC,
+        exports=_EXP,
+        publish=True,
+        license="CC-BY-4.0",
+    )
+    validate_spec(spec)  # 예외 없음
+
+
+def test_validate_spec_skips_license_check_when_not_publishing() -> None:
+    # publish=false 면 license 가 없어도 통과한다 (하위 호환, #443).
+    spec = BuildSpec(
+        dataset_id="dataset.sample",
+        title="Sample Dataset",
+        description="Sample description",
+        sources=_SRC,
+        exports=_EXP,
+        publish=False,
+    )
+    validate_spec(spec)  # 예외 없음
