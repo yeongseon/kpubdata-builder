@@ -32,6 +32,15 @@ class _FakeDataset:
         return _FakeResult(self._items)
 
 
+class _FakePaginatedDataset(_FakeDataset):
+    def __init__(self, pages: tuple[list[dict[str, JsonValue]], ...]) -> None:
+        super().__init__(pages[0])
+        self._pages = pages
+
+    def list_all(self, **_params: JsonValue) -> Iterable[_FakeResult]:
+        return (_FakeResult(page) for page in self._pages)
+
+
 class _FakeClient:
     """source_key → 레코드 매핑을 돌려주는 테스트용 클라이언트."""
 
@@ -42,6 +51,16 @@ class _FakeClient:
         if source_key not in self._data:
             raise KeyError(f"unknown source: {source_key}")
         return _FakeDataset(self._data[source_key])
+
+
+class _FakePaginatedClient:
+    def __init__(self, data: dict[str, tuple[list[dict[str, JsonValue]], ...]]) -> None:
+        self._data = data
+
+    def dataset(self, source_key: str) -> _FakePaginatedDataset:
+        if source_key not in self._data:
+            raise KeyError(f"unknown source: {source_key}")
+        return _FakePaginatedDataset(self._data[source_key])
 
 
 def _spec(*sources: SourceRef) -> BuildSpec:
@@ -356,6 +375,24 @@ def test_run_build_writes_provenance_to_manifest(tmp_path: Path) -> None:
     assert entry["record_count"] == 2
     assert cast(str, entry["data_checksum"]).startswith("sha256:")
     assert cast(str, entry["fetched_at"]).endswith("+00:00")
+
+
+def test_run_build_manifest_counts_all_paginated_records(tmp_path: Path) -> None:
+    spec = _spec(SourceRef(provider="datago", dataset="apt_trade"))
+    client = _FakePaginatedClient(
+        {"datago.apt_trade": ([{"id": "1", "amount": 1000}], [{"id": "2", "amount": 2500}])}
+    )
+
+    result = run_build(spec, client=client, output_root=tmp_path, run_id="run1")
+
+    assert result.status == "ok"
+    manifest = cast(
+        dict[str, JsonValue], json.loads(result.manifest_path.read_text(encoding="utf-8"))
+    )
+    row_counts = cast(dict[str, int], manifest["row_counts"])
+    assert row_counts["datago.apt_trade"] == 2
+    provenance = cast(list[dict[str, JsonValue]], manifest["provenance"])
+    assert provenance[0]["record_count"] == 2
 
 
 def test_run_build_rejects_unsafe_run_id(tmp_path: Path) -> None:
