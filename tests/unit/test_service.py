@@ -95,6 +95,19 @@ class _FakeClient:
         return _FakeDataset(self._data[source_key])
 
 
+class _CloseTrackingClient(_FakeClient):
+    def __init__(
+        self,
+        data: dict[str, list[dict[str, JsonValue]]],
+        catalog_items: list[object] | None = None,
+    ) -> None:
+        super().__init__(data, catalog_items=catalog_items)
+        self.close_calls = 0
+
+    def close(self) -> None:
+        self.close_calls += 1
+
+
 def _service(tmp_path: Path) -> BuilderService:
     client = _FakeClient({"datago.air_quality": [{"id": "1", "v": 10}, {"id": "2", "v": 20}]})
     return BuilderService(output_root=tmp_path, client_factory=lambda: client)
@@ -149,6 +162,15 @@ class TestPreview:
         files = [p.name for p in tmp_path.iterdir() if not p.name.startswith("_builds")]
         assert files == []
 
+    def test_preview_closes_request_client(self, tmp_path: Path) -> None:
+        client = _CloseTrackingClient({"datago.air_quality": [{"id": "1", "v": 10}]})
+        service = BuilderService(output_root=tmp_path, client_factory=lambda: client)
+
+        resp = service.preview(VALID_SPEC_YAML)
+
+        assert resp.status_code == 200
+        assert client.close_calls == 1
+
 
 class TestPreviewLimitGuard:
     def test_preview_direct_call_rejects_zero_limit(self, tmp_path: Path) -> None:
@@ -169,6 +191,15 @@ class TestBuild:
         assert resp.body["status"] == "ok"
         assert resp.body["run_id"] == "run1"
         assert (tmp_path / "run1" / "manifest.json").exists()
+
+    def test_build_closes_request_client_when_source_fails(self, tmp_path: Path) -> None:
+        client = _CloseTrackingClient({})
+        service = BuilderService(output_root=tmp_path, client_factory=lambda: client)
+
+        resp = service.build(VALID_SPEC_YAML, run_id="run1")
+
+        assert resp.status_code == 502
+        assert client.close_calls == 1
 
 
 class TestArtifacts:
@@ -1197,6 +1228,39 @@ class TestCatalog:
         resp = self._service_with_catalog(tmp_path, []).catalog()
         assert resp.status_code == 200
         assert resp.body["providers"] == []
+
+    def test_catalog_closes_request_client(self, tmp_path: Path) -> None:
+        client = _CloseTrackingClient(
+            {}, catalog_items=[_FakeCatalogRef("datago", "air_quality", "대기오염")]
+        )
+        service = BuilderService(output_root=tmp_path, client_factory=lambda: client)
+
+        resp = service.catalog()
+
+        assert resp.status_code == 200
+        assert client.close_calls == 1
+
+    def test_catalog_closes_request_client_when_catalog_fails(self, tmp_path: Path) -> None:
+        class _BrokenCatalogClient:
+            close_calls = 0
+
+            @property
+            def datasets(self) -> object:
+                raise RuntimeError("catalog failed")
+
+            def dataset(self, source_key: str) -> _FakeDataset:
+                raise KeyError(source_key)
+
+            def close(self) -> None:
+                self.close_calls += 1
+
+        client = _BrokenCatalogClient()
+        service = BuilderService(output_root=tmp_path, client_factory=lambda: client)
+
+        resp = service.catalog()
+
+        assert resp.status_code == 502
+        assert client.close_calls == 1
 
     def test_catalog_returns_502_when_client_raises(self, tmp_path: Path) -> None:
         class _BrokenClient:
