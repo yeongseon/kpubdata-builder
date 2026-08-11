@@ -6,12 +6,43 @@ on:
     - cron: "15 */2 * * *"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: scheduled-air-quality
+  cancel-in-progress: false
+
 jobs:
   air-quality:
     uses: ./.github/workflows/publish-dataset.yml
+    permissions:
+      contents: read
+    concurrency:
+      group: scheduled-air-quality-publish
+      cancel-in-progress: false
     with:
       mode: ""
       config: scripts/configs/air_quality.yaml
+      timeout_minutes: 45
     secrets:
       KPUBDATA_DATAGO_API_KEY: ${{ secrets.KPUBDATA_DATAGO_API_KEY }}
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+  notify-failure:
+    needs: [air-quality]
+    if: ${{ failure() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Create freshness incident issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW: ${{ github.workflow }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue create \
+            --title "[Freshness] ${WORKFLOW} failed" \
+            --body "Scheduled dataset publish failed.\n\nRun: ${RUN_URL}\n\nFollow DATA_FRESHNESS.md escalation policy before re-running or backfilling."

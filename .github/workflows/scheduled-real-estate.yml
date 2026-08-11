@@ -6,21 +6,58 @@ on:
     - cron: "30 0 1-10 * *"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: scheduled-real-estate
+  cancel-in-progress: false
+
 jobs:
   apt-trade:
     uses: ./.github/workflows/publish-dataset.yml
+    permissions:
+      contents: read
+    concurrency:
+      group: scheduled-real-estate-apt-trade
+      cancel-in-progress: false
     with:
       mode: ""
       config: scripts/configs/seoul_apartment_trades.yaml
+      timeout_minutes: 60
     secrets:
       KPUBDATA_DATAGO_API_KEY: ${{ secrets.KPUBDATA_DATAGO_API_KEY }}
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
   apt-rent:
     uses: ./.github/workflows/publish-dataset.yml
+    permissions:
+      contents: read
+    concurrency:
+      group: scheduled-real-estate-apt-rent
+      cancel-in-progress: false
     with:
       mode: ""
       config: scripts/configs/seoul_apartment_rent.yaml
+      timeout_minutes: 60
     secrets:
       KPUBDATA_DATAGO_API_KEY: ${{ secrets.KPUBDATA_DATAGO_API_KEY }}
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+  notify-failure:
+    needs: [apt-trade, apt-rent]
+    if: ${{ failure() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Create freshness incident issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW: ${{ github.workflow }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue create \
+            --title "[Freshness] ${WORKFLOW} failed" \
+            --body "Scheduled dataset publish failed.\n\nRun: ${RUN_URL}\n\nFollow DATA_FRESHNESS.md escalation policy before re-running or backfilling."
