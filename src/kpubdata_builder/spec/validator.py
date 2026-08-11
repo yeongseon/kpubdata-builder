@@ -116,6 +116,7 @@ def validate_spec(spec: BuildSpec) -> None:
     problems.extend(_split_problems(spec))
     problems.extend(_schema_problems(spec))
     problems.extend(_pii_problems(spec))
+    problems.extend(_license_problems(spec))
     if problems:
         raise ValidationError([str(p) for p in problems], structured=problems)
 
@@ -234,6 +235,24 @@ def _pii_problems(spec: BuildSpec) -> list[ValidationProblem]:
                 "pii_allow_with_publish",
                 "pii.mode",
                 "pii.mode='allow' is forbidden when publish=true (공개 배포 PII 노출 위험, #441)",
+            )
+        )
+    return problems
+
+
+def _license_problems(spec: BuildSpec) -> list[ValidationProblem]:
+    """publish=true 인 빌드의 라이선스 누락을 사전에 검증한다 (#443).
+
+    kpubdata 가 라이선스 메타데이터를 제공하지 않으므로, 공개 배포 시 사용자
+    명시 선언(``license`` 필드)이 재배포 가능성의 유일한 출처이다.
+    """
+    problems: list[ValidationProblem] = []
+    if spec.publish and not spec.license:
+        problems.append(
+            _p(
+                "missing_license_for_publish",
+                "license",
+                "license is required when publish=true (재배포 가능성 명시, #443)",
             )
         )
     return problems

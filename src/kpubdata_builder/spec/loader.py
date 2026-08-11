@@ -54,6 +54,9 @@ def parse_spec(data: dict[str, object]) -> BuildSpec:
         exports = _parse_exports(_require_present(data, "exports"))
         splits = _parse_splits(data.get("splits"))
         pii = _parse_pii(data.get("pii"))
+        license_obj = data.get("license")
+        if license_obj is not None and not isinstance(license_obj, str):
+            raise TypeError("license must be a string")
     except (KeyError, TypeError, ValueError) as exc:
         raise SpecLoadError(f"Failed to parse build spec: {exc}") from exc
 
@@ -67,6 +70,7 @@ def parse_spec(data: dict[str, object]) -> BuildSpec:
         publish=publish,
         splits=splits,
         pii=pii,
+        license=license_obj,
     )
 
 

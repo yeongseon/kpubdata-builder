@@ -121,6 +121,9 @@ class BuildSpec:
         publish: 빌드 후 게시까지 수행할지 여부.
         splits: 데이터셋 분할 정의. 없으면 분할하지 않는다.
         pii: PII 스캔 정책. None이면 스캔을 생략한다 (하위 호환, #441).
+        license: 데이터셋 라이선스/이용허락범위 (SPDX 식별자 또는 자유 텍스트).
+            ``publish=True`` 시 반드시 선언해야 한다 (#443). kpubdata 가 라이선스
+            메타데이터를 제공하지 않으므로 사용자 명시 선언만이 출처이다.
 
     예시:
         >>> BuildSpec.from_yaml("specs/sample.yaml")
@@ -135,6 +138,7 @@ class BuildSpec:
     publish: bool = False
     splits: SplitSpec | None = None
     pii: PiiPolicy | None = None
+    license: str | None = None
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> BuildSpec:
