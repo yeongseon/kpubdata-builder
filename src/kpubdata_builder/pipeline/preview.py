@@ -18,7 +18,7 @@ from ..spec import BuildSpec, SourceRef
 from ..spec.validator import validate_spec
 from ..stages.bronze.build import SourceClient, build_bronze_artifact
 from ..stages.silver.build import build_silver_dataset
-from ..tabular import DEFAULT_PREVIEW_LIMIT, PreviewSlice, SchemaInfo
+from ..tabular import DEFAULT_PREVIEW_LIMIT, PreviewSlice, SchemaInfo, TableStatistics
 
 
 @dataclass(frozen=True)
@@ -30,6 +30,8 @@ class SourcePreview:
         status: "ok" 또는 "failed".
         schema: 추론된 스키마 요약 (실패 시 빈 SchemaInfo).
         preview: 상위 N행 미리보기 (실패 시 빈 PreviewSlice).
+        statistics: 전체 테이블 기준 통계 (row_count/null_counts/duplicate_rate,
+            #440). 스키마 계약 초안(VAL-4)과 품질 게이트(QG-3)의 근거.
         error: 실패 시 오류 메시지.
     """
 
@@ -37,6 +39,7 @@ class SourcePreview:
     status: str
     schema: SchemaInfo
     preview: PreviewSlice
+    statistics: TableStatistics
     error: str | None = None
 
 
@@ -87,6 +90,7 @@ def _preview_source(
             status="ok",
             schema=silver.schema,
             preview=silver.preview,
+            statistics=silver.statistics,
         )
     except Exception as exc:  # 미리보기 실패를 결과로 변환
         return SourcePreview(
@@ -94,6 +98,7 @@ def _preview_source(
             status="failed",
             schema=SchemaInfo(),
             preview=PreviewSlice(rows=(), total_rows=0),
+            statistics=TableStatistics(row_count=0, null_counts={}, duplicate_rate=0.0),
             error=str(exc),
         )
 
