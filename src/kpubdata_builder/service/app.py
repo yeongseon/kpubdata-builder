@@ -250,6 +250,11 @@ class BuilderService:
                 ],
                 "sample": list(p.preview.rows),
                 "total_rows": p.preview.total_rows,
+                "statistics": {
+                    "row_count": p.statistics.row_count,
+                    "null_counts": dict(p.statistics.null_counts),
+                    "duplicate_rate": p.statistics.duplicate_rate,
+                },
             }
             for p in result.previews
         ]
