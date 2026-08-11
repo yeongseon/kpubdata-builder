@@ -43,8 +43,7 @@ class SourceDataset(Protocol):
 class PaginatedSourceDataset(SourceDataset, Protocol):
     """kpubdata Dataset.list_all() pagination 계약."""
 
-    def list_all(self, **params: JsonValue) -> Iterable[DatasetResult]:
-        ...
+    def list_all(self, **params: JsonValue) -> Iterable[DatasetResult]: ...
 
 
 class SourceClient(Protocol):
