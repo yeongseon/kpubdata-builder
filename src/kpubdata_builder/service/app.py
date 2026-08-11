@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import heapq
 import json
+import logging
 import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -33,6 +34,8 @@ from ..stages.bronze.build import SourceClient
 from ..store import BuildIndex
 from ..tabular import DEFAULT_PREVIEW_LIMIT
 from .auth import AuthError, Principal, authenticate
+
+logger = logging.getLogger(__name__)
 
 _OWNERSHIP_ENV = "ENFORCE_OWNERSHIP"
 
@@ -75,6 +78,21 @@ def _check_ownership(
 
 # Build list entry type for API responses
 _BuildListEntry = dict[str, str | None]
+
+
+def _apply_ownership(
+    entries: list[_BuildListEntry], principal: Principal | None
+) -> list[_BuildListEntry]:
+    """list_builds 응답에서 본인 소유 run만 남긴다 (#433).
+
+    ENFORCE_OWNERSHIP+oidc principal일 때만 필터링. dev/service principal과
+    principal=None은 통과 (관리자 권한 + 하위 호환). 인덱스 분기와 파일시스템
+    폴백 양쪽에서 공통으로 적용해 폴백 경로가 필터를 우회하지 않게 한다.
+    """
+    if not (_enforce_ownership() and principal and principal.kind == "oidc"):
+        return entries
+    return [e for e in entries if e.get("created_by") == principal.label]
+
 
 # Builder API 계약 버전. contract/builder-api.yaml의 info.version과 일치해야 하며
 # (test_service_contract가 강제), 응답에 실어 Studio 같은 소비자가 하위 호환을
@@ -370,27 +388,38 @@ class BuilderService:
         """실행 이력 목록을 최신 완료 시각 기준 내림차순 반환한다.
 
         ADR 0003에 따라 SQLite 인덱스를 우선 조회하고, 인덱스가 없거나
-        비어있으면 파일시스템 스캔으로 폴백한다.
+        비어있으면 파일시스템 스캔으로 폴백한다. ENFORCE_OWNERSHIP+oidc일 때는
+        두 경로 모두 _apply_ownership으로 본인 소유 run만 노출한다 (#433).
         """
         # 인덱스 우선 조회
         try:
             entries = self._build_index.list_builds(limit=limit)
             if entries:
-                if _enforce_ownership() and principal and principal.kind == "oidc":
-                    entries = [e for e in entries if e.created_by == principal.label]
                 index_builds: list[_BuildListEntry] = [
                     {
                         "run_id": entry.run_id,
                         "status": entry.status,
                         "started_at": entry.started_at,
                         "finished_at": entry.finished_at,
+                        "created_by": entry.created_by,
                     }
                     for entry in entries
                 ]
-                return ServiceResponse(200, {"builds": cast(list[JsonValue], index_builds)})
+                return ServiceResponse(
+                    200,
+                    {"builds": cast(list[JsonValue], _apply_ownership(index_builds, principal))},
+                )
         except Exception:
-            # 인덱스 조회 실패 시 폴백
-            pass
+            # 인덱스 조회 실패. ENFORCE_OWNERSHIP+oidc면 타인 run이 폴백으로
+            # 새어나갈 수 있으므로 fail-closed로 빈 배열을 반환한다 (#433).
+            # 일반 모드는 기존대로 파일시스템 폴백으로 진행한다 (ADR 0003).
+            if _enforce_ownership() and principal and principal.kind == "oidc":
+                logger.warning(
+                    "build index query failed; returning empty list "
+                    "(ownership enforced, fail-closed)",
+                    exc_info=True,
+                )
+                return ServiceResponse(200, {"builds": []})
 
         # 폴백: 파일시스템 스캔
         if not self._output_root.exists():
@@ -416,9 +445,13 @@ class BuilderService:
                     "status": "failed" if manifest.get("errors") else "ok",
                     "started_at": manifest.get("started_at"),
                     "finished_at": manifest.get("finished_at"),
+                    "created_by": manifest.get("created_by"),
                 }
             )
-        return ServiceResponse(200, {"builds": cast(list[JsonValue], fs_builds)})
+        return ServiceResponse(
+            200,
+            {"builds": cast(list[JsonValue], _apply_ownership(fs_builds, principal))},
+        )
 
     def _load_validated(self, spec_yaml: str) -> BuildSpec | ServiceResponse:
         """spec_yaml을 파싱·검증하고, 실패 시 오류 ServiceResponse를 반환한다."""
