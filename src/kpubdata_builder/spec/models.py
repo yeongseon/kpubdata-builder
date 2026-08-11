@@ -94,6 +94,20 @@ class SplitSpec:
 
 
 @dataclass(frozen=True)
+class PiiPolicy:
+    """PII 검출 정책 (#441, QG-1).
+
+    속성:
+        mode: ``"block"``(기본, 검출 시 빌드 실패) | ``"warn"``(manifest 경고만) |
+            ``"allow"``(통과). ``publish=True`` 스펙에서는 ``allow``를 금지한다.
+        allow_columns: 모드와 무관하게 스캔을 건너뛸 컬럼명 목록(오탐 해제용).
+    """
+
+    mode: str = "block"
+    allow_columns: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class BuildSpec:
     """데이터셋 산출물을 위한 선언적 빌드 명세.
 
@@ -106,6 +120,7 @@ class BuildSpec:
         metadata: 산출물에 실을 임의 메타데이터.
         publish: 빌드 후 게시까지 수행할지 여부.
         splits: 데이터셋 분할 정의. 없으면 분할하지 않는다.
+        pii: PII 스캔 정책. None이면 스캔을 생략한다 (하위 호환, #441).
 
     예시:
         >>> BuildSpec.from_yaml("specs/sample.yaml")
@@ -119,6 +134,7 @@ class BuildSpec:
     metadata: dict[str, JsonValue] = field(default_factory=dict)
     publish: bool = False
     splits: SplitSpec | None = None
+    pii: PiiPolicy | None = None
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> BuildSpec:

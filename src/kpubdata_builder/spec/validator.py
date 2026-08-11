@@ -115,6 +115,7 @@ def validate_spec(spec: BuildSpec) -> None:
             break
     problems.extend(_split_problems(spec))
     problems.extend(_schema_problems(spec))
+    problems.extend(_pii_problems(spec))
     if problems:
         raise ValidationError([str(p) for p in problems], structured=problems)
 
@@ -214,6 +215,27 @@ def _schema_problems(spec: BuildSpec) -> list[ValidationProblem]:
                         hint=f"Use one of: {', '.join(supported)}",
                     )
                 )
+    return problems
+
+
+def _pii_problems(spec: BuildSpec) -> list[ValidationProblem]:
+    """PII 정책의 명백한 위반을 사전에 검증한다 (#441).
+
+    데이터 스캔 자체는 orchestrator 가 silver 이후에 수행한다. 여기서는 정책
+    선언 단계의 위반(publish=true + allow 등)만 잡는다.
+    """
+    problems: list[ValidationProblem] = []
+    if spec.pii is None:
+        return problems
+    # 공개 배포(publish=true) 스펙에서 allow 는 PII 미검출 통과 위험이 있어 금지.
+    if spec.publish and spec.pii.mode == "allow":
+        problems.append(
+            _p(
+                "pii_allow_with_publish",
+                "pii.mode",
+                "pii.mode='allow' is forbidden when publish=true (공개 배포 PII 노출 위험, #441)",
+            )
+        )
     return problems
 
 

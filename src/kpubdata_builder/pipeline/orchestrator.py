@@ -42,6 +42,7 @@ from ..stages.gold.card import build_dataset_card, render_dataset_card
 from ..stages.gold.persist import persist_gold_package
 from ..stages.silver.build import build_silver_dataset
 from ..stages.silver.persist import persist_silver_dataset
+from ..stages.silver.pii import scan_pii
 from .context import BuildContext
 
 logger = logging.getLogger(__name__)
@@ -177,6 +178,24 @@ def _run_source_pipeline(
             # ValidationProblem 객체를 DatasetValidationError가 기대하는 문자열 목록으로 변환 (#261)
             problem_messages = [problem.message for problem in silver.validation.problems]
             raise DatasetValidationError(problem_messages)
+
+        # PII 스캔 게이트 (#441, QG-1). 원본 값은 결과/로그에 담지 않는다.
+        # block: 검출 시 빌드 실패, warn: manifest/로그 경고, allow: 통과.
+        if context.spec.pii is not None:
+            findings = [
+                f for f in scan_pii(silver.table) if f.column not in context.spec.pii.allow_columns
+            ]
+            if findings:
+                if context.spec.pii.mode == "block":
+                    raise DatasetValidationError(
+                        [f"PII 검출({f.kind}) @ {f.column}: {f.count}건" for f in findings]
+                    )
+                if context.spec.pii.mode == "warn":
+                    logger.warning(
+                        "PII 의심 컬럼 (warn): %s",
+                        ", ".join(f"{f.kind}@{f.column}({f.count})" for f in findings),
+                    )
+
         silver_paths = persist_silver_dataset(
             silver, output_root=context.output_root, run_id=context.run_id
         )
