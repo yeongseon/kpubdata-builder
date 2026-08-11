@@ -234,3 +234,45 @@ def test_validate_spec_skips_license_check_when_not_publishing() -> None:
         publish=False,
     )
     validate_spec(spec)  # 예외 없음
+
+
+def test_validate_spec_warns_time_column_random_split() -> None:
+    """ratio 모드에서 key가 시간 컬럼이면 누수 경고 (#444)."""
+    spec = BuildSpec(
+        dataset_id="dataset.sample",
+        title="Sample",
+        description="desc",
+        sources=_SRC,
+        exports=_EXP,
+        splits=SplitSpec(mode="ratio", ratios={"train": 0.8, "test": 0.2}, key="date"),
+    )
+    with pytest.raises(ValidationError) as exc_info:
+        validate_spec(spec)
+    codes = [p.code for p in (exc_info.value.structured_problems or [])]
+    assert "time_column_random_split" in codes
+
+
+def test_validate_spec_no_warning_for_key_mode_with_time_column() -> None:
+    """key 모드에서 시간 컬럼은 정상 (temporal split, #444 양성)."""
+    spec = BuildSpec(
+        dataset_id="dataset.sample",
+        title="Sample",
+        description="desc",
+        sources=_SRC,
+        exports=_EXP,
+        splits=SplitSpec(mode="key", key="date"),
+    )
+    validate_spec(spec)  # 예외 없음
+
+
+def test_validate_spec_no_warning_for_ratio_without_time_key() -> None:
+    """ratio 모드에서 key가 없거나 시간이 아니면 경고 없음 (#444 양성)."""
+    spec = BuildSpec(
+        dataset_id="dataset.sample",
+        title="Sample",
+        description="desc",
+        sources=_SRC,
+        exports=_EXP,
+        splits=SplitSpec(mode="ratio", ratios={"train": 0.8, "test": 0.2}, key="region"),
+    )
+    validate_spec(spec)  # 예외 없음
