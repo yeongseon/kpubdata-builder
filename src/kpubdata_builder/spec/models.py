@@ -49,7 +49,6 @@ class SourceRef:
         provider: provider 식별자.
         dataset: dataset 식별자.
         params: list 호출에 전달할 원시 파라미터.
-        normalization_mode: canonical/raw 같은 정규화 모드.
         alias: 조립 단계에서 사용할 사용자 정의 소스 이름.
         schema: 소스 스키마 계약. None 이면 Silver 검증을 생략한다 (하위 호환, #437).
     """
@@ -57,7 +56,6 @@ class SourceRef:
     provider: str
     dataset: str
     params: dict[str, JsonValue] = field(default_factory=dict)
-    normalization_mode: str = "canonical"
     alias: str = ""
     schema: SchemaContract | None = None
 
@@ -105,7 +103,6 @@ class BuildSpec:
         description: 빌드 목적과 데이터 설명.
         sources: 입력 소스 목록.
         exports: 출력 대상 목록.
-        transforms: 적용 예정인 변환 단계 이름 목록.
         metadata: 산출물에 실을 임의 메타데이터.
         publish: 빌드 후 게시까지 수행할지 여부.
         splits: 데이터셋 분할 정의. 없으면 분할하지 않는다.
@@ -119,7 +116,6 @@ class BuildSpec:
     description: str
     sources: tuple[SourceRef, ...]
     exports: tuple[ExportTarget, ...]
-    transforms: tuple[str, ...] = ()
     metadata: dict[str, JsonValue] = field(default_factory=dict)
     publish: bool = False
     splits: SplitSpec | None = None

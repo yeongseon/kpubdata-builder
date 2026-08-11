@@ -44,7 +44,6 @@ exports:
 
 | 필드 | 타입 | 설명 |
 | :--- | :--- | :--- |
-| `transforms` | array<string> | 적용 예정인 변환 단계 이름 목록 |
 | `publish` | boolean | 빌드 후 게시까지 수행할지 여부 (기본값: `false`) |
 | `metadata` | object | 산출물에 실을 임의 메타데이터 (문자열 키/값 쌍) |
 | `splits` | object | 데이터셋 분할 정의 |
@@ -82,7 +81,6 @@ sources:
       nx: 55
       ny: 127
     alias: forecast
-    normalization_mode: canonical
 ```
 
 | 필드 | 타입 | 필수 | 설명 |
@@ -91,7 +89,6 @@ sources:
 | `dataset` | string | 예 | provider 내부 dataset 이름 |
 | `params` | object | 아니오 | source 호출 파라미터 (JSON 호환 값) |
 | `alias` | string | 아니오 | 조립 단계에서 사용할 사용자 정의 소스 이름 |
-| `normalization_mode` | string | 아니오 | 정규화 모드 (`canonical` 기본값, `raw` 지원) |
 
 ### 4.5 `exports` (배열)
 
@@ -128,19 +125,7 @@ KPubData Studio에서는 `ExportTarget.format`이라는 필드명을 사용하�
 
 > **참고**: 값 자체는 동일하며, 단지 필드명만 `format` → `kind`로 변환됩니다. Builder API를 직접 호출하는 경우(CLI 등)에는 항상 `kind`를 사용해야 합니다.
 
-### 4.6 `transforms` (optional)
-
-```yaml
-transforms:
-  - normalize_dates
-  - filter_outliers
-```
-
-적용 예정인 변환 단계 이름의 목록입니다.
-
-> 계획(planned)/미구현: `transforms`는 현재 파싱되어 BuildSpec에 보존되지만, 실제 변환 로직은 아직 구현되지 않았습니다.
-
-### 4.7 `publish` (optional)
+### 4.6 `publish` (optional)
 
 ```yaml
 publish: true
