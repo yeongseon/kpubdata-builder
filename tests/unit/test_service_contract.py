@@ -601,9 +601,7 @@ class TestResponseConformance:
 
     def test_manifest_200_after_build(self, tmp_path: Path) -> None:
         service = _conform_service(tmp_path)
-        dispatch(
-            service, "POST", "/build", {"spec": _CONFORM_SPEC_YAML, "run_id": "conform-man"}
-        )
+        dispatch(service, "POST", "/build", {"spec": _CONFORM_SPEC_YAML, "run_id": "conform-man"})
         resp = dispatch(service, "GET", "/builds/conform-man/manifest", None)
         assert resp.status_code == 200
         _assert_conforms(resp, "/builds/{run_id}/manifest", "GET")
