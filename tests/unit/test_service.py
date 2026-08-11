@@ -201,6 +201,23 @@ class TestBuild:
         assert resp.status_code == 502
         assert client.close_calls == 1
 
+    def test_manifest_route_returns_written_manifest_json(self, tmp_path: Path) -> None:
+        service = _service(tmp_path)
+        service.build(VALID_SPEC_YAML, run_id="run1")
+
+        resp = dispatch(service, "GET", "/builds/run1/manifest", None)
+
+        assert isinstance(resp, ServiceResponse)
+        assert resp.status_code == 200
+        assert resp.body["build_id"] == "run1"
+        assert resp.body["schema_version"] == "1.0.0"
+
+    def test_manifest_route_returns_404_for_missing_run(self, tmp_path: Path) -> None:
+        resp = dispatch(_service(tmp_path), "GET", "/builds/nope/manifest", None)
+
+        assert isinstance(resp, ServiceResponse)
+        assert resp.status_code == 404
+
 
 class TestArtifacts:
     def test_lists_artifacts_after_build(self, tmp_path: Path) -> None:

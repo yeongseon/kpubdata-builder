@@ -51,6 +51,7 @@ Builder는 **동기식 실행 모델**을 사용합니다.
 | `/validate` | `POST` | BuildSpec 검증 | 동기식 |
 | `/preview` | `POST` | 샘플 실행 및 소스별 스키마 preview | 동기식 |
 | `/build` | `POST` | 빌드 실행 (동기식) | 동기식 |
+| `/builds/{run_id}/manifest` | `GET` | 실행 manifest JSON 본문 조회 | 동기식 |
 | `/artifacts/{run_id}` | `GET` | 실행 워크스페이스 산출물 목록 조회 | 동기식 |
 | `/builds` | `GET` | 빌드 이력 목록 조회 (최신 수정 시각 기준 내림차순) | 동기식 |
 | `/healthz` | `GET` | 무인증 liveness probe (`{"status":"ok"}`) | 동기식 |
@@ -201,7 +202,35 @@ BuildSpec을 실행 전에 검증합니다. body의 `spec` 키에 YAML 문자열
 }
 ```
 
-### 5.5 `GET /artifacts/{run_id}`
+### 5.5 `GET /builds/{run_id}/manifest`
+
+실행 워크스페이스에 기록된 `manifest.json` 파일의 JSON 본문을 반환합니다. Studio는 파일 다운로드 엔드포인트를 파싱하지 않고 이 엔드포인트로 manifest를 직접 소비할 수 있습니다.
+
+#### 응답 `200`
+
+```json
+{
+  "schema_version": "1.0.0",
+  "build_id": "my-run-001",
+  "started_at": "2025-04-01T10:30:00+00:00",
+  "finished_at": "2025-04-01T10:32:15+00:00",
+  "inputs": ["datago.village_fcst"],
+  "outputs": ["/path/to/dist/my-run-001/gold/package.json"],
+  "warnings": [],
+  "errors": [],
+  "row_counts": {"datago.village_fcst": 288}
+}
+```
+
+#### 응답 `404`
+
+```json
+{
+  "error": "manifest not found: my-run-001"
+}
+```
+
+### 5.6 `GET /artifacts/{run_id}`
 
 실행 워크스페이스의 산출물 파일 목록을 반환합니다.
 
@@ -226,7 +255,7 @@ BuildSpec을 실행 전에 검증합니다. body의 `spec` 키에 YAML 문자열
 }
 ```
 
-### 5.6 `GET /builds`
+### 5.7 `GET /builds`
 
 빌드 이력 목록을 최신 수정 시각 기준 내림차순으로 반환합니다. `output_root` 아래의 디렉터리를 스캔해 `manifest.json`이 있는 실행만 포함합니다.
 
@@ -297,10 +326,10 @@ conformance) 순수 파이썬 validator(`tests/unit/_openapi.py`)로 검증합�
 | `validateSpec` | 구현됨 | `POST /validate` (동기) |
 | `previewBuild` | 구현됨 | `POST /preview` (동기) |
 | `createBuild` | 구현됨 | `POST /build` (동기) |
+| `getBuildManifest` | 구현됨 | `GET /builds/{run_id}/manifest` |
 | `listBuildArtifacts` | 구현됨 | `GET /artifacts/{run_id}` |
 | `listDatasets` | 계획(planned)/미구현 | — |
 | `getBuild` | 계획(planned)/미구현 — 비동기 job 모델 | `GET /builds/{run_id}` (후속 ADR) |
-| `getBuildManifest` | 계획(planned)/미구현 | — |
 | `publishArtifacts` | 계획(planned)/미구현 | — |
 | (메타) | 구현됨 | `GET /version` → `{service, api_version}` |
 

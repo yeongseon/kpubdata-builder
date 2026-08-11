@@ -41,6 +41,7 @@ _DISPATCH_ROUTES: dict[tuple[str, str], str] = {
     ("/preview", "POST"): "previewBuild",
     ("/build", "POST"): "createBuild",
     ("/builds", "GET"): "listBuilds",
+    ("/builds/{run_id}/manifest", "GET"): "getBuildManifest",
     ("/artifacts/{run_id}", "GET"): "listBuildArtifacts",
 }
 
@@ -53,6 +54,7 @@ _REQUIRED_OPERATIONS = [
     ("/validate", "post"),
     ("/preview", "post"),
     ("/build", "post"),
+    ("/builds/{run_id}/manifest", "get"),
     ("/artifacts/{run_id}", "get"),
     ("/builds", "get"),
 ]
@@ -120,6 +122,7 @@ _IMPLEMENTED_OPERATIONS = {
     "validateSpec",
     "previewBuild",
     "createBuild",
+    "getBuildManifest",
     "listBuildArtifacts",
     "listBuilds",
 }
@@ -297,6 +300,7 @@ _OPERATION_STATUS_CODES: dict[str, set[int]] = {
     "validateSpec": {200, 400},
     "previewBuild": {200, 400},
     "createBuild": {200, 400, 502},
+    "getBuildManifest": {200, 400, 404, 500},
     "listBuilds": {200, 400},
     "listBuildArtifacts": {200, 400, 404},
 }
@@ -594,6 +598,18 @@ class TestResponseConformance:
         resp = dispatch(service, "GET", "/builds", None, query="")
         assert resp.status_code == 200
         _assert_conforms(resp, "/builds", "GET")
+
+    def test_manifest_200_after_build(self, tmp_path: Path) -> None:
+        service = _conform_service(tmp_path)
+        dispatch(service, "POST", "/build", {"spec": _CONFORM_SPEC_YAML, "run_id": "conform-man"})
+        resp = dispatch(service, "GET", "/builds/conform-man/manifest", None)
+        assert resp.status_code == 200
+        _assert_conforms(resp, "/builds/{run_id}/manifest", "GET")
+
+    def test_manifest_404_missing(self, tmp_path: Path) -> None:
+        resp = dispatch(_conform_service(tmp_path), "GET", "/builds/nope/manifest", None)
+        assert resp.status_code == 404
+        _assert_conforms(resp, "/builds/{run_id}/manifest", "GET")
 
     def test_builds_400_bad_limit(self, tmp_path: Path) -> None:
         resp = dispatch(_conform_service(tmp_path), "GET", "/builds", None, query="limit=0")

@@ -360,6 +360,29 @@ class BuilderService:
         )
         return ServiceResponse(200, {"run_id": run_id, "files": list(files)})
 
+    def manifest(self, run_id: str) -> ServiceResponse:
+        try:
+            validate_path_segment(run_id, field_name="run_id")
+        except ValueError as exc:
+            return ServiceResponse(400, {"error": str(exc)})
+
+        run_dir = self._output_root / run_id
+        ensure_within(self._output_root, run_dir, label="run directory")
+        manifest_path = run_dir / "manifest.json"
+        ensure_within(run_dir, manifest_path, label="manifest file")
+        if not manifest_path.exists():
+            return ServiceResponse(404, {"error": f"manifest not found: {run_id}"})
+
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            return ServiceResponse(500, {"error": f"invalid manifest JSON: {exc.msg}"})
+        except OSError as exc:
+            return ServiceResponse(500, {"error": f"failed to read manifest: {exc}"})
+        if not isinstance(manifest, dict):
+            return ServiceResponse(500, {"error": "invalid manifest: expected object"})
+        return ServiceResponse(200, cast(dict[str, JsonValue], manifest))
+
     def serve_artifact_file(self, run_id: str, file_path: str) -> ServiceResponse | FileResponse:
         """실행 워크스페이스의 특정 파일을 제공한다 (#323).
 
@@ -579,6 +602,20 @@ def dispatch(
                 return ServiceResponse(400, {"error": str(exc)})
             run_id = run_id_value
         return service.build(spec, run_id=run_id, created_by=principal.label)
+
+    if method == "GET" and path.startswith("/builds/") and path.endswith("/manifest"):
+        rest = path[len("/builds/") :]
+        parts = rest.split("/", 1)
+        run_id = parts[0]
+        if len(parts) == 2 and parts[1] == "manifest":
+            try:
+                validate_path_segment(run_id, field_name="run_id")
+            except ValueError as exc:
+                return ServiceResponse(400, {"error": str(exc)})
+            ownership_error = _check_ownership(service, run_id, principal)
+            if ownership_error is not None:
+                return ownership_error
+            return service.manifest(run_id)
 
     if method == "GET" and path.startswith("/artifacts/"):
         rest = path[len("/artifacts/") :]
