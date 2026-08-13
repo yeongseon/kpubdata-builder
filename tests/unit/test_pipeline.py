@@ -181,6 +181,72 @@ def test_run_build_writes_dataset_card_readme(tmp_path: Path) -> None:
     assert str(readme) in outputs
 
 
+@pytest.mark.parametrize(
+    ("license_value", "metadata", "expected", "unexpected"),
+    [
+        ("CC-BY-4.0", {}, "CC-BY-4.0", None),
+        (None, {"license": "KOGL Type 1"}, "KOGL Type 1", None),
+        ("CC0-1.0", {"license": "legacy-license"}, "CC0-1.0", "legacy-license"),
+    ],
+)
+def test_run_build_dataset_card_uses_canonical_license_with_legacy_fallback(
+    tmp_path: Path,
+    license_value: str | None,
+    metadata: dict[str, JsonValue],
+    expected: str,
+    unexpected: str | None,
+) -> None:
+    spec = BuildSpec(
+        dataset_id="apt_trade",
+        title="Apartment Trades",
+        description="seoul apartment trades",
+        sources=(SourceRef(provider="datago", dataset="apt_trade"),),
+        exports=(ExportTarget(kind="jsonl", output_path="data.jsonl"),),
+        metadata=metadata,
+        license=license_value,
+    )
+    client = _FakeClient({"datago.apt_trade": [{"id": "1"}]})
+
+    result = run_build(spec, client=client, output_root=tmp_path, run_id="run1")
+
+    assert result.status == "ok"
+    readme = tmp_path / "run1" / "gold" / "datago.apt_trade" / "README.md"
+    text = readme.read_text(encoding="utf-8")
+    assert f"## License\n\n{expected}\n" in text
+    if unexpected is not None:
+        assert unexpected not in text
+
+
+def test_run_build_does_not_forward_arbitrary_metadata_to_exporters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: list[dict[str, str]] = []
+
+    def _capture_exports(
+        _gold_dir: Path,
+        artifact: orchestrator.ArtifactDataset,
+        _exports: tuple[ExportTarget, ...],
+    ) -> list[Path]:
+        captured.append(artifact.metadata)
+        return []
+
+    monkeypatch.setattr(orchestrator, "_execute_exports", _capture_exports)
+    spec = BuildSpec(
+        dataset_id="apt_trade",
+        title="Apartment Trades",
+        description="seoul apartment trades",
+        sources=(SourceRef(provider="datago", dataset="apt_trade"),),
+        exports=(ExportTarget(kind="jsonl", output_path="data.jsonl"),),
+        metadata={"nested": {"value": 1}, "tags": ["private", "internal"]},
+    )
+    client = _FakeClient({"datago.apt_trade": [{"id": "1"}]})
+
+    result = run_build(spec, client=client, output_root=tmp_path, run_id="run1")
+
+    assert result.status == "ok"
+    assert captured == [{"title": "Apartment Trades", "description": "seoul apartment trades"}]
+
+
 def test_run_build_uses_alias_as_source_key(tmp_path: Path) -> None:
     spec = _spec(SourceRef(provider="datago", dataset="apt_trade", alias="trades"))
     client = _FakeClient({"datago.apt_trade": [{"id": "1"}]})

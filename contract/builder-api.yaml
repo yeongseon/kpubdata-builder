@@ -305,13 +305,27 @@ components:
           items:
             type: string
 
+    JsonValue:
+      description: 표준 JSON으로 직렬화 가능한 값(null, scalar, array, object)
+      type: [string, number, boolean, object, array, "null"]
+      additionalProperties:
+        $ref: "#/components/schemas/JsonValue"
+      items:
+        $ref: "#/components/schemas/JsonValue"
+
     BuildSpec:
       type: object
       description: >-
         선언적 빌드 명세(snake_case). dataset_id/title/description/sources/exports는
-        필수, metadata/transforms/publish/splits는 선택. 세부 스키마는 spec 모델
-        (spec/models.py)을 따른다.
+        필수이고 나머지 필드는 선택이다. 세부 스키마는 spec 모델
+        (spec/models.py)을 따른다. 제거된 transforms/normalization_mode 필드는
+        허용하지 않는다.
       additionalProperties: true
+      allOf:
+        - not:
+            required: [transforms]
+        - not:
+            required: [normalization_mode]
       required: [dataset_id, title, description, sources, exports]
       properties:
         dataset_id:
@@ -322,19 +336,44 @@ components:
           type: string
         sources:
           type: array
+          minItems: 1
           items:
             $ref: "#/components/schemas/SourceRef"
         exports:
           type: array
+          minItems: 1
           items:
             $ref: "#/components/schemas/ExportTarget"
         metadata:
           type: object
           additionalProperties:
-            type: string
+            $ref: "#/components/schemas/JsonValue"
+        publish:
+          type: boolean
+          default: false
+        splits:
+          oneOf:
+            - $ref: "#/components/schemas/SplitSpec"
+            - type: "null"
+        pii:
+          oneOf:
+            - $ref: "#/components/schemas/PiiPolicy"
+            - type: "null"
+        license:
+          type: [string, "null"]
+        quality:
+          oneOf:
+            - $ref: "#/components/schemas/QualityPolicy"
+            - type: "null"
 
     SourceRef:
       type: object
+      description: >-
+        kpubdata provider/dataset 참조. 제거된 normalization_mode 필드는 허용하지
+        않으며 정규화와 검증은 schema 계약으로 선언한다.
+      additionalProperties: true
+      not:
+        required: [normalization_mode]
       required: [provider, dataset]
       properties:
         provider:
@@ -343,11 +382,35 @@ components:
           type: string
         params:
           type: object
-          additionalProperties: true
+          additionalProperties:
+            $ref: "#/components/schemas/JsonValue"
         alias:
           type: string
-        normalization_mode:
-          type: string
+          default: ""
+        schema:
+          oneOf:
+            - $ref: "#/components/schemas/SchemaContract"
+            - type: "null"
+
+    SchemaContract:
+      type: object
+      description: Silver 정규화 및 required-column/dtype 검증 계약
+      properties:
+        required:
+          type: array
+          items:
+            type: string
+          default: []
+        dtypes:
+          type: object
+          additionalProperties:
+            type: string
+          default: {}
+        casts:
+          type: object
+          additionalProperties:
+            type: string
+          default: {}
 
     ExportTarget:
       type: object
@@ -359,7 +422,53 @@ components:
           type: string
         options:
           type: object
-          additionalProperties: true
+          additionalProperties:
+            $ref: "#/components/schemas/JsonValue"
+
+    SplitSpec:
+      type: object
+      required: [mode]
+      properties:
+        mode:
+          type: string
+          enum: [ratio, key]
+        ratios:
+          type: object
+          additionalProperties:
+            type: number
+          default: {}
+        key:
+          type: string
+          default: ""
+        seed:
+          type: integer
+          default: 0
+
+    PiiPolicy:
+      type: object
+      properties:
+        mode:
+          type: string
+          enum: [block, warn, allow]
+          default: block
+        allow_columns:
+          type: array
+          items:
+            type: string
+          default: []
+
+    QualityPolicy:
+      type: object
+      properties:
+        max_duplicate_rate:
+          type: [number, "null"]
+        max_null_ratio:
+          type: object
+          additionalProperties:
+            type: number
+          default: {}
+        min_rows:
+          type: [integer, "null"]
 
     SpecRequest:
       type: object
@@ -482,12 +591,13 @@ components:
 
     SourcePreview:
       type: object
-      required: [source_key, status, schema, sample, total_rows]
+      required: [source_key, status, error, schema, sample, total_rows, statistics]
       properties:
         source_key:
           type: string
         status:
           type: string
+          enum: [ok, failed]
         error:
           type: [string, "null"]
         schema:
@@ -508,9 +618,25 @@ components:
           type: array
           items:
             type: object
-            additionalProperties: true
+            additionalProperties:
+              $ref: "#/components/schemas/JsonValue"
         total_rows:
           type: integer
+        statistics:
+          $ref: "#/components/schemas/TableStatistics"
+
+    TableStatistics:
+      type: object
+      required: [row_count, null_counts, duplicate_rate]
+      properties:
+        row_count:
+          type: integer
+        null_counts:
+          type: object
+          additionalProperties:
+            type: integer
+        duplicate_rate:
+          type: number
 
     BuildOutcome:
       type: object

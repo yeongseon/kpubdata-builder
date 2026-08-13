@@ -69,7 +69,12 @@ def test_parse_spec_applies_optional_defaults() -> None:
 def test_parse_spec_preserves_provided_optionals() -> None:
     """Provided optional fields are carried through unchanged."""
     payload = _valid_payload()
-    payload["metadata"] = {"owner": "kpubdata"}
+    payload["metadata"] = {
+        "owner": "kpubdata",
+        "public": True,
+        "tags": ["air", "quality"],
+        "coverage": {"year": 2026, "note": None},
+    }
     payload["publish"] = True
     sources = payload["sources"]
     assert isinstance(sources, list)
@@ -81,7 +86,12 @@ def test_parse_spec_preserves_provided_optionals() -> None:
 
     spec = parse_spec(payload)
 
-    assert spec.metadata == {"owner": "kpubdata"}
+    assert spec.metadata == {
+        "owner": "kpubdata",
+        "public": True,
+        "tags": ["air", "quality"],
+        "coverage": {"year": 2026, "note": None},
+    }
     assert spec.publish is True
     assert spec.sources[0].params == {"year": 2024}
     assert spec.sources[0].alias == "aq"
@@ -246,5 +256,14 @@ def test_parse_spec_rejects_removed_normalization_mode_field() -> None:
     sources = payload["sources"]
     assert isinstance(sources, list)
     sources[0]["normalization_mode"] = "raw"
+    with pytest.raises(SpecLoadError, match="normalization_mode"):
+        _ = parse_spec(payload)
+
+
+def test_parse_spec_rejects_removed_top_level_normalization_mode_field() -> None:
+    """top-level normalization_mode도 canonical BuildSpec 필드가 아니므로 거부한다 (#485)."""
+    payload = _valid_payload()
+    payload["normalization_mode"] = "canonical"
+
     with pytest.raises(SpecLoadError, match="normalization_mode"):
         _ = parse_spec(payload)
