@@ -152,7 +152,7 @@ def read_manifest(output_root: Path, run_id: str) -> dict[str, object] | None:
         return None
     try:
         data = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None
     return data if isinstance(data, dict) else None
 
@@ -224,7 +224,11 @@ def merge_run_records(
         merged[record.run_id] = RunRecord(
             run_id=record.run_id,
             dataset_id=record.dataset_id,
-            status=record.status,
+            status=(
+                "cancelled"
+                if cached is not None and cached.status == "cancelled"
+                else record.status
+            ),
             started_at=record.started_at,
             finished_at=record.finished_at,
             spec_digest=(
@@ -254,7 +258,7 @@ def retain_canonical_run_records(
             RunRecord(
                 run_id=record.run_id,
                 dataset_id=dataset_id,
-                status=_status_from_manifest(manifest),
+                status=_status_from_manifest(manifest, fallback_status=record.status),
                 started_at=started_at if isinstance(started_at, str) else None,
                 finished_at=finished_at if isinstance(finished_at, str) else None,
                 spec_digest=record.spec_digest,
@@ -264,8 +268,15 @@ def retain_canonical_run_records(
     return canonical
 
 
-def _status_from_manifest(manifest: dict[str, object]) -> str:
-    return "failed" if manifest.get("errors") else "ok"
+def _status_from_manifest(
+    manifest: dict[str, object], *, fallback_status: str | None = None
+) -> str:
+    explicit_status = manifest.get("status")
+    if isinstance(explicit_status, str) and explicit_status in ("ok", "failed", "cancelled"):
+        return explicit_status
+    if manifest.get("errors"):
+        return "failed"
+    return "cancelled" if fallback_status == "cancelled" else "ok"
 
 
 def collect_run_records_from_filesystem(output_root: Path) -> list[RunRecord]:

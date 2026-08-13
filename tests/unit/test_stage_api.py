@@ -131,6 +131,19 @@ class TestListRunStages:
         assert resp.status_code == 200
         assert resp.body["sources"] == []
 
+    def test_invalid_utf8_manifest_returns_404_without_internal_details(
+        self, tmp_path: Path
+    ) -> None:
+        service = _service(tmp_path)
+        assert _build(service, "r1") == 200
+        (tmp_path / "r1" / "manifest.json").write_bytes(b"\xff\xfe")
+
+        resp = dispatch(service, "GET", "/builds/r1/stages", None)
+        assert resp.status_code == 404
+        body_text = json.dumps(resp.body)
+        assert "UnicodeDecodeError" not in body_text
+        assert str(tmp_path) not in body_text
+
     def test_unknown_run_returns_404(self, tmp_path: Path) -> None:
         resp = dispatch(_service(tmp_path), "GET", "/builds/nope/stages", None)
         assert resp.status_code == 404

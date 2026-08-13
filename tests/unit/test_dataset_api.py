@@ -130,6 +130,40 @@ def _service(tmp_path: Path) -> BuilderService:
 
 
 class TestDatasetGrouping:
+    def test_cancelled_index_status_survives_canonicalization(self, tmp_path: Path) -> None:
+        _write_fixture_run(tmp_path, "run-cancelled", dataset_id="dataset.cancelled")
+        service = _service(tmp_path)
+        service._build_index.insert_or_replace(
+            run_id="run-cancelled",
+            status="cancelled",
+            started_at="2025-01-01T00:00:00+00:00",
+            finished_at="2025-01-01T00:05:00+00:00",
+            dataset_id="dataset.cancelled",
+        )
+
+        detail = dispatch(service, "GET", "/datasets/dataset.cancelled", None)
+        assert detail.status_code == 200
+        assert detail.body["status"] == "cancelled"
+
+        history = dispatch(service, "GET", "/datasets/dataset.cancelled/runs", None)
+        assert history.status_code == 200
+        (run,) = cast(list[dict[str, object]], history.body["runs"])
+        assert run["status"] == "cancelled"
+
+    def test_invalid_utf8_manifest_is_skipped_without_500(self, tmp_path: Path) -> None:
+        _write_fixture_run(tmp_path, "run-corrupt", dataset_id="dataset.corrupt")
+        (tmp_path / "run-corrupt" / "manifest.json").write_bytes(b"\xff\xfe")
+        service = _service(tmp_path)
+
+        catalog = dispatch(service, "GET", "/datasets", None)
+        assert catalog.status_code == 200
+        assert catalog.body["datasets"] == []
+
+        detail = dispatch(service, "GET", "/datasets/dataset.corrupt", None)
+        assert detail.status_code == 404
+        assert "UnicodeDecodeError" not in json.dumps(detail.body)
+        assert str(tmp_path) not in json.dumps(detail.body)
+
     def test_partial_index_merges_all_canonical_filesystem_runs(self, tmp_path: Path) -> None:
         """부분 index가 canonical filesystem run을 숨기거나 중복시키지 않는다."""
         for run_id, dataset_id in (
