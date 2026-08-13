@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from threading import Lock
 from typing import TYPE_CHECKING, Literal, Protocol
+from uuid import uuid4
 
 from ..spec import JsonValue
 
@@ -26,6 +27,7 @@ else:
 
 
 BuildJobRunner = Callable[[str, str, str | None], BuildJobResponse]
+SubmitStatus = Literal["accepted", "existing", "queue_full"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +56,12 @@ class BuildJobSnapshot:
         if self.error is not None:
             body["error"] = self.error
         return body
+
+
+@dataclass(frozen=True, slots=True)
+class BuildJobSubmitResult:
+    status: SubmitStatus
+    snapshot: BuildJobSnapshot | None = None
 
 
 class AsyncBuildJobRegistry:
@@ -91,6 +99,10 @@ class AsyncBuildJobRegistry:
         with self._lock:
             return self._jobs.get(run_id)
 
+    def queued_count(self) -> int:
+        with self._lock:
+            return sum(1 for job in self._jobs.values() if job.status == "queued")
+
     def _replace(
         self,
         run_id: str,
@@ -117,10 +129,11 @@ class AsyncBuildJobRegistry:
 class AsyncBuildExecutor:
     """고정 크기 worker pool로 build job을 실행한다."""
 
-    def __init__(self, *, max_workers: int) -> None:
+    def __init__(self, *, max_workers: int, max_queue_size: int = 10) -> None:
         self._executor = ThreadPoolExecutor(
             max_workers=max_workers, thread_name_prefix="kpubdata-build"
         )
+        self._max_queue_size = max_queue_size
         self.registry = AsyncBuildJobRegistry()
 
     def submit(
@@ -130,10 +143,15 @@ class AsyncBuildExecutor:
         run_id: str,
         created_by: str | None,
         runner: BuildJobRunner,
-    ) -> BuildJobSnapshot:
+    ) -> BuildJobSubmitResult:
+        existing = self.registry.get(run_id)
+        if existing is not None:
+            return BuildJobSubmitResult(status="existing", snapshot=existing)
+        if self.registry.queued_count() >= self._max_queue_size:
+            return BuildJobSubmitResult(status="queue_full")
         snapshot = self.registry.create(run_id=run_id, created_by=created_by)
         self._executor.submit(self._run, spec_yaml, run_id, created_by, runner)
-        return snapshot
+        return BuildJobSubmitResult(status="accepted", snapshot=snapshot)
 
     def get(self, run_id: str) -> BuildJobSnapshot | None:
         return self.registry.get(run_id)
@@ -169,10 +187,17 @@ def _utc_now_text() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
 
 
+def generate_run_id() -> str:
+    return f"{datetime.now(tz=timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')}-{uuid4().hex[:12]}"
+
+
 __all__ = [
     "AsyncBuildExecutor",
     "AsyncBuildJobRegistry",
+    "BuildJobSubmitResult",
     "BuildJobResponse",
     "BuildJobSnapshot",
     "BuildJobStatus",
+    "SubmitStatus",
+    "generate_run_id",
 ]

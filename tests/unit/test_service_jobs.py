@@ -6,7 +6,7 @@ import threading
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
-from kpubdata_builder.service import BuilderService, ServiceResponse
+from kpubdata_builder.service import BuilderService, ServiceResponse, dispatch
 from kpubdata_builder.spec import JsonValue
 
 VALID_SPEC_YAML = (
@@ -87,11 +87,13 @@ class _BlockingBuildService(BuilderService):
         output_root: Path,
         entered: threading.Event,
         release: threading.Event,
+        async_max_queue_size: int = 10,
     ) -> None:
         super().__init__(
             output_root=output_root,
             client_factory=lambda: _FakeClient({}),
             async_max_workers=1,
+            async_max_queue_size=async_max_queue_size,
         )
         self._entered = entered
         self._release = release
@@ -182,3 +184,76 @@ class TestAsyncBuildJobs:
 
         status = restarted.build_status("run1")
         assert status.status_code == 404
+
+    def test_duplicate_active_run_id_returns_existing_job(self, tmp_path: Path) -> None:
+        entered = threading.Event()
+        release = threading.Event()
+        service = _BlockingBuildService(output_root=tmp_path, entered=entered, release=release)
+        first = service.submit_build(VALID_SPEC_YAML, run_id="run1", created_by="tester")
+        assert entered.wait(timeout=5)
+
+        second = service.submit_build(VALID_SPEC_YAML, run_id="run1", created_by="tester")
+        release.set()
+
+        assert first.status_code == 202
+        assert second.status_code == 200
+        assert second.body["run_id"] == "run1"
+        assert second.body["status"] == "running"
+
+    def test_duplicate_terminal_run_id_returns_conflict(self, tmp_path: Path) -> None:
+        completed = threading.Event()
+        service = _service(tmp_path, completed)
+        response = service.submit_build(VALID_SPEC_YAML, run_id="run1", created_by="tester")
+        assert response.status_code == 202
+        assert completed.wait(timeout=5)
+
+        duplicate = service.submit_build(VALID_SPEC_YAML, run_id="run1", created_by="tester")
+
+        assert duplicate.status_code == 409
+        assert duplicate.body["run_id"] == "run1"
+
+    def test_post_builds_generates_run_id_when_omitted(self, tmp_path: Path) -> None:
+        completed = threading.Event()
+        service = _service(tmp_path, completed)
+
+        response = dispatch(service, "POST", "/builds", {"spec": VALID_SPEC_YAML})
+        assert isinstance(response, ServiceResponse)
+        assert response.status_code == 202
+        run_id = response.body["run_id"]
+        assert isinstance(run_id, str)
+        assert run_id
+        assert completed.wait(timeout=5)
+
+    def test_queue_full_returns_429(self, tmp_path: Path) -> None:
+        entered = threading.Event()
+        release = threading.Event()
+        service = _BlockingBuildService(
+            output_root=tmp_path,
+            entered=entered,
+            release=release,
+            async_max_queue_size=1,
+        )
+        service.submit_build(VALID_SPEC_YAML, run_id="run1", created_by="tester")
+        assert entered.wait(timeout=5)
+        queued = service.submit_build(VALID_SPEC_YAML, run_id="run2", created_by="tester")
+
+        saturated = service.submit_build(VALID_SPEC_YAML, run_id="run3", created_by="tester")
+        release.set()
+
+        assert queued.status_code == 202
+        assert saturated.status_code == 429
+
+    def test_unsafe_run_id_is_rejected_before_job_creation(self, tmp_path: Path) -> None:
+        completed = threading.Event()
+        service = _service(tmp_path, completed)
+
+        response = dispatch(
+            service,
+            "POST",
+            "/builds",
+            {"spec": VALID_SPEC_YAML, "run_id": "../bad"},
+        )
+
+        assert isinstance(response, ServiceResponse)
+        assert response.status_code == 400
+        assert service.build_status("bad").status_code == 404
