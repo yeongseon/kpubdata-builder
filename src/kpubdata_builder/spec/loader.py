@@ -50,9 +50,7 @@ def parse_spec(data: dict[str, object]) -> BuildSpec:
         if "transforms" in data:
             raise ValueError("'transforms' is removed; use sources[].schema.casts instead (#438)")
         if "normalization_mode" in data:
-            raise ValueError(
-                "'normalization_mode' is removed; use sources[].schema instead (#438)"
-            )
+            raise ValueError("'normalization_mode' is removed; use sources[].schema instead (#438)")
         metadata = _parse_json_mapping(data.get("metadata", {}), field_name="metadata")
         publish = _parse_bool(data.get("publish", False), field_name="publish")
         sources = _parse_sources(_require_present(data, "sources"))
