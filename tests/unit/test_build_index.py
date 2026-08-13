@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -217,6 +218,74 @@ class TestRebuildIndex:
         # run_id로 정렬 확인 (finished_at DESC)
         assert builds[0].run_id == "run2"
         assert builds[1].run_id == "run1"
+
+    def test_rebuild_indexes_digest_from_snapshot_bytes(self, tmp_path: Path) -> None:
+        run_dir = tmp_path / "run1"
+        run_dir.mkdir()
+        (run_dir / "manifest.json").write_text(
+            json.dumps({"started_at": "a", "finished_at": "b"}), encoding="utf-8"
+        )
+        payload = b"dataset_id: d\n"
+        (run_dir / "buildspec.yaml").write_bytes(payload)
+
+        assert rebuild_index(tmp_path) == 1
+
+        entry = BuildIndex(tmp_path).get("run1")
+        assert entry is not None
+        assert entry.spec_digest == f"sha256:{hashlib.sha256(payload).hexdigest()}"
+
+    def test_rebuild_keeps_legacy_snapshot_digest_null(self, tmp_path: Path) -> None:
+        run_dir = tmp_path / "legacy"
+        run_dir.mkdir()
+        (run_dir / "manifest.json").write_text("{}", encoding="utf-8")
+
+        assert rebuild_index(tmp_path) == 1
+        entry = BuildIndex(tmp_path).get("legacy")
+        assert entry is not None
+        assert entry.spec_digest is None
+
+    def test_rebuild_isolates_empty_corrupt_and_unreadable_snapshots(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        payloads: dict[str, bytes | None] = {
+            "normal": b"dataset_id: normal\n",
+            "empty": b"",
+            "invalid-utf8": b"\xff\xfe\x00",
+            "unreadable": b"dataset_id: unreadable\n",
+        }
+        for run_id, payload in payloads.items():
+            run_dir = tmp_path / run_id
+            run_dir.mkdir()
+            (run_dir / "manifest.json").write_text("{}", encoding="utf-8")
+            if payload is not None:
+                (run_dir / "buildspec.yaml").write_bytes(payload)
+
+        original_read_bytes = Path.read_bytes
+
+        def read_bytes_or_fail(path: Path) -> bytes:
+            if path == tmp_path / "unreadable" / "buildspec.yaml":
+                raise PermissionError("snapshot unreadable")
+            return original_read_bytes(path)
+
+        monkeypatch.setattr(Path, "read_bytes", read_bytes_or_fail)
+
+        assert rebuild_index(tmp_path) == len(payloads)
+
+        index = BuildIndex(tmp_path)
+        normal = index.get("normal")
+        empty = index.get("empty")
+        invalid = index.get("invalid-utf8")
+        unreadable = index.get("unreadable")
+        assert normal is not None
+        assert empty is not None
+        assert invalid is not None
+        assert unreadable is not None
+        assert normal.spec_digest == f"sha256:{hashlib.sha256(payloads['normal']).hexdigest()}"
+        assert empty.spec_digest == f"sha256:{hashlib.sha256(b'').hexdigest()}"
+        assert invalid.spec_digest == (
+            f"sha256:{hashlib.sha256(payloads['invalid-utf8']).hexdigest()}"
+        )
+        assert unreadable.spec_digest is None
 
     def test_rebuild_replaces_existing_index(self, tmp_path: Path) -> None:
         """rebuild는 기존 인덱스를 삭제하고 다시 생성한다."""

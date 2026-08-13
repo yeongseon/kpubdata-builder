@@ -271,6 +271,8 @@ def rebuild_index(output_root: Path) -> int:
     """
     import json
 
+    from ..spec.serializer import BUILDSPEC_SNAPSHOT_FILENAME, compute_spec_digest
+
     if not output_root.exists():
         return 0
 
@@ -299,12 +301,22 @@ def rebuild_index(output_root: Path) -> int:
             status = "failed" if manifest.get("errors") else "ok"
             started_at = manifest.get("started_at")
             finished_at = manifest.get("finished_at")
+            snapshot_path = run_dir / BUILDSPEC_SNAPSHOT_FILENAME
+            try:
+                spec_digest = (
+                    compute_spec_digest(snapshot_path.read_bytes())
+                    if snapshot_path.is_file()
+                    else None
+                )
+            except OSError:
+                spec_digest = None
 
             index.insert_or_replace(
                 run_id=run_dir.name,
                 status=status,  # type: ignore[arg-type]
                 started_at=started_at,
                 finished_at=finished_at,
+                spec_digest=spec_digest,
                 created_by=manifest.get("created_by"),
             )
             count += 1

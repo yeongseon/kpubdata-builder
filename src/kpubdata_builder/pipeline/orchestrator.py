@@ -32,7 +32,7 @@ from ..manifest import (
     compute_inputs_fingerprint,
     manifest_writer,
 )
-from ..spec import BuildSpec, ExportTarget, SourceRef
+from ..spec import BuildSpec, ExportTarget, SourceRef, write_buildspec_snapshot
 from ..spec.validator import validate_spec
 from ..stages.bronze.build import SourceClient, build_bronze_artifact
 from ..stages.bronze.models import BronzeArtifact, utc_now
@@ -61,6 +61,18 @@ def _dataset_card_license(spec: BuildSpec) -> str:
         return spec.license
     legacy_license = spec.metadata.get("license")
     return legacy_license if isinstance(legacy_license, str) else ""
+
+
+def _dataset_card_version(spec: BuildSpec) -> str:
+    """metadata.version이 문자열일 때만 사용한다.
+
+    metadata가 ``_parse_json_mapping``으로 임의 JSON 값을 허용하면서, null/숫자/list/dict
+    값을 그대로 ``str()``에 넘기면 ``"None"``·``"{...}"`` 같은 문자열이 dataset card에
+    그대로 노출된다. license와 동일하게 문자열이 아니면 빈 값으로 취급해
+    ``card.version or "unversioned"`` fallback이 정상 동작하게 한다.
+    """
+    version = spec.metadata.get("version")
+    return version if isinstance(version, str) else ""
 
 
 @dataclass(frozen=True)
@@ -95,6 +107,7 @@ class BuildResult:
     status: str
     outcomes: tuple[SourceBuildOutcome, ...]
     manifest_path: Path
+    spec_digest: str
 
 
 def _fetch_source_key(source: SourceRef) -> str:
@@ -308,7 +321,7 @@ def _run_source_pipeline(
             ),
             sample_rows=silver.preview.rows,
             license=_dataset_card_license(context.spec),
-            version=str(context.spec.metadata.get("version", "")),
+            version=_dataset_card_version(context.spec),
         )
         card_path = gold_paths.gold_dir / "README.md"
         _ = card_path.write_text(render_dataset_card(card), encoding="utf-8")
@@ -395,6 +408,11 @@ def run_build(
     # spec이 단계 깊숙이 들어가 cryptic 에러로 터지므로, 단계 진입 전에 막는다 (#212).
     validate_spec(spec)
     context = BuildContext.create(spec, output_root=output_root, run_id=run_id)
+    # 검증된 실제 실행 입력을 pipeline보다 먼저 고정한다. 이후 source 단계가 실패해도
+    # run 감사 정보는 남고, validation 실패 입력은 snapshot으로 기록되지 않는다.
+    _, spec_digest = write_buildspec_snapshot(
+        spec, output_root=context.output_root, run_id=context.run_id
+    )
 
     def _worker(source: SourceRef) -> _SourcePipelineResult:
         return _run_source_pipeline(source, client=client, context=context)
@@ -452,4 +470,5 @@ def run_build(
         status=status,
         outcomes=outcomes,
         manifest_path=manifest_path,
+        spec_digest=spec_digest,
     )
