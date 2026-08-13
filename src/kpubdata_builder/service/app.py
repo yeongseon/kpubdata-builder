@@ -36,6 +36,7 @@ from ..stages.bronze.build import SourceClient
 from ..store import BuildIndex
 from ..tabular import DEFAULT_PREVIEW_LIMIT
 from .auth import AuthError, Principal, authenticate
+from .jobs import AsyncBuildExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -167,10 +168,12 @@ class BuilderService:
         *,
         output_root: Path,
         client_factory: Callable[[], SourceClient],
+        async_max_workers: int = 10,
     ) -> None:
         self._output_root = output_root
         self._client_factory = client_factory
         self._build_index = BuildIndex(output_root)  # #309, ADR 0003
+        self._async_builds = AsyncBuildExecutor(max_workers=async_max_workers)
 
     def version(self) -> ServiceResponse:
         """Builder API 계약 버전을 반환한다 (#209).
@@ -352,6 +355,34 @@ class BuilderService:
             pass
 
         return ServiceResponse(status_code, body)
+
+    def submit_build(
+        self, spec_yaml: str, *, run_id: str, created_by: str | None = None
+    ) -> ServiceResponse:
+        """비동기 build job을 큐에 넣고 초기 상태를 반환한다 (#482)."""
+        snapshot = self._async_builds.submit(
+            spec_yaml=spec_yaml,
+            run_id=run_id,
+            created_by=created_by,
+            runner=self._run_build_job,
+        )
+        return ServiceResponse(202, snapshot.to_body())
+
+    def build_status(self, run_id: str) -> ServiceResponse:
+        """active/terminal 비동기 build job 상태를 반환한다 (#482)."""
+        try:
+            validate_path_segment(run_id, field_name="run_id")
+        except ValueError as exc:
+            return ServiceResponse(400, {"error": str(exc)})
+        snapshot = self._async_builds.get(run_id)
+        if snapshot is None:
+            return ServiceResponse(404, {"error": f"build job not found: {run_id}"})
+        return ServiceResponse(200, snapshot.to_body())
+
+    def _run_build_job(
+        self, spec_yaml: str, run_id: str, created_by: str | None
+    ) -> ServiceResponse:
+        return self.build(spec_yaml, run_id=run_id, created_by=created_by)
 
     def artifacts(self, run_id: str) -> ServiceResponse:
         """실행 워크스페이스의 산출물 파일 목록을 반환한다."""
@@ -612,6 +643,25 @@ def dispatch(
                 return ServiceResponse(400, {"error": str(exc)})
             run_id = run_id_value
         return service.build(spec, run_id=run_id, created_by=principal.label)
+
+    if method == "POST" and path == "/builds":
+        spec = _spec_from_body(body)
+        if isinstance(spec, ServiceResponse):
+            return spec
+        if body is None or "run_id" not in body:
+            return ServiceResponse(400, {"error": "'run_id' is required"})
+        run_id_value = body["run_id"]
+        if not isinstance(run_id_value, str) or not run_id_value.strip():
+            return ServiceResponse(400, {"error": "'run_id' must be a non-empty string"})
+        try:
+            validate_path_segment(run_id_value, field_name="run_id")
+        except ValueError as exc:
+            return ServiceResponse(400, {"error": str(exc)})
+        return service.submit_build(spec, run_id=run_id_value, created_by=principal.label)
+
+    if method == "GET" and path.startswith("/builds/") and "/" not in path[len("/builds/") :]:
+        run_id = path[len("/builds/") :]
+        return service.build_status(run_id)
 
     if method == "GET" and path.startswith("/builds/") and path.endswith("/manifest"):
         rest = path[len("/builds/") :]
