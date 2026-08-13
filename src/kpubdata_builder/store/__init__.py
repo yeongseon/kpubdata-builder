@@ -6,6 +6,6 @@ SQLite 기반 빌드 인덱스를 제공하여 파일시스템 스캔 비용을 
 
 from __future__ import annotations
 
-from .build_index import SCHEMA_VERSION, BuildIndex, rebuild_index
+from .build_index import SCHEMA_VERSION, BuildEntry, BuildIndex, rebuild_index
 
-__all__ = ["BuildIndex", "SCHEMA_VERSION", "rebuild_index"]
+__all__ = ["BuildEntry", "BuildIndex", "SCHEMA_VERSION", "rebuild_index"]

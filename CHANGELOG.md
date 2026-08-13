@@ -3,6 +3,7 @@
 ## v0.4 (Unreleased)
 
 ### 추가됨
+- **Built Dataset Catalog·Detail·Stage Summary API (#488)**: `GET /datasets`, `GET /datasets/{dataset_id}`, `GET /datasets/{dataset_id}/runs`로 `BuildSpec.dataset_id` 단위 grouping/latest run/run history 조회. `GET /builds/{run_id}/stages`, `GET /builds/{run_id}/stages/{stage}`로 source별 Bronze/Silver/Gold 상태와 안전한 summary/preview 조회
 - **인증 시스템 (B2-B5)**: Principal 추상화(#384), Google OIDC Bearer 검증(#385), 허용 목록 게이트(#386), API 계약 bearerAuth(#387)
 - **인가 (C1/C2)**: manifest·BuildIndex에 principal 기록(#388), ENFORCE_OWNERSHIP 플래그(#389)
 - **BuildSpec 어시스턴트 (BL1-BL4)**: ADR 0011(#415), GET /catalog(#416), /validate problems 구조화(#417), API 1.2.0(#418)
@@ -22,7 +23,9 @@
 
 ### 변경됨
 - API 계약 1.0.0 → 1.2.0 (/healthz + bearerAuth + /catalog + StructuredProblem)
+- API 계약 1.4.0 → 1.5.0 (Dataset Catalog·Detail·Stage Summary API 추가, additive, #488)
 - BuildIndex 스키마 v2 → v3 (created_by)
+- BuildIndex 스키마 v3 → v4 (dataset_id 파생 검색 컬럼, #488)
 - BuildManifest에 created_by 필드
 - ValidationError에 structured_problems 추가
 - README 인증 서술 fail-closed 정책에 맞게 수정 (#423)

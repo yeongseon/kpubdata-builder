@@ -166,6 +166,102 @@ class TestBuildIndex:
         assert cur.fetchone()[0] == SCHEMA_VERSION
 
 
+class TestBuildIndexDatasetId:
+    """dataset_id 파생 컬럼과 조회 (#488)."""
+
+    def test_insert_and_retrieve_dataset_id(self, tmp_path: Path) -> None:
+        index = BuildIndex(tmp_path)
+        index.insert_or_replace(
+            run_id="run1",
+            status="ok",
+            started_at="2025-01-01T10:00:00Z",
+            finished_at="2025-01-01T10:05:00Z",
+            dataset_id="dataset.sample",
+        )
+        entry = index.get("run1")
+        assert entry is not None
+        assert entry.dataset_id == "dataset.sample"
+
+    def test_dataset_id_defaults_to_none(self, tmp_path: Path) -> None:
+        index = BuildIndex(tmp_path)
+        index.insert_or_replace(
+            run_id="legacy",
+            status="ok",
+            started_at="2025-01-01T10:00:00Z",
+            finished_at="2025-01-01T10:05:00Z",
+        )
+        entry = index.get("legacy")
+        assert entry is not None
+        assert entry.dataset_id is None
+
+    def test_list_by_dataset_filters_and_orders(self, tmp_path: Path) -> None:
+        index = BuildIndex(tmp_path)
+        index.insert_or_replace(
+            run_id="a-old",
+            status="ok",
+            started_at="2025-01-01T09:00:00Z",
+            finished_at="2025-01-01T09:05:00Z",
+            dataset_id="dataset.a",
+        )
+        index.insert_or_replace(
+            run_id="a-new",
+            status="ok",
+            started_at="2025-01-01T11:00:00Z",
+            finished_at="2025-01-01T11:05:00Z",
+            dataset_id="dataset.a",
+        )
+        index.insert_or_replace(
+            run_id="b-only",
+            status="ok",
+            started_at="2025-01-01T10:00:00Z",
+            finished_at="2025-01-01T10:05:00Z",
+            dataset_id="dataset.b",
+        )
+
+        results = index.list_by_dataset("dataset.a")
+        assert [r.run_id for r in results] == ["a-new", "a-old"]
+
+        assert index.list_by_dataset("dataset.unknown") == []
+
+    def test_unbounded_dataset_query_returns_more_than_500_rows(self, tmp_path: Path) -> None:
+        index = BuildIndex(tmp_path)
+        for number in range(505):
+            index.insert_or_replace(
+                run_id=f"run-{number:03d}",
+                status="ok",
+                started_at="2025-01-01T00:00:00Z",
+                finished_at=f"2025-01-01T00:{number // 60:02d}:{number % 60:02d}Z",
+                dataset_id="dataset.bulk",
+            )
+
+        assert len(index.list_by_dataset("dataset.bulk", limit=None)) == 505
+        assert len(index.list_builds(limit=None)) == 505
+
+    def test_list_by_dataset_respects_limit(self, tmp_path: Path) -> None:
+        index = BuildIndex(tmp_path)
+        for i in range(5):
+            index.insert_or_replace(
+                run_id=f"run{i}",
+                status="ok",
+                started_at="2025-01-01T10:00:00Z",
+                finished_at=f"2025-01-01T1{i}:00:00Z",
+                dataset_id="dataset.many",
+            )
+        assert len(index.list_by_dataset("dataset.many", limit=2)) == 2
+
+    def test_list_builds_includes_dataset_id(self, tmp_path: Path) -> None:
+        index = BuildIndex(tmp_path)
+        index.insert_or_replace(
+            run_id="run1",
+            status="ok",
+            started_at="2025-01-01T10:00:00Z",
+            finished_at="2025-01-01T10:05:00Z",
+            dataset_id="dataset.sample",
+        )
+        builds = index.list_builds()
+        assert builds[0].dataset_id == "dataset.sample"
+
+
 class TestRebuildIndex:
     """rebuild_index 함수 테스트."""
 
@@ -243,6 +339,43 @@ class TestRebuildIndex:
         entry = BuildIndex(tmp_path).get("legacy")
         assert entry is not None
         assert entry.spec_digest is None
+
+    def test_rebuild_restores_dataset_id_from_snapshot(self, tmp_path: Path) -> None:
+        """rebuild_index가 buildspec.yaml에서 dataset_id를 안전하게 복원한다 (#488)."""
+        run_dir = tmp_path / "run1"
+        run_dir.mkdir()
+        (run_dir / "manifest.json").write_text(
+            json.dumps({"started_at": "a", "finished_at": "b"}), encoding="utf-8"
+        )
+        (run_dir / "buildspec.yaml").write_bytes(b"dataset_id: dataset.restored\ntitle: t\n")
+
+        assert rebuild_index(tmp_path) == 1
+        entry = BuildIndex(tmp_path).get("run1")
+        assert entry is not None
+        assert entry.dataset_id == "dataset.restored"
+
+    def test_rebuild_leaves_dataset_id_null_for_legacy_run(self, tmp_path: Path) -> None:
+        """snapshot이 없는 legacy run의 dataset_id는 추측하지 않는다 (#488)."""
+        run_dir = tmp_path / "legacy"
+        run_dir.mkdir()
+        (run_dir / "manifest.json").write_text("{}", encoding="utf-8")
+
+        assert rebuild_index(tmp_path) == 1
+        entry = BuildIndex(tmp_path).get("legacy")
+        assert entry is not None
+        assert entry.dataset_id is None
+
+    def test_rebuild_leaves_dataset_id_null_for_corrupt_snapshot(self, tmp_path: Path) -> None:
+        """snapshot이 있어도 dataset_id를 읽거나 파싱할 수 없으면 None으로 남긴다 (#488)."""
+        run_dir = tmp_path / "corrupt"
+        run_dir.mkdir()
+        (run_dir / "manifest.json").write_text("{}", encoding="utf-8")
+        (run_dir / "buildspec.yaml").write_bytes(b"\xff\xfe\x00")
+
+        assert rebuild_index(tmp_path) == 1
+        entry = BuildIndex(tmp_path).get("corrupt")
+        assert entry is not None
+        assert entry.dataset_id is None
 
     def test_rebuild_isolates_empty_corrupt_and_unreadable_snapshots(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

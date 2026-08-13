@@ -46,6 +46,11 @@ _DISPATCH_ROUTES: dict[tuple[str, str], str] = {
     ("/builds/{run_id}/manifest", "GET"): "getBuildManifest",
     ("/builds/{run_id}/spec", "GET"): "getBuildSpecSnapshot",
     ("/artifacts/{run_id}", "GET"): "listBuildArtifacts",
+    ("/datasets", "GET"): "listDatasets",
+    ("/datasets/{dataset_id}", "GET"): "getDataset",
+    ("/datasets/{dataset_id}/runs", "GET"): "listDatasetRuns",
+    ("/builds/{run_id}/stages", "GET"): "listBuildStages",
+    ("/builds/{run_id}/stages/{stage}", "GET"): "getBuildStageDetail",
 }
 
 # (path, method) 형태의 계약 필수 오퍼레이션. BuilderService.dispatch가 실제로
@@ -61,6 +66,11 @@ _REQUIRED_OPERATIONS = [
     ("/builds/{run_id}/spec", "get"),
     ("/artifacts/{run_id}", "get"),
     ("/builds", "get"),
+    ("/datasets", "get"),
+    ("/datasets/{dataset_id}", "get"),
+    ("/datasets/{dataset_id}/runs", "get"),
+    ("/builds/{run_id}/stages", "get"),
+    ("/builds/{run_id}/stages/{stage}", "get"),
 ]
 
 
@@ -250,6 +260,11 @@ _IMPLEMENTED_OPERATIONS = {
     "getBuildSpecSnapshot",
     "listBuildArtifacts",
     "listBuilds",
+    "listDatasets",
+    "getDataset",
+    "listDatasetRuns",
+    "listBuildStages",
+    "getBuildStageDetail",
 }
 
 
@@ -308,6 +323,30 @@ def test_referenced_schemas_resolve() -> None:
         for part in ref.lstrip("#/").split("/"):
             assert part in target, f"unresolved $ref: {ref}"
             target = target[part]
+
+
+def test_stage_detail_contract_has_explicit_wire_schemas() -> None:
+    """stage별 핵심 wire field가 additionalProperties 뒤에 숨지 않는다 (#488)."""
+    schemas = _load_contract()["components"]["schemas"]
+    stage_detail = schemas["StageDetailResponse"]
+    refs = {branch["$ref"].rsplit("/", 1)[-1] for branch in stage_detail["oneOf"]}
+    assert refs == {
+        "BronzeStageDetailResponse",
+        "SilverStageDetailResponse",
+        "GoldStageDetailResponse",
+    }
+    assert schemas["BronzeStageDetailResponse"]["additionalProperties"] is False
+    assert schemas["SilverStageDetailResponse"]["additionalProperties"] is False
+    assert schemas["GoldStageDetailResponse"]["additionalProperties"] is False
+    assert {"provider", "dataset", "fetched_at", "record_count"} <= set(
+        schemas["BronzeStageDetailResponse"]["properties"]
+    )
+    assert {"row_count", "schema", "statistics", "validation", "sample"} <= set(
+        schemas["SilverStageDetailResponse"]["properties"]
+    )
+    assert {"row_count", "columns", "splits", "exports", "sample_available"} <= set(
+        schemas["GoldStageDetailResponse"]["properties"]
+    )
 
 
 # =============================================================================
@@ -429,6 +468,11 @@ _OPERATION_STATUS_CODES: dict[str, set[int]] = {
     "getBuildSpecSnapshot": {200, 400, 403, 404, 500},
     "listBuilds": {200, 400},
     "listBuildArtifacts": {200, 400, 404},
+    "listDatasets": {200, 400},
+    "getDataset": {200, 400, 404},
+    "listDatasetRuns": {200, 400, 404},
+    "listBuildStages": {200, 400, 403, 404},
+    "getBuildStageDetail": {200, 400, 403, 404},
 }
 
 
@@ -773,3 +817,99 @@ class TestResponseConformance:
         resp = dispatch(_conform_service(tmp_path), "GET", "/builds", None, query="limit=0")
         assert resp.status_code == 400
         _assert_conforms(resp, "/builds", "GET")
+
+    # -------------------------------------------------------------------
+    # Dataset/Stage API conformance (#488)
+    # -------------------------------------------------------------------
+
+    def test_datasets_200(self, tmp_path: Path) -> None:
+        service = _conform_service(tmp_path)
+        dispatch(service, "POST", "/build", {"spec": _CONFORM_SPEC_YAML, "run_id": "conform-ds"})
+        resp = dispatch(service, "GET", "/datasets", None)
+        assert resp.status_code == 200
+        _assert_conforms(resp, "/datasets", "GET")
+
+    def test_datasets_400_bad_limit(self, tmp_path: Path) -> None:
+        resp = dispatch(_conform_service(tmp_path), "GET", "/datasets", None, query="limit=0")
+        assert resp.status_code == 400
+        _assert_conforms(resp, "/datasets", "GET")
+
+    def test_dataset_detail_200(self, tmp_path: Path) -> None:
+        service = _conform_service(tmp_path)
+        dispatch(
+            service, "POST", "/build", {"spec": _CONFORM_SPEC_YAML, "run_id": "conform-ds-detail"}
+        )
+        resp = dispatch(service, "GET", "/datasets/dataset.conform", None)
+        assert resp.status_code == 200
+        _assert_conforms(resp, "/datasets/{dataset_id}", "GET")
+
+    def test_dataset_detail_404_missing(self, tmp_path: Path) -> None:
+        resp = dispatch(_conform_service(tmp_path), "GET", "/datasets/nope", None)
+        assert resp.status_code == 404
+        _assert_conforms(resp, "/datasets/{dataset_id}", "GET")
+
+    def test_dataset_runs_200(self, tmp_path: Path) -> None:
+        service = _conform_service(tmp_path)
+        dispatch(
+            service, "POST", "/build", {"spec": _CONFORM_SPEC_YAML, "run_id": "conform-ds-runs"}
+        )
+        resp = dispatch(service, "GET", "/datasets/dataset.conform/runs", None)
+        assert resp.status_code == 200
+        _assert_conforms(resp, "/datasets/{dataset_id}/runs", "GET")
+
+    def test_dataset_runs_404_missing(self, tmp_path: Path) -> None:
+        resp = dispatch(_conform_service(tmp_path), "GET", "/datasets/nope/runs", None)
+        assert resp.status_code == 404
+        _assert_conforms(resp, "/datasets/{dataset_id}/runs", "GET")
+
+    def test_build_stages_200(self, tmp_path: Path) -> None:
+        service = _conform_service(tmp_path)
+        dispatch(service, "POST", "/build", {"spec": _CONFORM_SPEC_YAML, "run_id": "conform-stg"})
+        resp = dispatch(service, "GET", "/builds/conform-stg/stages", None)
+        assert resp.status_code == 200
+        _assert_conforms(resp, "/builds/{run_id}/stages", "GET")
+
+    def test_build_stages_404_missing(self, tmp_path: Path) -> None:
+        resp = dispatch(_conform_service(tmp_path), "GET", "/builds/nope/stages", None)
+        assert resp.status_code == 404
+        _assert_conforms(resp, "/builds/{run_id}/stages", "GET")
+
+    @pytest.mark.parametrize("stage", ["bronze", "silver", "gold"])
+    def test_build_stage_detail_200(self, tmp_path: Path, stage: str) -> None:
+        service = _conform_service(tmp_path)
+        dispatch(
+            service, "POST", "/build", {"spec": _CONFORM_SPEC_YAML, "run_id": "conform-stg-detail"}
+        )
+        resp = dispatch(
+            service,
+            "GET",
+            f"/builds/conform-stg-detail/stages/{stage}",
+            None,
+            query="source=datago.air_quality",
+        )
+        assert resp.status_code == 200
+        _assert_conforms(resp, "/builds/{run_id}/stages/{stage}", "GET")
+
+    def test_build_stage_detail_400_missing_source(self, tmp_path: Path) -> None:
+        service = _conform_service(tmp_path)
+        dispatch(
+            service, "POST", "/build", {"spec": _CONFORM_SPEC_YAML, "run_id": "conform-stg-400"}
+        )
+        resp = dispatch(service, "GET", "/builds/conform-stg-400/stages/bronze", None)
+        assert resp.status_code == 400
+        _assert_conforms(resp, "/builds/{run_id}/stages/{stage}", "GET")
+
+    def test_build_stage_detail_404_unknown_source(self, tmp_path: Path) -> None:
+        service = _conform_service(tmp_path)
+        dispatch(
+            service, "POST", "/build", {"spec": _CONFORM_SPEC_YAML, "run_id": "conform-stg-404"}
+        )
+        resp = dispatch(
+            service,
+            "GET",
+            "/builds/conform-stg-404/stages/bronze",
+            None,
+            query="source=nope",
+        )
+        assert resp.status_code == 404
+        _assert_conforms(resp, "/builds/{run_id}/stages/{stage}", "GET")

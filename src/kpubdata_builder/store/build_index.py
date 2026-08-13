@@ -21,7 +21,9 @@ else:
 
 # 스키마 버전: 인덱스 구조 변경 시 증가
 # 스키마 버전 2: status 어휘를 ok/failed/cancelled로 확장 (#334 비동기 job 모델 대비)
-SCHEMA_VERSION = 3
+# 스키마 버전 4: dataset_id 컬럼 추가 (#488). 정본은 BuildSpec snapshot(#487)이며,
+# 이 컬럼은 dataset→run 조회 성능을 위한 파생 검색 값일 뿐이다.
+SCHEMA_VERSION = 4
 
 # 빌드 인덱스 status 어휘. ADR 0003 파생 캐시. manifest.json이 정본.
 BuildStatus = Literal["ok", "failed", "cancelled"]
@@ -41,6 +43,7 @@ class BuildEntry:
     spec_digest: str | None
     error: str | None
     created_by: str | None = None
+    dataset_id: str | None = None
 
 
 class BuildIndex:
@@ -109,13 +112,19 @@ class BuildIndex:
                         finished_at TEXT,
                         spec_digest TEXT,
                         error TEXT,
-                        created_by TEXT
+                        created_by TEXT,
+                        dataset_id TEXT
                     )
                     """
                 )
                 # finished_at 인덱스 (최신 빌드 우선 조회)
                 self._conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_builds_finished_at ON builds(finished_at DESC)"
+                )
+                # dataset_id 인덱스 (#488): dataset→run 조회. snapshot 없는 legacy run은
+                # dataset_id가 NULL이므로 자연히 dataset grouping에서 제외된다.
+                self._conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_builds_dataset_id ON builds(dataset_id)"
                 )
                 # 스키마 버전 기록
                 self._conn.execute(
@@ -144,6 +153,7 @@ class BuildIndex:
         spec_digest: str | None = None,
         error: str | None = None,
         created_by: str | None = None,
+        dataset_id: str | None = None,
     ) -> None:
         """빌드 엔트리를 삽입 또는 대체한다.
 
@@ -155,39 +165,52 @@ class BuildIndex:
             spec_digest: spec 해시 (선택)
             error: 오류 메시지 (실패 시)
             created_by: 빌드를 요청한 주체 라벨 (선택, #388)
+            dataset_id: BuildSpec.dataset_id (선택, #488). snapshot이 없는 legacy
+                run은 None — dataset_id를 추측해 채우지 않는다.
         """
         try:
             with self._transaction():
                 self._conn.execute(
                     """
                     INSERT OR REPLACE INTO builds
-                    (run_id, status, started_at, finished_at, spec_digest, error, created_by)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    (run_id, status, started_at, finished_at, spec_digest, error, created_by,
+                     dataset_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (run_id, status, started_at, finished_at, spec_digest, error, created_by),
+                    (
+                        run_id,
+                        status,
+                        started_at,
+                        finished_at,
+                        spec_digest,
+                        error,
+                        created_by,
+                        dataset_id,
+                    ),
                 )
         except Exception:
             # ADR 0003: 인덱스 쓰기 실패가 빌드 실패의 원인이 되어서는 안 됨
             pass
 
-    def list_builds(self, limit: int = 50) -> list[BuildEntry]:
+    def list_builds(self, limit: int | None = 50) -> list[BuildEntry]:
         """빌드 목록을 최신 완료 시각 기준 내림차순으로 반환한다.
 
         Args:
-            limit: 반환할 최대 빌드 수
+            limit: 반환할 최대 빌드 수. None이면 모든 빌드를 반환한다.
 
         Returns:
             BuildEntry 목록 (finished_at이 최신인 순)
         """
-        cur = self._conn.execute(
-            """
-            SELECT run_id, status, started_at, finished_at, spec_digest, error, created_by
+        sql = """
+            SELECT run_id, status, started_at, finished_at, spec_digest, error, created_by,
+                   dataset_id
             FROM builds
             ORDER BY finished_at DESC
-            LIMIT ?
-            """,
-            (limit,),
-        )
+        """
+        if limit is None:
+            cur = self._conn.execute(sql)
+        else:
+            cur = self._conn.execute(f"{sql} LIMIT ?", (limit,))
         return [
             BuildEntry(
                 run_id=row[0],
@@ -197,6 +220,43 @@ class BuildIndex:
                 spec_digest=row[4],
                 error=row[5],
                 created_by=row[6],
+                dataset_id=row[7],
+            )
+            for row in cur
+        ]
+
+    def list_by_dataset(self, dataset_id: str, limit: int | None = None) -> list[BuildEntry]:
+        """특정 dataset_id에 속한 빌드 목록을 최신 완료 시각 기준 내림차순 반환한다 (#488).
+
+        Args:
+            dataset_id: BuildSpec.dataset_id 값 (정확히 일치하는 것만).
+            limit: 반환할 최대 빌드 수. None이면 해당 dataset의 모든 빌드를 반환한다.
+
+        Returns:
+            BuildEntry 목록 (finished_at이 최신인 순). 이 dataset_id로 인덱싱된
+            run이 없으면 빈 목록.
+        """
+        sql = """
+            SELECT run_id, status, started_at, finished_at, spec_digest, error, created_by,
+                   dataset_id
+            FROM builds
+            WHERE dataset_id = ?
+            ORDER BY finished_at DESC
+        """
+        if limit is None:
+            cur = self._conn.execute(sql, (dataset_id,))
+        else:
+            cur = self._conn.execute(f"{sql} LIMIT ?", (dataset_id, limit))
+        return [
+            BuildEntry(
+                run_id=row[0],
+                status=cast(BuildStatus, row[1]),
+                started_at=row[2],
+                finished_at=row[3],
+                spec_digest=row[4],
+                error=row[5],
+                created_by=row[6],
+                dataset_id=row[7],
             )
             for row in cur
         ]
@@ -212,7 +272,8 @@ class BuildIndex:
         """
         cur = self._conn.execute(
             """
-            SELECT run_id, status, started_at, finished_at, spec_digest, error, created_by
+            SELECT run_id, status, started_at, finished_at, spec_digest, error, created_by,
+                   dataset_id
             FROM builds
             WHERE run_id = ?
             """,
@@ -229,6 +290,7 @@ class BuildIndex:
             spec_digest=row[4],
             error=row[5],
             created_by=row[6],
+            dataset_id=row[7],
         )
 
     def delete(self, run_id: str) -> None:
@@ -271,6 +333,8 @@ def rebuild_index(output_root: Path) -> int:
     """
     import json
 
+    import yaml
+
     from ..spec.serializer import BUILDSPEC_SNAPSHOT_FILENAME, compute_spec_digest
 
     if not output_root.exists():
@@ -302,14 +366,26 @@ def rebuild_index(output_root: Path) -> int:
             started_at = manifest.get("started_at")
             finished_at = manifest.get("finished_at")
             snapshot_path = run_dir / BUILDSPEC_SNAPSHOT_FILENAME
-            try:
-                spec_digest = (
-                    compute_spec_digest(snapshot_path.read_bytes())
-                    if snapshot_path.is_file()
-                    else None
-                )
-            except OSError:
-                spec_digest = None
+            spec_digest: str | None = None
+            dataset_id: str | None = None
+            if snapshot_path.is_file():
+                try:
+                    snapshot_bytes = snapshot_path.read_bytes()
+                except OSError:
+                    snapshot_bytes = None
+                if snapshot_bytes is not None:
+                    spec_digest = compute_spec_digest(snapshot_bytes)
+                    # dataset_id는 파생 검색값일 뿐이다 (#488). snapshot YAML을
+                    # 읽거나 파싱할 수 없으면 추측하지 않고 None으로 남긴다 —
+                    # 인덱스 손상/누락이 정본(BuildSpec snapshot)을 바꾸지 않는다.
+                    try:
+                        snapshot_doc = yaml.safe_load(snapshot_bytes.decode("utf-8"))
+                    except (UnicodeDecodeError, yaml.YAMLError):
+                        snapshot_doc = None
+                    if isinstance(snapshot_doc, dict):
+                        raw_dataset_id = snapshot_doc.get("dataset_id")
+                        if isinstance(raw_dataset_id, str) and raw_dataset_id:
+                            dataset_id = raw_dataset_id
 
             index.insert_or_replace(
                 run_id=run_dir.name,
@@ -318,6 +394,7 @@ def rebuild_index(output_root: Path) -> int:
                 finished_at=finished_at,
                 spec_digest=spec_digest,
                 created_by=manifest.get("created_by"),
+                dataset_id=dataset_id,
             )
             count += 1
     finally:

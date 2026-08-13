@@ -1,14 +1,17 @@
 openapi: 3.1.0
 info:
   title: KPubData Builder Service API
-  version: "1.4.0"
+  version: "1.5.0"
   description: >-
     Builder 중심 서비스 계약. BuildSpec 검증, preview, build 실행, artifact 조회,
     계약 버전 조회를 제공한다. CLI와 HTTP service mode(#36)가 동일한 도메인 계약을
     공유한다. 본 문서는 BuilderService(service/app.py)의 dispatch 라우팅과 실제
     wire 형태를 기계 판독용(OpenAPI 3.1) 단일 소스로 고정하며, Studio 같은 소비자가
     타입 클라이언트를 생성하는 기준이 된다. v0.4에서는 동기식 build만 유지하며
-    비동기/publish 엔드포인트는 제외된다(ADR 0002, #226).
+    비동기/publish 엔드포인트는 제외된다(ADR 0002, #226). v1.5.0은 built dataset
+    단위 조회(dataset_id로 여러 run을 grouping)와 Bronze/Silver/Gold stage
+    summary/preview API를 추가한다(#488, additive — 기존 엔드포인트는 변경되지
+    않는다).
 servers:
   - url: http://localhost:8000
     description: 로컬 builder 개발 서버
@@ -282,6 +285,194 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /datasets:
+    get:
+      operationId: listDatasets
+      summary: >-
+        Built dataset 목록 조회 (dataset_id별 grouping, #488). 동일 dataset_id의
+        여러 run을 접근 가능한 latest run 기준으로 하나의 dataset으로 묶는다.
+        buildspec.yaml snapshot이 없는 legacy run은 grouping 대상에서 제외된다.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: "반환할 최대 dataset 수 (기본값: 50)"
+          schema:
+            type: integer
+            minimum: 1
+            default: 50
+      responses:
+        "200":
+          description: built dataset 목록 (latest run 기준 요약)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DatasetsResponse"
+        "400":
+          description: 잘못된 limit 파라미터
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /datasets/{dataset_id}:
+    get:
+      operationId: getDataset
+      summary: 단일 built dataset의 canonical 요약 조회 (latest accessible run 기준, #488)
+      parameters:
+        - $ref: "#/components/parameters/DatasetId"
+      responses:
+        "200":
+          description: dataset 요약 (title/sources/latest run/row_counts/stage 상태 등)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DatasetDetailResponse"
+        "400":
+          description: dataset_id가 비어 있음
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: >-
+            접근 가능한 run이 없는 dataset_id. dataset_id가 실제로 존재하지 않는
+            경우와 타 사용자 소유 run만 있는 경우를 구분해 노출하지 않는다.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /datasets/{dataset_id}/runs:
+    get:
+      operationId: listDatasetRuns
+      summary: dataset_id의 접근 가능한 run history 조회 (최신순, #488)
+      parameters:
+        - $ref: "#/components/parameters/DatasetId"
+        - name: limit
+          in: query
+          required: false
+          description: "반환할 최대 run 수 (기본값: 50)"
+          schema:
+            type: integer
+            minimum: 1
+            default: 50
+      responses:
+        "200":
+          description: dataset의 run history (newest first, 타 사용자 run 제외)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DatasetRunsResponse"
+        "400":
+          description: dataset_id가 비어 있거나 limit이 잘못됨
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: 접근 가능한 run이 없는 dataset_id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /builds/{run_id}/stages:
+    get:
+      operationId: listBuildStages
+      summary: run에 알려진 모든 source의 Bronze/Silver/Gold 상태 조회 (#488)
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: source별 Bronze/Silver/Gold 상태 목록
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunStagesResponse"
+        "400":
+          description: 경로 안전하지 않은 run_id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: 해당 run의 소유자가 아님
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: 해당 run을 찾을 수 없음
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /builds/{run_id}/stages/{stage}:
+    get:
+      operationId: getBuildStageDetail
+      summary: >-
+        단일 source의 단일 stage(bronze/silver/gold)에 대한 안전한 summary/preview
+        조회 (#488). raw fetch_params, export options, credential, 절대 경로는
+        어디에도 담기지 않는다. Silver sample은 build 시점에 이미 persist된 상한
+        (기본 5행) 안에서만 반환되며 parquet 전체를 읽지 않는다.
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+        - $ref: "#/components/parameters/Stage"
+        - name: source
+          in: query
+          required: true
+          description: 조회할 source_key (run에 알려진 source여야 함)
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          description: "Silver sample 행 수 상한 (기본값: 5, 다른 stage에서는 무시됨)"
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 5
+      responses:
+        "200":
+          description: stage summary/preview
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StageDetailResponse"
+        "400":
+          description: >-
+            경로 안전하지 않은 run_id/source, 잘못된 stage 이름, source 누락,
+            또는 잘못된 limit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: 해당 run의 소유자가 아님
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: 해당 run이 없거나, source가 이 run에 알려지지 않음
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
 components:
   securitySchemes:
     ApiKeyAuth:
@@ -315,6 +506,25 @@ components:
       description: build 실행 식별자(경로 안전한 단일 세그먼트)
       schema:
         type: string
+
+    DatasetId:
+      name: dataset_id
+      in: path
+      required: true
+      description: >-
+        BuildSpec.dataset_id 값. slash/space 등 경로에 그대로 쓸 수 없는 문자를
+        포함할 수 있으므로 클라이언트는 percent-encoding해야 한다(#488).
+      schema:
+        type: string
+
+    Stage:
+      name: stage
+      in: path
+      required: true
+      description: 조회할 medallion stage
+      schema:
+        type: string
+        enum: [bronze, silver, gold]
 
   schemas:
     Error:
@@ -828,3 +1038,395 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/BuildSummary"
+
+    # ---------------------------------------------------------------------
+    # Dataset Catalog / Stage Summary API (#488)
+    # ---------------------------------------------------------------------
+
+    DatasetSourceRef:
+      type: object
+      description: dataset의 canonical snapshot에 선언된 소스 참조 (secret 없음)
+      required: [provider, dataset, alias]
+      properties:
+        provider:
+          type: string
+        dataset:
+          type: string
+        alias:
+          type: string
+
+    StageStatusValue:
+      type: string
+      description: >-
+        completed(완전한 산출물 존재) / failed(manifest에 실패로 기록됨) /
+        not_run(상위 단계가 끝나지 못해 시도되지 않음) / unavailable(디렉터리는
+        있지만 불완전·손상됨, legacy 형식 등)
+      enum: [completed, failed, not_run, unavailable]
+
+    DatasetStageMap:
+      type: object
+      description: source_key → {bronze, silver, gold} 상태 맵
+      additionalProperties:
+        type: object
+        required: [bronze, silver, gold]
+        properties:
+          bronze:
+            $ref: "#/components/schemas/StageStatusValue"
+          silver:
+            $ref: "#/components/schemas/StageStatusValue"
+          gold:
+            $ref: "#/components/schemas/StageStatusValue"
+
+    DatasetSummary:
+      type: object
+      description: >-
+        동일 dataset_id를 공유하는 여러 run을 접근 가능한 latest run 기준으로
+        묶은 built dataset 요약. quality는 #486의 구조화된 품질 게이트가
+        선반영되지 않았으므로 항상 null이다(N/A) — 미평가를 PASS로 표시하지 않는다.
+      required:
+        - dataset_id
+        - title
+        - sources
+        - latest_run_id
+        - status
+        - updated_at
+        - row_counts
+        - total_row_count
+        - stages
+        - quality
+      properties:
+        dataset_id:
+          type: string
+        title:
+          type: string
+        sources:
+          type: array
+          items:
+            $ref: "#/components/schemas/DatasetSourceRef"
+        latest_run_id:
+          type: string
+        status:
+          type: string
+          enum: [ok, failed, cancelled]
+        updated_at:
+          type: [string, "null"]
+          description: latest run의 finished_at(없으면 started_at)
+        row_counts:
+          type: object
+          description: >-
+            source_key별 Silver row_count. multi-source dataset을 단일 값으로
+            축약하지 않는다.
+          additionalProperties:
+            type: integer
+        total_row_count:
+          type: integer
+          description: row_counts 값의 합계
+        stages:
+          $ref: "#/components/schemas/DatasetStageMap"
+        quality:
+          type: "null"
+          description: "#486 선반영 안 함 — 구조화된 quality 결과가 없으므로 항상 null"
+
+    DatasetDetailResponse:
+      type: object
+      description: DatasetSummary와 동일한 필드에 run_count가 추가된 단일 dataset 상세 응답.
+      required:
+        - dataset_id
+        - title
+        - sources
+        - latest_run_id
+        - status
+        - updated_at
+        - row_counts
+        - total_row_count
+        - stages
+        - quality
+        - run_count
+      properties:
+        dataset_id:
+          type: string
+        title:
+          type: string
+        sources:
+          type: array
+          items:
+            $ref: "#/components/schemas/DatasetSourceRef"
+        latest_run_id:
+          type: string
+        status:
+          type: string
+          enum: [ok, failed, cancelled]
+        updated_at:
+          type: [string, "null"]
+        row_counts:
+          type: object
+          additionalProperties:
+            type: integer
+        total_row_count:
+          type: integer
+        stages:
+          $ref: "#/components/schemas/DatasetStageMap"
+        quality:
+          type: "null"
+        run_count:
+          type: integer
+          description: 이 principal에게 접근 가능한 이 dataset_id의 run 총 개수
+
+    DatasetsResponse:
+      type: object
+      required: [datasets]
+      properties:
+        datasets:
+          type: array
+          items:
+            $ref: "#/components/schemas/DatasetSummary"
+
+    DatasetRunSummary:
+      type: object
+      required: [run_id, status, started_at, finished_at, spec_digest, created_by]
+      properties:
+        run_id:
+          type: string
+        status:
+          type: string
+          enum: [ok, failed, cancelled]
+        started_at:
+          type: [string, "null"]
+        finished_at:
+          type: [string, "null"]
+        spec_digest:
+          type: [string, "null"]
+        created_by:
+          type: [string, "null"]
+
+    DatasetRunsResponse:
+      type: object
+      required: [dataset_id, runs]
+      properties:
+        dataset_id:
+          type: string
+        runs:
+          type: array
+          items:
+            $ref: "#/components/schemas/DatasetRunSummary"
+
+    StageState:
+      type: object
+      required: [status, available]
+      properties:
+        status:
+          $ref: "#/components/schemas/StageStatusValue"
+        available:
+          type: boolean
+          description: "status == completed 의 편의 boolean"
+
+    RunStageEntry:
+      type: object
+      required: [source_key, bronze, silver, gold]
+      properties:
+        source_key:
+          type: string
+        bronze:
+          $ref: "#/components/schemas/StageState"
+        silver:
+          $ref: "#/components/schemas/StageState"
+        gold:
+          $ref: "#/components/schemas/StageState"
+
+    RunStagesResponse:
+      type: object
+      required: [run_id, sources]
+      properties:
+        run_id:
+          type: string
+        sources:
+          type: array
+          items:
+            $ref: "#/components/schemas/RunStageEntry"
+
+    StageDetailResponse:
+      description: >-
+        실제 stage 값에 따라 Bronze/Silver/Gold 상세 응답 중 하나를 반환한다.
+        모든 분기는 runtime wire response의 필드를 명시하며 raw fetch_params,
+        export options, credential, 절대 filesystem 경로를 노출하지 않는다.
+      required: [run_id, stage, source_key, status, available]
+      oneOf:
+        - $ref: "#/components/schemas/BronzeStageDetailResponse"
+        - $ref: "#/components/schemas/SilverStageDetailResponse"
+        - $ref: "#/components/schemas/GoldStageDetailResponse"
+
+    BronzeStageDetailResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - run_id
+        - stage
+        - source_key
+        - status
+        - available
+        - provider
+        - dataset
+        - fetched_at
+        - record_count
+      properties:
+        run_id:
+          type: string
+        stage:
+          type: string
+          enum: [bronze]
+        source_key:
+          type: string
+        status:
+          $ref: "#/components/schemas/StageStatusValue"
+        available:
+          type: boolean
+        provider:
+          type: [string, "null"]
+        dataset:
+          type: [string, "null"]
+        fetched_at:
+          type: [string, "null"]
+        record_count:
+          type: [integer, "null"]
+
+    SilverColumnInfo:
+      type: object
+      additionalProperties: false
+      required: [name, dtype, nullable, unique_count]
+      properties:
+        name:
+          type: string
+        dtype:
+          type: string
+        nullable:
+          type: boolean
+        unique_count:
+          type: integer
+
+    SilverValidationProblem:
+      type: object
+      additionalProperties: false
+      required: [code, field, message]
+      properties:
+        code:
+          type: string
+        field:
+          type: [string, "null"]
+        message:
+          type: string
+
+    SilverValidationResult:
+      type: object
+      additionalProperties: false
+      required: [ok, problems]
+      properties:
+        ok:
+          type: boolean
+        problems:
+          type: array
+          items:
+            $ref: "#/components/schemas/SilverValidationProblem"
+
+    SilverStageDetailResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - run_id
+        - stage
+        - source_key
+        - status
+        - available
+        - row_count
+        - schema
+        - statistics
+        - validation
+        - sample
+      properties:
+        run_id:
+          type: string
+        stage:
+          type: string
+          enum: [silver]
+        source_key:
+          type: string
+        status:
+          $ref: "#/components/schemas/StageStatusValue"
+        available:
+          type: boolean
+        row_count:
+          type: [integer, "null"]
+        schema:
+          type: array
+          items:
+            $ref: "#/components/schemas/SilverColumnInfo"
+        statistics:
+          oneOf:
+            - $ref: "#/components/schemas/TableStatistics"
+            - type: "null"
+        validation:
+          oneOf:
+            - $ref: "#/components/schemas/SilverValidationResult"
+            - type: "null"
+        sample:
+          type: array
+          items:
+            type: object
+            additionalProperties:
+              $ref: "#/components/schemas/JsonValue"
+
+    GoldExportSummary:
+      type: object
+      additionalProperties: false
+      required: [kind]
+      properties:
+        kind:
+          type: string
+
+    GoldStageDetailResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - run_id
+        - stage
+        - source_key
+        - status
+        - available
+        - row_count
+        - columns
+        - splits
+        - exports
+        - sample
+        - sample_available
+      properties:
+        run_id:
+          type: string
+        stage:
+          type: string
+          enum: [gold]
+        source_key:
+          type: string
+        status:
+          $ref: "#/components/schemas/StageStatusValue"
+        available:
+          type: boolean
+        row_count:
+          type: [integer, "null"]
+        columns:
+          type: array
+          items:
+            type: string
+        splits:
+          oneOf:
+            - type: object
+              additionalProperties:
+                type: integer
+            - type: "null"
+        exports:
+          type: array
+          items:
+            $ref: "#/components/schemas/GoldExportSummary"
+        sample:
+          type: "null"
+        sample_available:
+          type: boolean
+          enum: [false]
