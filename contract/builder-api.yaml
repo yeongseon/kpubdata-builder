@@ -12,7 +12,10 @@ info:
     단위 조회(dataset_id로 여러 run을 grouping)와 Bronze/Silver/Gold stage
     summary/preview API를 추가했다(#488, additive). v1.6.0은 구조화된 Quality/Schema
     Drift 결과(PASS 포함 모든 evaluated check)와 dataset별 quality history/trend
-    API를 추가한다(#486, additive — 기존 엔드포인트는 변경되지 않는다).
+    API를 추가한다(#486, additive — 기존 엔드포인트는 변경되지 않는다). `GET
+    /builds/{run_id}/quality`는 `availability`(`available`/`partial`/`unavailable`)와
+    `evaluated_checks`를 함께 반환해 "0건 평가"와 "애초에 계산된 적 없음"을
+    구분한다(#514, additive).
 servers:
   - url: http://localhost:8000
     description: 로컬 builder 개발 서버
@@ -519,7 +522,9 @@ paths:
       summary: >-
         run의 구조화된 Quality 결과와 schema drift 조회 (#486). manifest에 저장된
         source_key별 QualityCheckResult(PASS 포함)와 SchemaDriftFinding을 그대로
-        반환한다 — 로그를 파싱하지 않고 JSON으로 조회 가능하다.
+        반환한다 — 로그를 파싱하지 않고 JSON으로 조회 가능하다. `availability`가
+        `available`/`partial`/`unavailable`를 구분하므로, 빈 `quality_results`가
+        "0건 평가"인지 "애초에 계산된 적 없음"인지 클라이언트가 판별할 수 있다(#514).
       parameters:
         - $ref: "#/components/parameters/RunId"
       responses:
@@ -1106,11 +1111,25 @@ components:
 
     BuildQualityResponse:
       type: object
-      description: run의 구조화된 quality_results/schema_drift 조회 응답 (#486).
-      required: [run_id, quality_results, schema_drift]
+      description: >-
+        run의 구조화된 quality_results/schema_drift 조회 응답 (#486). `availability`와
+        `evaluated_checks`는 빈 `quality_results`가 "0건 평가"인지 "애초에 계산된 적
+        없음"(legacy/partial run)인지 구분한다(#514).
+      required: [run_id, availability, evaluated_checks, quality_results, schema_drift]
       properties:
         run_id:
           type: string
+        availability:
+          type: string
+          enum: [available, partial, unavailable]
+          description: >-
+            available: 이 run이 시도한 모든 source의 quality 결과가 있다(0건일 수
+            있음). partial: 일부 source만 있다(예: 한 source의 Silver 실패).
+            unavailable: quality_results 필드 자체가 없다(#486 이전 legacy run).
+        evaluated_checks:
+          type: integer
+          minimum: 0
+          description: quality_results 전체에서 실제로 평가된 check(PASS/WARN/FAIL) 총합.
         quality_results:
           type: object
           description: source_key → QualityCheckResult 목록.

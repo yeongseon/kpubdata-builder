@@ -9,8 +9,12 @@ dataset→run 조회는 #488의 ``datasets`` 모듈 helper(``BuilderService._dat
 
 from __future__ import annotations
 
+from typing import Literal
+
 from ..spec import JsonValue
 from .datasets import RunRecord
+
+Availability = Literal["available", "partial", "unavailable"]
 
 
 def _validated_rows(manifest: dict[str, object]) -> int | None:
@@ -74,4 +78,39 @@ def summarize_run_quality(record: RunRecord, manifest: dict[str, object]) -> dic
     }
 
 
-__all__ = ["summarize_run_quality"]
+def quality_availability(
+    manifest: dict[str, object], known_sources: tuple[str, ...]
+) -> tuple[Availability, int]:
+    """``GET /builds/{run_id}/quality``의 availability/evaluated_checks를 판정한다 (#514).
+
+    빈 ``{"quality_results": {}, "schema_drift": {}}``만으로는 "평가했지만 0건"과
+    "애초에 계산된 적이 없음"을 구분할 수 없었다 — 이 함수가 그 구분을 담당한다.
+
+    - ``unavailable``: manifest에 quality_results 필드 자체가 없다(#486 이전
+      legacy run, 또는 quality 단계 진입 전 실패).
+    - ``partial``: quality_results는 있지만, 이 run이 실제로 시도한 source
+      (``stages.known_source_keys``) 중 일부만 커버한다 — 예: multi-source run에서
+      한 source의 Silver가 실패해 quality 평가 자체가 돌지 않은 경우.
+    - ``available``: known source를 모두 커버한다(known_sources가 비어 있는
+      legacy manifest도 포함). evaluated_checks==0일 수 있다 — 평가된 rule이
+      하나도 없는 것과 필드 자체가 없는 것을 구분하기 위해 별도로 available로
+      취급한다.
+    """
+    raw_quality = manifest.get("quality_results")
+    if not isinstance(raw_quality, dict):
+        return "unavailable", 0
+
+    evaluated_checks = 0
+    for source_results in raw_quality.values():
+        if not isinstance(source_results, list):
+            continue
+        for entry in source_results:
+            if isinstance(entry, dict) and entry.get("status") in ("pass", "warn", "fail"):
+                evaluated_checks += 1
+
+    if known_sources and not set(known_sources).issubset(raw_quality.keys()):
+        return "partial", evaluated_checks
+    return "available", evaluated_checks
+
+
+__all__ = ["Availability", "quality_availability", "summarize_run_quality"]

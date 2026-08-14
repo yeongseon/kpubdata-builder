@@ -690,21 +690,28 @@ class BuilderService:
         return ServiceResponse(200, {"dataset_id": dataset_id, "runs": runs})
 
     def get_build_quality(self, run_id: str) -> ServiceResponse:
-        """run의 구조화된 Quality 결과와 schema drift를 조회한다 (#486).
+        """run의 구조화된 Quality 결과와 schema drift를 조회한다 (#486, #514).
 
         manifest.json에 이미 저장된 source_key별 quality_results/schema_drift를
-        그대로 노출한다 — 별도 계산을 다시 하지 않는다(정본은 manifest). legacy
-        manifest(#486 이전)는 두 필드가 아예 없으므로 빈 매핑으로 표현한다.
+        그대로 노출한다 — 별도 계산을 다시 하지 않는다(정본은 manifest).
+        `availability`/`evaluated_checks`는 빈 매핑이 "평가했지만 0건"인지
+        "애초에 계산된 적이 없음"(legacy/partial run)인지 구분한다(#514).
         """
         manifest = datasets_service.read_manifest(self._output_root, run_id)
         if manifest is None:
             return ServiceResponse(404, {"error": f"manifest not found: {run_id}"})
+        known_sources = stages_service.known_source_keys(manifest)
+        availability, evaluated_checks = quality_service.quality_availability(
+            manifest, known_sources
+        )
         quality_results = manifest.get("quality_results")
         schema_drift = manifest.get("schema_drift")
         return ServiceResponse(
             200,
             {
                 "run_id": run_id,
+                "availability": availability,
+                "evaluated_checks": evaluated_checks,
                 "quality_results": cast(
                     JsonValue, quality_results if isinstance(quality_results, dict) else {}
                 ),

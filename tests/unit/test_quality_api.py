@@ -47,6 +47,7 @@ def _write_fixture_run(
     finished_at: str = "2025-01-01T00:05:00+00:00",
     created_by: str | None = None,
     include_quality_key: bool = True,
+    inputs: tuple[str, ...] | None = None,
 ) -> None:
     """실제 파이프라인 없이 canonical snapshot + manifest만 기록하는 결정적 fixture.
 
@@ -66,6 +67,8 @@ def _write_fixture_run(
         "row_counts": row_counts or {},
         "created_by": created_by,
     }
+    if inputs is not None:
+        manifest["inputs"] = list(inputs)
     if include_quality_key:
         manifest["quality_results"] = quality_results or {}
     (run_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
@@ -378,6 +381,8 @@ class TestBuildQualityDetail:
 
         assert resp.status_code == 200
         assert resp.body["run_id"] == "r1"
+        assert resp.body["availability"] == "available"
+        assert resp.body["evaluated_checks"] == 1
         quality_results = cast(dict[str, object], resp.body["quality_results"])
         assert quality_results["air"][0]["status"] == "pass"  # type: ignore[index]
         schema_drift = cast(dict[str, object], resp.body["schema_drift"])
@@ -410,6 +415,8 @@ class TestBuildQualityDetail:
         resp = dispatch(_service(tmp_path), "GET", "/builds/r1/quality", None)
 
         assert resp.status_code == 200
+        assert resp.body["availability"] == "unavailable"
+        assert resp.body["evaluated_checks"] == 0
         assert resp.body["quality_results"] == {}
         assert resp.body["schema_drift"] == {}
 
@@ -436,3 +443,77 @@ class TestBuildQualityDetail:
         )
         resp = dispatch(service, "GET", "/builds/r-owned/quality", None)
         assert resp.status_code == 403
+
+
+class TestBuildQualityAvailability:
+    """``availability``/``evaluated_checks``가 4가지 상태를 구분하는지 검증한다 (#514).
+
+    빈 ``quality_results``만으로는 "0건 평가"와 "애초에 계산된 적 없음"을 구분할 수
+    없었다 — 이 클래스는 그 구분(available/partial/unavailable, evaluated_checks
+    0 vs >0)이 manifest.inputs(known source) 커버리지에 따라 올바르게 판정되는지
+    검증한다.
+    """
+
+    def test_available_with_zero_evaluated_checks(self, tmp_path: Path) -> None:
+        """모든 known source가 커버되지만, 평가된 check가 0건인 경우."""
+        _write_fixture_run(
+            tmp_path,
+            "r1",
+            dataset_id="d.a",
+            quality_results={"air": []},
+            inputs=("air",),
+        )
+
+        resp = dispatch(_service(tmp_path), "GET", "/builds/r1/quality", None)
+
+        assert resp.status_code == 200
+        assert resp.body["availability"] == "available"
+        assert resp.body["evaluated_checks"] == 0
+
+    def test_available_with_evaluated_checks(self, tmp_path: Path) -> None:
+        """모든 known source가 커버되고, 평가된 check가 1건 이상인 경우."""
+        _write_fixture_run(
+            tmp_path,
+            "r1",
+            dataset_id="d.a",
+            quality_results={"air": [_result("pass"), _result("warn")]},
+            inputs=("air",),
+        )
+
+        resp = dispatch(_service(tmp_path), "GET", "/builds/r1/quality", None)
+
+        assert resp.status_code == 200
+        assert resp.body["availability"] == "available"
+        assert resp.body["evaluated_checks"] == 2
+
+    def test_partial_when_a_known_source_is_missing_from_quality_results(
+        self, tmp_path: Path
+    ) -> None:
+        """multi-source run에서 한 source의 quality 결과가 아예 빠진 경우(partial)."""
+        _write_fixture_run(
+            tmp_path,
+            "r1",
+            dataset_id="d.a",
+            quality_results={"air": [_result("pass")]},
+            inputs=("air", "traffic"),
+        )
+
+        resp = dispatch(_service(tmp_path), "GET", "/builds/r1/quality", None)
+
+        assert resp.status_code == 200
+        assert resp.body["availability"] == "partial"
+        assert resp.body["evaluated_checks"] == 1
+
+    def test_unavailable_for_legacy_manifest_without_quality_results_field(
+        self, tmp_path: Path
+    ) -> None:
+        """quality_results 필드 자체가 없는 legacy run(#486 이전)."""
+        _write_fixture_run(
+            tmp_path, "r1", dataset_id="d.a", include_quality_key=False, inputs=("air",)
+        )
+
+        resp = dispatch(_service(tmp_path), "GET", "/builds/r1/quality", None)
+
+        assert resp.status_code == 200
+        assert resp.body["availability"] == "unavailable"
+        assert resp.body["evaluated_checks"] == 0

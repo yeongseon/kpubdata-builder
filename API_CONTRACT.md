@@ -104,6 +104,16 @@ v0.4 Builder service는 동기식 실행 모델을 유지합니다.
   `schema_drift`(source_key별 `SchemaDriftFinding` 목록)는 build 시점에 manifest.json에
   기록되며, `GET /builds/{run_id}/quality`는 이를 그대로 노출합니다. 별도로 다시
   계산하지 않습니다.
+- **`availability`로 "0건 평가"와 "계산된 적 없음"을 구분(#514)**: 빈
+  `quality_results: {}`만으로는 rule이 없어서 0건인지, quality 단계 자체가 돌지
+  않았는지 구분할 수 없었습니다. `GET /builds/{run_id}/quality`는 이제
+  `availability`(`available`/`partial`/`unavailable`)와 `evaluated_checks`(정수)를
+  함께 반환합니다. `available`은 이 run이 시도한 모든 source(`manifest.inputs`)의
+  quality 결과가 있음을 뜻하며 `evaluated_checks`가 0일 수 있습니다(rule 미설정 등).
+  `partial`은 일부 source만 결과가 있는 경우(예: multi-source run에서 한 source의
+  Silver가 실패)이고, `unavailable`은 `quality_results` 필드 자체가 없는 legacy
+  run(#486 이전)입니다. 이 필드는 additive이며 기존 `quality_results`/`schema_drift`
+  형태는 바뀌지 않습니다.
 - **PASS 포함 전체 보존**: `QualityCheckResult`는 실제로 평가된 check만 담되 PASS도
   포함합니다. rule 미설정/평가 불가(컬럼 없음, denominator 0 등)는 결과에서 아예
   제외됩니다 — PASS로 가장하지 않습니다.
