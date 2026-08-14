@@ -53,6 +53,7 @@ Plugin 생태계와 고급 빌드 기능.
 - ✅ 인증 B2-B5 — Principal, Google OIDC Bearer, 허용 목록, 계약 1.1.0
 - ✅ 인가 C1/C2 — manifest principal 기록, ENFORCE_OWNERSHIP
 - ✅ BuildSpec 어시스턴트 BL1-BL4 — GET /catalog, problems 구조화, 계약 1.2.0
+- ✅ read-only query backend — Silver/Gold `/query` sandbox (#504, 계약 1.7.0)
 - ✅ ADR 0008 (async job), 0009 (auth), 0010 (state backend), 0011 (assistant)
 - ✅ Azure Bicep IaC, 배포 가이드, request ID 추적
 - 🔲 비동기 job 모델 구현 (#334, ADR 0008 제안됨)

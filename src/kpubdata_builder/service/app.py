@@ -30,6 +30,15 @@ from kpubdata.core.models import DatasetRef
 from ..errors import SpecLoadError, ValidationError
 from ..pipeline import preview_build, run_build
 from ..quality import QualityCheckResult
+from ..query.engine import QueryExecutionError, QueryTimeoutError
+from ..query.models import QueryRequest, QueryStage
+from ..query.resolver import (
+    QueryArtifactUnavailableError,
+    QueryContextError,
+    resolve_query_context,
+)
+from ..query.security import UnsafeQueryError, validate_read_only_sql
+from ..query.service import QueryBusyError, QueryService
 from ..spec import BuildSpec, JsonValue, parse_spec
 from ..spec.serializer import BUILDSPEC_SNAPSHOT_FILENAME, compute_spec_digest
 from ..spec.validator import validate_spec
@@ -137,7 +146,7 @@ def _apply_ownership(
 # 1.4.0 -> 1.5.0: Dataset Catalog·Detail·Stage Summary API 추가 (#488, additive).
 # 1.5.0 -> 1.6.0: 구조화된 Quality/Schema Drift 결과, quality history/detail API 추가
 # (#486, additive — 기존 엔드포인트는 변경되지 않는다).
-API_CONTRACT_VERSION = "1.6.0"
+API_CONTRACT_VERSION = "1.7.0"
 
 
 @dataclass(frozen=True)
@@ -200,10 +209,54 @@ class BuilderService:
         *,
         output_root: Path,
         client_factory: Callable[[], SourceClient],
+        query_service: QueryService | None = None,
     ) -> None:
         self._output_root = output_root
         self._client_factory = client_factory
         self._build_index = BuildIndex(output_root)  # #309, ADR 0003
+        self._query_service = query_service or QueryService()
+
+    def query(
+        self, body: Mapping[str, JsonValue] | None, *, principal: Principal
+    ) -> ServiceResponse:
+        """Execute one validated SQL query against a server-resolved stage table."""
+        try:
+            request = _query_request_from_body(body)
+            context = resolve_query_context(self._output_root, request, principal)
+            validated = validate_read_only_sql(request.sql)
+            result = self._query_service.execute(
+                context.table_path, validated.canonical_sql, limit=request.limit
+            )
+        except PermissionError:
+            return ServiceResponse(403, {"error": "forbidden", "code": "forbidden"})
+        except QueryArtifactUnavailableError:
+            return ServiceResponse(
+                404, {"error": "query artifact unavailable", "code": "artifact_unavailable"}
+            )
+        except QueryContextError as exc:
+            return ServiceResponse(400, {"error": str(exc), "code": "invalid_context"})
+        except UnsafeQueryError as exc:
+            return ServiceResponse(400, {"error": str(exc), "code": "unsafe_query"})
+        except QueryBusyError:
+            return ServiceResponse(429, {"error": "query is busy", "code": "query_busy"})
+        except QueryTimeoutError:
+            return ServiceResponse(504, {"error": "query timed out", "code": "query_timeout"})
+        except QueryExecutionError:
+            return ServiceResponse(
+                400, {"error": "query execution failed", "code": "query_execution_failed"}
+            )
+        except ValueError as exc:
+            return ServiceResponse(400, {"error": str(exc), "code": "invalid_request"})
+
+        return ServiceResponse(
+            200,
+            {
+                "columns": list(result.columns),
+                "rows": list(result.rows),
+                "truncated": result.truncated,
+                "execution_ms": result.execution_ms,
+            },
+        )
 
     def version(self) -> ServiceResponse:
         """Builder API 계약 버전을 반환한다 (#209).
@@ -835,6 +888,39 @@ def _spec_from_body(body: Mapping[str, JsonValue] | None) -> str | ServiceRespon
     return spec_value
 
 
+def _query_request_from_body(body: Mapping[str, JsonValue] | None) -> QueryRequest:
+    if body is None:
+        raise ValueError("request body is required")
+    if not set(body).issubset({"dataset_id", "run_id", "stage", "source", "sql", "limit"}):
+        raise ValueError("request contains unknown fields")
+    dataset_id = body.get("dataset_id")
+    run_id = body.get("run_id")
+    stage = body.get("stage")
+    sql = body.get("sql")
+    source = body.get("source")
+    limit = body.get("limit", 100)
+    if not isinstance(dataset_id, str) or not dataset_id:
+        raise ValueError("dataset_id must be a non-empty string")
+    if not isinstance(run_id, str) or not run_id:
+        raise ValueError("run_id must be a non-empty string")
+    if stage not in ("silver", "gold"):
+        raise ValueError("stage must be silver or gold")
+    if not isinstance(sql, str) or not sql:
+        raise ValueError("sql must be a non-empty string")
+    if source is not None and (not isinstance(source, str) or not source):
+        raise ValueError("source must be a non-empty string when provided")
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 500:
+        raise ValueError("limit must be an integer from 1 to 500")
+    return QueryRequest(
+        dataset_id=dataset_id,
+        run_id=run_id,
+        stage=cast(QueryStage, stage),
+        source=source,
+        sql=sql,
+        limit=limit,
+    )
+
+
 def _parse_limit_query(query: str, *, default: int = 50) -> int | ServiceResponse:
     """``?limit=N`` 쿼리 파라미터를 파싱한다. 없으면 default, 형식이 잘못되면 400 (#488)."""
     query_params = parse_qs(query)
@@ -883,6 +969,9 @@ def dispatch(
 
     if method == "GET" and path == "/catalog":
         return service.catalog()
+
+    if method == "POST" and path == "/query":
+        return service.query(body, principal=principal)
 
     if method == "GET" and path == "/datasets":
         limit = _parse_limit_query(query)

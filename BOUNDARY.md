@@ -12,6 +12,7 @@
 4. **Publish workflow는 Builder가 실행하고 Studio는 요청합니다.**
 5. **Studio는 BuildSpec 계약이나 파이프라인 로직을 재정의할 수 없습니다.**
 6. **Builder는 Medallion stage(Bronze/Silver/Gold), staging layout, stage promotion rules, canonical transform engine(Polars)을 소유합니다. Studio는 stage-specific preview 요청과 stage artifact 표시를 할 수 있지만, stage transform을 구현하거나 promotion rule을 재정의해서는 안 됩니다.**
+7. **Builder는 Silver/Gold artifact에 대한 read-only SQL sandbox를 소유합니다. Studio는 명시적인 query 요청과 결과 표시를 담당합니다.**
 
 ## 3. 책임 분리표
 
@@ -22,6 +23,7 @@
 | Build execution | 상태 전이, Bronze/Silver/Gold 승격, artifact 생성, manifest 기록 | 실행 요청, 상태 표시 |
 | Manifest | 스키마 정의, 직렬화, 보관 정책 | manifest 표시, 링크 제공 |
 | Publish | 원격 게시 수행, 성공/실패 기록 | publish 요청, 결과 표시 |
+| Query | Silver/Gold table resolve, read-only 실행, limit/timeout | SQL 명시 실행 요청, result preview 표시 |
 
 ## 4. Studio가 해서는 안 되는 일
 
