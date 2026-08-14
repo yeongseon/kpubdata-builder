@@ -237,8 +237,8 @@ quality:
 | `min_rows` | integer | 요구하는 최소 행 수 |
 
 현재 품질 정책은 Silver의 기존 `row_count`, `null_counts`, `duplicate_rate` 통계를
-사용합니다. 확장 rule과 구조화된 PASS/WARN/FAIL 결과는 #486 범위이며 이 계약에
-선반영하지 않습니다.
+사용합니다. 실행 결과는 manifest의 `quality_results`에 source별 PASS/WARN 구조로
+기록되며, dataset API의 `quality`와 `quality/history` 응답에서 조회할 수 있습니다.
 
 ## 5. 검증 규칙
 

@@ -81,9 +81,10 @@ v0.4 Builder service는 동기식 실행 모델을 유지합니다.
   dataset_id를 가진 타 사용자의 run이 latest 후보나 metadata에 섞이지 않습니다.
 - **row_count**: multi-source dataset의 row_count는 단일 스칼라로 축약하지 않습니다.
   `row_counts`(source_key별 맵)와 `total_row_count`(합계)를 함께 제공합니다.
-- **quality**: `#486`(구조화된 quality gate)이 선반영되지 않았으므로 `quality` 필드는
-  항상 `null`입니다. 현재의 log-only 품질 경고를 임의로 PASS/WARN/FAIL로 변환하지
-  않습니다 — 미평가는 PASS가 아닙니다.
+- **quality**: 최신 run의 manifest에 `quality_results`가 있으면 `quality.status`와
+  source별 구조화 결과를 반환합니다. 해당 run이 품질 정책 없이 만들어졌거나 legacy
+  manifest이면 `quality`는 `null`입니다 — 미평가는 PASS가 아닙니다. run별 이력은
+  `GET /datasets/{dataset_id}/quality/history`에서 최신순으로 확인합니다.
 - **stage status**: `completed`/`failed`/`not_run`/`unavailable` 네 가지로 구분합니다.
   파일시스템 존재만으로 성공을 추측하지 않고, manifest의 실패 기록과 sidecar
   완전성을 함께 봐서 partial/failed run에서도 "Bronze 성공 → Silver 실패 → Gold
