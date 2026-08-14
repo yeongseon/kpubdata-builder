@@ -14,6 +14,7 @@ import yaml
 import kpubdata_builder.pipeline.orchestrator as orchestrator
 from kpubdata_builder.pipeline import BuildContext, BuildResult, run_build
 from kpubdata_builder.spec import BuildSpec, ExportTarget, JsonValue, SourceRef, parse_spec
+from kpubdata_builder.spec.models import QualityPolicy
 
 
 class _FakeResult:
@@ -502,6 +503,49 @@ def test_run_build_writes_provenance_to_manifest(tmp_path: Path) -> None:
     assert entry["record_count"] == 2
     assert cast(str, entry["data_checksum"]).startswith("sha256:")
     assert cast(str, entry["fetched_at"]).endswith("+00:00")
+
+
+def test_run_build_writes_structured_quality_results_to_manifest(tmp_path: Path) -> None:
+    spec = BuildSpec(
+        dataset_id="apt_trade",
+        title="Apartment Trades",
+        description="seoul apartment trades",
+        sources=(SourceRef(provider="datago", dataset="apt_trade"),),
+        exports=(ExportTarget(kind="jsonl", output_path="data.jsonl"),),
+        quality=QualityPolicy(
+            max_duplicate_rate=0.0,
+            max_null_ratio={"amount": 0.25},
+            min_rows=3,
+        ),
+    )
+    client = _FakeClient(
+        {
+            "datago.apt_trade": [
+                {"id": "1", "amount": None},
+                {"id": "1", "amount": None},
+            ]
+        }
+    )
+
+    result = run_build(spec, client=client, output_root=tmp_path, run_id="run-quality")
+
+    assert result.status == "ok"
+    manifest = cast(
+        dict[str, JsonValue], json.loads(result.manifest_path.read_text(encoding="utf-8"))
+    )
+    quality_results = cast(dict[str, JsonValue], manifest["quality_results"])
+    source_quality = cast(dict[str, JsonValue], quality_results["datago.apt_trade"])
+    assert source_quality["status"] == "warn"
+    checks = cast(list[dict[str, JsonValue]], source_quality["checks"])
+    assert {(check["name"], check["status"]) for check in checks} == {
+        ("max_duplicate_rate", "warn"),
+        ("max_null_ratio", "warn"),
+        ("min_rows", "warn"),
+    }
+    null_check = next(check for check in checks if check["name"] == "max_null_ratio")
+    assert null_check["column"] == "amount"
+    assert null_check["observed"] == 1.0
+    assert null_check["threshold"] == 0.25
 
 
 def test_run_build_manifest_counts_all_paginated_records(tmp_path: Path) -> None:

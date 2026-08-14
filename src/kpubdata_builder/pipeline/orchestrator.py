@@ -24,14 +24,18 @@ from ..errors import DatasetValidationError, ValidationError
 from ..exporters import get_exporter
 from ..manifest import (
     BuildManifest,
+    SchemaDriftFinding,
     SchemaSummary,
     SourceProvenance,
+    SourceQualityResult,
+    SourceSchemaDrift,
     build_schema_summary,
     build_source_provenance,
     capture_build_environment,
     compute_inputs_fingerprint,
     manifest_writer,
 )
+from ..quality import evaluate_quality
 from ..spec import BuildSpec, ExportTarget, SourceRef, write_buildspec_snapshot
 from ..spec.validator import validate_spec
 from ..stages.bronze.build import SourceClient, build_bronze_artifact
@@ -181,6 +185,8 @@ class _SourcePipelineResult:
     row_count: int | None = None
     schema_summary: SchemaSummary | None = None
     provenance_entry: SourceProvenance | None = None
+    quality_result: SourceQualityResult | None = None
+    schema_drift: SourceSchemaDrift | None = None
 
 
 def _run_source_pipeline(
@@ -249,35 +255,29 @@ def _run_source_pipeline(
                         ", ".join(f"{f.kind}@{f.column}({f.count})" for f in findings),
                     )
 
-        # 품질 임계 게이트 (#446, QG-3). 기본 warn — 임계 위반 시 로그 경고.
+        quality_result: SourceQualityResult | None = None
         if context.spec.quality is not None:
-            qp = context.spec.quality
-            stats = silver.statistics
-            if qp.max_duplicate_rate is not None and stats.duplicate_rate > qp.max_duplicate_rate:
-                logger.warning(
-                    "품질 위반: 중복 행 비율 %.4f > 임계 %.4f (#446)",
-                    stats.duplicate_rate,
-                    qp.max_duplicate_rate,
-                )
-            if qp.min_rows is not None and stats.row_count < qp.min_rows:
-                logger.warning("품질 위반: 행 수 %d < 최소 %d (#446)", stats.row_count, qp.min_rows)
-            for col, max_ratio in qp.max_null_ratio.items():
-                actual_nulls = stats.null_counts.get(col, 0)
-                if stats.row_count > 0:
-                    actual_ratio = actual_nulls / stats.row_count
-                    if actual_ratio > max_ratio:
-                        logger.warning(
-                            "품질 위반: 컬럼 %s null 비율 %.4f > 임계 %.4f (#446)",
-                            col,
-                            actual_ratio,
-                            max_ratio,
-                        )
+            quality_result = evaluate_quality(output_key, context.spec.quality, silver.statistics)
+            for check in quality_result.checks:
+                if check.status == "warn":
+                    logger.warning("품질 위반: %s (#446)", check.message)
 
         # 드리프트 감지 (#445, DRIFT-1). 직전 성공 run의 silver 와 비교한다.
+        schema_drift: SourceSchemaDrift | None = None
         prev_silver = find_previous_silver(context.output_root, context.run_id)
         if prev_silver is not None:
-            for f in detect_drift(silver.schema, silver.statistics, *prev_silver):
-                logger.warning("드리프트 감지: %s @ %s — %s (#445)", f.kind, f.column, f.detail)
+            drift_findings = tuple(
+                SchemaDriftFinding(kind=f.kind, column=f.column, detail=f.detail)
+                for f in detect_drift(silver.schema, silver.statistics, *prev_silver)
+            )
+            schema_drift = SourceSchemaDrift(source_key=output_key, findings=drift_findings)
+            for finding in drift_findings:
+                logger.warning(
+                    "드리프트 감지: %s @ %s — %s (#445)",
+                    finding.kind,
+                    finding.column,
+                    finding.detail,
+                )
 
         silver_paths = persist_silver_dataset(
             silver, output_root=context.output_root, run_id=context.run_id
@@ -352,6 +352,8 @@ def _run_source_pipeline(
             row_count=silver.statistics.row_count,
             schema_summary=schema_summary,
             provenance_entry=provenance_entry,
+            quality_result=quality_result,
+            schema_drift=schema_drift,
         )
     except Exception as exc:  # stage 실패를 결과로 변환하여 매니페스트에 기록
         # 검증 오류(ValidationError, DatasetValidationError)는 파일시스템 경로를
@@ -432,6 +434,8 @@ def run_build(
     row_counts: dict[str, int] = {}
     schema_summaries: dict[str, SchemaSummary] = {}
     provenance: list[SourceProvenance] = []
+    quality_results: dict[str, SourceQualityResult] = {}
+    schema_drift: dict[str, SourceSchemaDrift] = {}
     for result in results:
         outputs.extend(result.output_paths)
         if result.row_count is not None:
@@ -440,6 +444,10 @@ def run_build(
             schema_summaries[result.outcome.source_key] = result.schema_summary
         if result.provenance_entry is not None:
             provenance.append(result.provenance_entry)
+        if result.quality_result is not None:
+            quality_results[result.outcome.source_key] = result.quality_result
+        if result.schema_drift is not None:
+            schema_drift[result.outcome.source_key] = result.schema_drift
 
     errors = tuple(
         f"{outcome.source_key}: {outcome.error}"
@@ -461,6 +469,8 @@ def run_build(
         build_environment=capture_build_environment(),
         inputs_fingerprint=compute_inputs_fingerprint(provenance),
         created_by=created_by,
+        quality_results=quality_results,
+        schema_drift=schema_drift,
     )
     manifest_path = context.output_root / context.run_id / "manifest.json"
     manifest_writer(manifest, manifest_path)
