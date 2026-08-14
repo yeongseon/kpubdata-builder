@@ -115,8 +115,21 @@ def canonical_spec_mapping(spec: BuildSpec) -> dict[str, JsonValue]:
     if spec.quality is not None:
         quality = {
             "max_duplicate_rate": spec.quality.max_duplicate_rate,
+            "max_duplicate_rate_severity": spec.quality.max_duplicate_rate_severity,
             "max_null_ratio": _canonical_json(cast(JsonValue, spec.quality.max_null_ratio)),
+            "max_null_ratio_severity": _canonical_json(
+                cast(JsonValue, spec.quality.max_null_ratio_severity)
+            ),
             "min_rows": spec.quality.min_rows,
+            "min_rows_severity": spec.quality.min_rows_severity,
+            "range": [
+                {"column": r.column, "min": r.min, "max": r.max, "severity": r.severity}
+                for r in spec.quality.range
+            ],
+            "compare_columns": [
+                {"left": r.left, "operator": r.operator, "right": r.right, "severity": r.severity}
+                for r in spec.quality.compare_columns
+            ],
         }
 
     return {

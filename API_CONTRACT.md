@@ -40,6 +40,7 @@ v0.4 Builder service는 동기식 실행 모델을 유지합니다.
 | run별 BuildSpec 조회 | `GET /builds/{run_id}/spec`으로 redaction된 canonical YAML과 그 bytes의 digest를 반환 |
 | built dataset 조회 | `GET /datasets`, `GET /datasets/{dataset_id}`, `GET /datasets/{dataset_id}/runs`로 `BuildSpec.dataset_id` 단위 grouping/latest run/run history를 반환 |
 | stage summary/preview | `GET /builds/{run_id}/stages`, `GET /builds/{run_id}/stages/{stage}`로 source별 Bronze/Silver/Gold 상태와 안전한 요약을 반환 |
+| structured quality/drift | `GET /builds/{run_id}/quality`로 run의 source별 `quality_results`/`schema_drift`를, `GET /datasets/{dataset_id}/quality/history`로 dataset의 run별 PASS/WARN/FAIL 집계 이력을 반환 |
 | 인증 실패 | `401`은 재인증 대상, `403`은 권한 요청 대상, `503`은 JWKS 일시 장애 대상 |
 
 정책과 구현이 다르면 구현 각주를 늘리지 말고 다음 순서로 정리합니다.
@@ -96,6 +97,47 @@ v0.4 Builder service는 동기식 실행 모델을 유지합니다.
   `GET /datasets/{dataset_id}` 경로의 `dataset_id`는 클라이언트가 percent-encoding해야
   합니다. `BuildSpec.dataset_id` 자체에는 이 API 때문에 새로운 제약을 추가하지
   않았습니다.
+
+### 구조화된 Quality/Schema Drift와 History (#486)
+
+- **정본은 manifest**: `quality_results`(source_key별 `QualityCheckResult` 목록)와
+  `schema_drift`(source_key별 `SchemaDriftFinding` 목록)는 build 시점에 manifest.json에
+  기록되며, `GET /builds/{run_id}/quality`는 이를 그대로 노출합니다. 별도로 다시
+  계산하지 않습니다.
+- **PASS 포함 전체 보존**: `QualityCheckResult`는 실제로 평가된 check만 담되 PASS도
+  포함합니다. rule 미설정/평가 불가(컬럼 없음, denominator 0 등)는 결과에서 아예
+  제외됩니다 — PASS로 가장하지 않습니다.
+- **확장 규칙 조건 보존**: `range` 결과의 `threshold`는 `min`/`max`를,
+  `compare_columns` 결과는 `operator`/`right_column`을 구조화해 보존합니다. 컬럼은
+  존재하지만 dtype이 호환되지 않아 평가할 수 없는 경우에는 규칙을 생략하지 않고
+  선언된 severity의 WARN/FAIL과 안전한 `detail`을 기록합니다.
+- **WARN/FAIL gate**: WARN은 Build를 계속 진행시키고 결과만 기록합니다. FAIL은 해당
+  source를 Gold 진입 전에 실패시키며, 실패해도 이미 계산된 `quality_results`는
+  manifest에 보존됩니다.
+- **Preview/Build 동일 판정**: `POST /preview`의 각 `SourcePreview.quality_results`는
+  Build와 동일한 evaluator(`quality.evaluate_quality`) 결과입니다. Preview는 drift는
+  포함하지 않습니다(워크스페이스에 아무것도 쓰지 않으므로 이전 run과 비교할 대상이 없음).
+- **Schema drift 비교 범위**: `detect_drift`는 "직전 아무 run"이 아니라 **동일
+  dataset_id·source_key의 직전 "성공" run**과만 비교합니다. 다른 dataset/source의
+  silver와 비교해 가짜 drift를 만들지 않습니다.
+- **Quality History 집계**: `GET /datasets/{dataset_id}/quality/history`는 #488의
+  dataset→run 조회 helper를 재사용해 접근 가능한 run별로 pass/warn/fail count,
+  `evaluated_checks`, `rule_pass_rate`(`pass_count / evaluated_checks`,
+  `evaluated_checks == 0`이면 `null`), `validated_rows`를 반환합니다. `validated_rows`는
+  `QualityCheckResult.evaluated_rows`를 rule 수만큼 합산하지 않고, `#488`이 이미
+  정의한 `row_counts` 합계(소스별 Silver row_count) semantics를 재사용합니다.
+- **Legacy/partial/failed run**: manifest에 `quality_results`가 없는 legacy run은
+  `evaluated_checks=0, rule_pass_rate=null`로 표현됩니다 — 미평가를 "전부 PASS"로
+  해석하지 않습니다. partial/failed run도 structured 결과가 있으면 history에
+  포함됩니다(정책적으로 제외하지 않음).
+- **Ownership**: History/detail 모두 `/datasets/{dataset_id}`·`/datasets/{dataset_id}/runs`와
+  동일한 ownership semantics를 공유합니다. 동일 `dataset_id`라도 타 사용자의 run은
+  섞이지 않습니다.
+- **AI 해석은 gate에 영향 없음**: drift의 원인 해석(#448, advisory)이 존재하더라도
+  PASS/WARN/FAIL 판정이나 dataset quality 요약에는 관여하지 않습니다.
+- `GET /datasets`, `GET /datasets/{dataset_id}` 응답의 `quality` 필드는 여전히 항상
+  `null`입니다. 임의 종합 quality score를 만들지 않기 위한 의도적 설계이며, 구조화된
+  결과는 위 두 전용 엔드포인트로 조회합니다.
 
 ## 4. 인증과 CORS
 

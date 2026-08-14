@@ -15,6 +15,7 @@ BuildSpec의 각 소스를 Bronze → Silver → Gold 순서로 실행하고, �
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,6 +33,7 @@ from ..manifest import (
     compute_inputs_fingerprint,
     manifest_writer,
 )
+from ..quality import QualityCheckResult, SchemaDriftFinding, evaluate_quality
 from ..spec import BuildSpec, ExportTarget, SourceRef, write_buildspec_snapshot
 from ..spec.validator import validate_spec
 from ..stages.bronze.build import SourceClient, build_bronze_artifact
@@ -41,7 +43,7 @@ from ..stages.gold.build import build_gold_package
 from ..stages.gold.card import build_dataset_card, render_dataset_card
 from ..stages.gold.persist import persist_gold_package
 from ..stages.silver.build import build_silver_dataset
-from ..stages.silver.drift import detect_drift, find_previous_silver
+from ..stages.silver.drift import DriftFinding, detect_drift, find_previous_silver
 from ..stages.silver.persist import persist_silver_dataset
 from ..stages.silver.pii import scan_pii
 from .context import BuildContext
@@ -136,6 +138,26 @@ def _record_output_paths(outputs: list[str], *paths: Path) -> None:
     outputs.extend(str(path) for path in paths)
 
 
+def _quality_failure_messages(fail_results: Sequence[QualityCheckResult]) -> list[str]:
+    """FAIL로 판정된 QualityCheckResult를 DatasetValidationError 메시지로 변환한다 (#486)."""
+    messages: list[str] = []
+    for r in fail_results:
+        location = f" @ {r.column}" if r.column else ""
+        detail = f", detail={r.detail!r}" if r.detail else ""
+        messages.append(
+            f"quality check failed: {r.rule}{location} (actual={r.actual!r}, "
+            f"threshold={r.threshold!r}{detail})"
+        )
+    return messages
+
+
+def _to_schema_drift_findings(findings: Sequence[DriftFinding]) -> tuple[SchemaDriftFinding, ...]:
+    """deterministic DriftFinding을 API/manifest용 SchemaDriftFinding으로 변환한다 (#486)."""
+    return tuple(
+        SchemaDriftFinding(kind=f.kind, column=f.column, detail=f.detail) for f in findings
+    )
+
+
 def _execute_exports(
     gold_dir: Path,
     artifact: ArtifactDataset,
@@ -181,6 +203,9 @@ class _SourcePipelineResult:
     row_count: int | None = None
     schema_summary: SchemaSummary | None = None
     provenance_entry: SourceProvenance | None = None
+    quality_results: tuple[QualityCheckResult, ...] = ()
+    quality_evaluated: bool = False
+    schema_drift: tuple[SchemaDriftFinding, ...] = ()
 
 
 def _run_source_pipeline(
@@ -199,6 +224,13 @@ def _run_source_pipeline(
     completed: list[str] = []
     outputs: list[str] = []
     provenance_entry: SourceProvenance | None = None
+    evaluated_row_count: int | None = None
+    # 예외가 발생해도(schema 검증 실패, quality FAIL 등) 이미 계산된 구조화된
+    # 결과는 살아남아 실패 outcome에도 실린다 (#486) — quality_results가 예외
+    # 때문에 사라지지 않는다.
+    quality_results: tuple[QualityCheckResult, ...] = ()
+    quality_evaluated = False
+    schema_drift: tuple[SchemaDriftFinding, ...] = ()
     try:
         bronze = build_bronze_artifact(
             client, source_key=fetch_key, fetch_params=dict(source.params)
@@ -219,14 +251,31 @@ def _run_source_pipeline(
             params=source.params,
         )
 
+        required_columns = source.schema.required if source.schema else ()
+        column_dtypes = source.schema.dtypes if source.schema else None
         silver = build_silver_dataset(
             bronze,
-            required_columns=source.schema.required if source.schema else (),
+            required_columns=required_columns,
             casts=source.schema.casts if source.schema else None,
-            column_dtypes=source.schema.dtypes if source.schema else None,
+            column_dtypes=column_dtypes,
         )
+        evaluated_row_count = silver.statistics.row_count
+
+        # 구조화된 Quality/Schema 평가 (#486). Preview와 동일한 공통 evaluator를
+        # 쓴다 — 예외가 아래에서 발생해도 quality_results는 이미 채워져 있으므로
+        # 실패 outcome의 manifest에도 보존된다.
+        quality_results = evaluate_quality(
+            silver,
+            context.spec.quality,
+            source_key=output_key,
+            required_columns=required_columns,
+            column_dtypes=column_dtypes,
+        )
+        quality_evaluated = True
+
         # 검증에 실패한 Silver 데이터셋이 Gold/패키징으로 흘러가지 않도록 소스를
-        # 실패 처리한다. 검증은 더 이상 권고용이 아니라 게이트다 (#189).
+        # 실패 처리한다. 검증은 더 이상 권고용이 아니라 게이트다 (#189). 기존 오류
+        # 계약(메시지 형식)은 하위 호환을 위해 그대로 유지한다.
         if not silver.validation.ok:
             # ValidationProblem 객체를 DatasetValidationError가 기대하는 문자열 목록으로 변환 (#261)
             problem_messages = [problem.message for problem in silver.validation.problems]
@@ -249,34 +298,34 @@ def _run_source_pipeline(
                         ", ".join(f"{f.kind}@{f.column}({f.count})" for f in findings),
                     )
 
-        # 품질 임계 게이트 (#446, QG-3). 기본 warn — 임계 위반 시 로그 경고.
-        if context.spec.quality is not None:
-            qp = context.spec.quality
-            stats = silver.statistics
-            if qp.max_duplicate_rate is not None and stats.duplicate_rate > qp.max_duplicate_rate:
+        # 품질 WARN/FAIL 게이트 (#446, #486). WARN은 로그만 남기고 계속 진행하며,
+        # FAIL은 Gold 진입 전에 소스를 실패 처리한다. quality_results는 이미 위에서
+        # 채워졌으므로 여기서 raise해도 manifest에 보존된다.
+        fail_results = [r for r in quality_results if r.status == "fail"]
+        if fail_results:
+            raise DatasetValidationError(_quality_failure_messages(fail_results))
+        for r in quality_results:
+            if r.status == "warn":
                 logger.warning(
-                    "품질 위반: 중복 행 비율 %.4f > 임계 %.4f (#446)",
-                    stats.duplicate_rate,
-                    qp.max_duplicate_rate,
+                    "품질 위반(warn): %s%s actual=%s threshold=%s (#486)",
+                    r.rule,
+                    f" @ {r.column}" if r.column else "",
+                    r.actual,
+                    r.threshold,
                 )
-            if qp.min_rows is not None and stats.row_count < qp.min_rows:
-                logger.warning("품질 위반: 행 수 %d < 최소 %d (#446)", stats.row_count, qp.min_rows)
-            for col, max_ratio in qp.max_null_ratio.items():
-                actual_nulls = stats.null_counts.get(col, 0)
-                if stats.row_count > 0:
-                    actual_ratio = actual_nulls / stats.row_count
-                    if actual_ratio > max_ratio:
-                        logger.warning(
-                            "품질 위반: 컬럼 %s null 비율 %.4f > 임계 %.4f (#446)",
-                            col,
-                            actual_ratio,
-                            max_ratio,
-                        )
 
-        # 드리프트 감지 (#445, DRIFT-1). 직전 성공 run의 silver 와 비교한다.
-        prev_silver = find_previous_silver(context.output_root, context.run_id)
+        # 드리프트 감지 (#445, DRIFT-1). 동일 dataset_id·source_key의 직전 "성공" run과만
+        # 비교한다 — 다른 dataset/source의 silver와 비교해 가짜 drift를 만들지 않는다 (#486).
+        prev_silver = find_previous_silver(
+            context.output_root,
+            context.run_id,
+            dataset_id=context.spec.dataset_id,
+            source_key=output_key,
+        )
         if prev_silver is not None:
-            for f in detect_drift(silver.schema, silver.statistics, *prev_silver):
+            drift_findings = detect_drift(silver.schema, silver.statistics, *prev_silver)
+            schema_drift = _to_schema_drift_findings(drift_findings)
+            for f in drift_findings:
                 logger.warning("드리프트 감지: %s @ %s — %s (#445)", f.kind, f.column, f.detail)
 
         silver_paths = persist_silver_dataset(
@@ -349,9 +398,12 @@ def _run_source_pipeline(
                 source_key=output_key, status="ok", stages_completed=tuple(completed)
             ),
             output_paths=tuple(outputs),
-            row_count=silver.statistics.row_count,
+            row_count=evaluated_row_count,
             schema_summary=schema_summary,
             provenance_entry=provenance_entry,
+            quality_results=quality_results,
+            quality_evaluated=quality_evaluated,
+            schema_drift=schema_drift,
         )
     except Exception as exc:  # stage 실패를 결과로 변환하여 매니페스트에 기록
         # 검증 오류(ValidationError, DatasetValidationError)는 파일시스템 경로를
@@ -377,7 +429,11 @@ def _run_source_pipeline(
                 error=error_msg,
             ),
             output_paths=tuple(outputs),
+            row_count=evaluated_row_count,
             provenance_entry=provenance_entry,
+            quality_results=quality_results,
+            quality_evaluated=quality_evaluated,
+            schema_drift=schema_drift,
         )
 
 
@@ -432,6 +488,8 @@ def run_build(
     row_counts: dict[str, int] = {}
     schema_summaries: dict[str, SchemaSummary] = {}
     provenance: list[SourceProvenance] = []
+    quality_results: dict[str, tuple[QualityCheckResult, ...]] = {}
+    schema_drift: dict[str, tuple[SchemaDriftFinding, ...]] = {}
     for result in results:
         outputs.extend(result.output_paths)
         if result.row_count is not None:
@@ -440,6 +498,14 @@ def run_build(
             schema_summaries[result.outcome.source_key] = result.schema_summary
         if result.provenance_entry is not None:
             provenance.append(result.provenance_entry)
+        # quality_evaluated는 evaluate_quality가 실제로 호출됐는지를 나타낸다(#486) —
+        # FAIL로 소스가 실패해도 결과는 보존된다. bronze/silver 자체가 실패해
+        # evaluate_quality에 도달하지 못한 소스는 매니페스트에 키가 생기지 않는다
+        # (0건 평가와 "평가 자체가 없었음"을 구분한다).
+        if result.quality_evaluated:
+            quality_results[result.outcome.source_key] = result.quality_results
+        if result.schema_drift:
+            schema_drift[result.outcome.source_key] = result.schema_drift
 
     errors = tuple(
         f"{outcome.source_key}: {outcome.error}"
@@ -461,6 +527,8 @@ def run_build(
         build_environment=capture_build_environment(),
         inputs_fingerprint=compute_inputs_fingerprint(provenance),
         created_by=created_by,
+        quality_results=quality_results,
+        schema_drift=schema_drift,
     )
     manifest_path = context.output_root / context.run_id / "manifest.json"
     manifest_writer(manifest, manifest_path)

@@ -117,6 +117,7 @@ def validate_spec(spec: BuildSpec) -> None:
     problems.extend(_schema_problems(spec))
     problems.extend(_pii_problems(spec))
     problems.extend(_license_problems(spec))
+    problems.extend(_quality_problems(spec))
     if problems:
         raise ValidationError([str(p) for p in problems], structured=problems)
 
@@ -261,6 +262,50 @@ def _pii_problems(spec: BuildSpec) -> list[ValidationProblem]:
                 "pii_allow_with_publish",
                 "pii.mode",
                 "pii.mode='allow' is forbidden when publish=true (공개 배포 PII 노출 위험, #441)",
+            )
+        )
+    return problems
+
+
+def _quality_problems(spec: BuildSpec) -> list[ValidationProblem]:
+    """quality 정책의 의미적 일관성을 검증한다 (#486).
+
+    구조/타입/severity 어휘/operator 어휘는 loader가 파싱 단계에서 이미 거부한다.
+    여기서는 loader가 검사하지 않는 관계형 제약(범위 비어있음, min>max, 존재하지
+    않는 컬럼을 겨냥한 severity override)만 다룬다.
+    """
+    problems: list[ValidationProblem] = []
+    quality = spec.quality
+    if quality is None:
+        return problems
+    for i, rule in enumerate(quality.range):
+        path = f"quality.range[{i}]"
+        if rule.min is None and rule.max is None:
+            problems.append(
+                _p(
+                    "empty_range_rule",
+                    path,
+                    f"{path} must declare at least one of min/max",
+                )
+            )
+        elif rule.min is not None and rule.max is not None and rule.min > rule.max:
+            problems.append(
+                _p(
+                    "inverted_range_rule",
+                    path,
+                    f"{path}.min ({rule.min}) must be <= max ({rule.max})",
+                )
+            )
+    unknown_severity_columns = sorted(
+        set(quality.max_null_ratio_severity) - set(quality.max_null_ratio)
+    )
+    if unknown_severity_columns:
+        problems.append(
+            _p(
+                "unknown_severity_column",
+                "quality.max_null_ratio_severity",
+                "quality.max_null_ratio_severity references columns not declared in "
+                f"quality.max_null_ratio: {unknown_severity_columns}",
             )
         )
     return problems

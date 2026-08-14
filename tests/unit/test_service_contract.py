@@ -49,8 +49,10 @@ _DISPATCH_ROUTES: dict[tuple[str, str], str] = {
     ("/datasets", "GET"): "listDatasets",
     ("/datasets/{dataset_id}", "GET"): "getDataset",
     ("/datasets/{dataset_id}/runs", "GET"): "listDatasetRuns",
+    ("/datasets/{dataset_id}/quality/history", "GET"): "getDatasetQualityHistory",
     ("/builds/{run_id}/stages", "GET"): "listBuildStages",
     ("/builds/{run_id}/stages/{stage}", "GET"): "getBuildStageDetail",
+    ("/builds/{run_id}/quality", "GET"): "getBuildQuality",
 }
 
 # (path, method) 형태의 계약 필수 오퍼레이션. BuilderService.dispatch가 실제로
@@ -69,8 +71,10 @@ _REQUIRED_OPERATIONS = [
     ("/datasets", "get"),
     ("/datasets/{dataset_id}", "get"),
     ("/datasets/{dataset_id}/runs", "get"),
+    ("/datasets/{dataset_id}/quality/history", "get"),
     ("/builds/{run_id}/stages", "get"),
     ("/builds/{run_id}/stages/{stage}", "get"),
+    ("/builds/{run_id}/quality", "get"),
 ]
 
 
@@ -163,8 +167,15 @@ def _complete_build_spec_payload() -> dict[str, Any]:
         "license": "CC-BY-4.0",
         "quality": {
             "max_duplicate_rate": 0.01,
+            "max_duplicate_rate_severity": "warn",
             "max_null_ratio": {"value": 0.05},
+            "max_null_ratio_severity": {"value": "fail"},
             "min_rows": 100,
+            "min_rows_severity": "fail",
+            "range": [{"column": "value", "min": 0, "max": 1000, "severity": "fail"}],
+            "compare_columns": [
+                {"left": "value", "operator": "gte", "right": "min_value", "severity": "warn"}
+            ],
         },
     }
 
@@ -263,8 +274,10 @@ _IMPLEMENTED_OPERATIONS = {
     "listDatasets",
     "getDataset",
     "listDatasetRuns",
+    "getDatasetQualityHistory",
     "listBuildStages",
     "getBuildStageDetail",
+    "getBuildQuality",
 }
 
 
@@ -471,8 +484,10 @@ _OPERATION_STATUS_CODES: dict[str, set[int]] = {
     "listDatasets": {200, 400},
     "getDataset": {200, 400, 404},
     "listDatasetRuns": {200, 400, 404},
+    "getDatasetQualityHistory": {200, 400, 404},
     "listBuildStages": {200, 400, 403, 404},
     "getBuildStageDetail": {200, 400, 403, 404},
+    "getBuildQuality": {200, 400, 403, 404},
 }
 
 
@@ -913,3 +928,42 @@ class TestResponseConformance:
         )
         assert resp.status_code == 404
         _assert_conforms(resp, "/builds/{run_id}/stages/{stage}", "GET")
+
+    # -------------------------------------------------------------------
+    # Quality History/Detail API conformance (#486)
+    # -------------------------------------------------------------------
+
+    def test_dataset_quality_history_200(self, tmp_path: Path) -> None:
+        service = _conform_service(tmp_path)
+        dispatch(service, "POST", "/build", {"spec": _CONFORM_SPEC_YAML, "run_id": "conform-qh"})
+        resp = dispatch(service, "GET", "/datasets/dataset.conform/quality/history", None)
+        assert resp.status_code == 200
+        _assert_conforms(resp, "/datasets/{dataset_id}/quality/history", "GET")
+
+    def test_dataset_quality_history_404_missing(self, tmp_path: Path) -> None:
+        resp = dispatch(_conform_service(tmp_path), "GET", "/datasets/nope/quality/history", None)
+        assert resp.status_code == 404
+        _assert_conforms(resp, "/datasets/{dataset_id}/quality/history", "GET")
+
+    def test_dataset_quality_history_400_bad_limit(self, tmp_path: Path) -> None:
+        resp = dispatch(
+            _conform_service(tmp_path),
+            "GET",
+            "/datasets/dataset.conform/quality/history",
+            None,
+            query="limit=0",
+        )
+        assert resp.status_code == 400
+        _assert_conforms(resp, "/datasets/{dataset_id}/quality/history", "GET")
+
+    def test_build_quality_200(self, tmp_path: Path) -> None:
+        service = _conform_service(tmp_path)
+        dispatch(service, "POST", "/build", {"spec": _CONFORM_SPEC_YAML, "run_id": "conform-bq"})
+        resp = dispatch(service, "GET", "/builds/conform-bq/quality", None)
+        assert resp.status_code == 200
+        _assert_conforms(resp, "/builds/{run_id}/quality", "GET")
+
+    def test_build_quality_404_missing(self, tmp_path: Path) -> None:
+        resp = dispatch(_conform_service(tmp_path), "GET", "/builds/nope/quality", None)
+        assert resp.status_code == 404
+        _assert_conforms(resp, "/builds/{run_id}/quality", "GET")
