@@ -133,6 +133,13 @@ def test_service_api_version_matches_contract() -> None:
     assert str(_load_contract()["info"]["version"]) == API_CONTRACT_VERSION
 
 
+def test_build_manifest_does_not_publish_internal_owner_id() -> None:
+    """persisted owner_id는 HTTP BuildManifest의 공개 property가 아니다 (#505)."""
+    manifest = _load_contract()["components"]["schemas"]["BuildManifest"]
+
+    assert "owner_id" not in manifest["properties"]
+
+
 def _complete_build_spec_payload() -> dict[str, Any]:
     return {
         "dataset_id": "dataset.contract",

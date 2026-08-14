@@ -8,7 +8,7 @@ from pathlib import Path
 
 from ..service import datasets as datasets_service
 from ..service import stages as stages_service
-from ..service.auth import Principal
+from ..service.auth import Principal, principal_owns
 from ..stages._path_safety import ensure_within, validate_path_segment
 from ..stages._stage_reader import gold_source_dir, silver_source_dir
 from .models import QueryRequest
@@ -32,11 +32,18 @@ class ResolvedQueryContext:
 
 
 def _ownership_allowed(manifest: dict[str, object], principal: Principal) -> bool:
+    """#504 query ownership 게이트 (#505: canonical owner_id 우선, legacy 폴백)."""
     if os.environ.get("ENFORCE_OWNERSHIP", "").lower() not in ("true", "1"):
         return True
     if principal.kind in ("dev", "service"):
         return True
-    return manifest.get("created_by") == principal.label
+    created_by = manifest.get("created_by")
+    owner_id = manifest.get("owner_id")
+    return principal_owns(
+        created_by=created_by if isinstance(created_by, str) else None,
+        owner_id=owner_id if isinstance(owner_id, str) else None,
+        principal=principal,
+    )
 
 
 def resolve_query_context(

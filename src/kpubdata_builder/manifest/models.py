@@ -40,6 +40,13 @@ class BuildManifest:
         provenance: 소스별 상세 출처(fetch 시각/파라미터/레코드 수/체크섬) 목록.
         build_environment: 빌드를 생성한 실행 환경(Python/kpubdata/builder 버전).
         inputs_fingerprint: 입력 데이터 전체의 재현성 지문 ("sha256:..."). 입력이 없으면 None.
+        created_by: 빌드를 요청한 principal의 display/legacy 라벨(#388). 사람이
+            읽는 표시용이며 ownership 판정에는 하위 호환 폴백으로만 쓰인다.
+        owner_id: canonical stable persistent owner identity (#505, additive).
+            ``service.auth.compute_owner_id()``로 계산되며 raw claim(sub/email
+            등)을 복원할 수 없다. legacy manifest는 이 필드가 없다 — reader는
+            부재를 "owner_id 미지원 run"으로 해석해야 하며, ownership 판정은
+            ``created_by``/label 비교로 폴백해야 한다(``principal_owns()`` 참조).
         quality_results: source_key별 구조화된 QualityCheckResult 목록 (#486, additive).
             PASS를 포함한 실제로 평가된 check만 담는다. legacy manifest는 이 필드가
             없다 — reader는 부재를 "미평가"(0건)로 해석해야 하며 "전부 PASS"로
@@ -63,6 +70,7 @@ class BuildManifest:
     build_environment: BuildEnvironment | None = None
     inputs_fingerprint: str | None = None
     created_by: str | None = None
+    owner_id: str | None = None
     quality_results: dict[str, tuple[QualityCheckResult, ...]] = field(default_factory=dict)
     schema_drift: dict[str, tuple[SchemaDriftFinding, ...]] = field(default_factory=dict)
 

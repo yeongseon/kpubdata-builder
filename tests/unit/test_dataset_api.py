@@ -19,6 +19,7 @@ from kpubdata_builder.service.app import _OWNERSHIP_ENV
 from kpubdata_builder.service.auth import Principal
 from kpubdata_builder.service.datasets import (
     RunRecord,
+    filter_ownership,
     group_latest_by_dataset,
     is_more_recent,
     pick_latest,
@@ -502,3 +503,54 @@ class TestGroupingLogic:
         assert set(latest) == {"dataset.a", "dataset.b"}
         assert latest["dataset.a"].run_id == "a2"
         assert latest["dataset.b"].run_id == "b1"
+
+
+class TestFilterOwnership:
+    """datasets_service.filter_ownership — dataset/quality/stage가 공유하는 ownership
+    필터의 순수 함수 단위 테스트 (#505: canonical owner_id 우선, legacy 폴백)."""
+
+    def _record(
+        self, run_id: str, *, created_by: str | None, owner_id: str | None = None
+    ) -> RunRecord:
+        return RunRecord(
+            run_id=run_id,
+            dataset_id="d",
+            status="ok",
+            started_at="2025-01-01T00:00:00Z",
+            finished_at="2025-01-01T00:00:00Z",
+            spec_digest=None,
+            created_by=created_by,
+            owner_id=owner_id,
+        )
+
+    def test_owner_id_match_wins_over_different_label(self) -> None:
+        record = self._record("a", created_by="oidc:old-name", owner_id="oidc:canonical-abc")
+        principal = Principal(kind="oidc", identifier="new-name", owner_id="oidc:canonical-abc")
+        result = filter_ownership([record], principal, enforce=True)
+        assert [r.run_id for r in result] == ["a"]
+
+    def test_owner_id_mismatch_denied_despite_matching_label(self) -> None:
+        record = self._record("a", created_by="oidc:userA", owner_id="oidc:real-owner")
+        impostor = Principal(kind="oidc", identifier="userA", owner_id="oidc:different")
+        assert filter_ownership([record], impostor, enforce=True) == []
+
+    def test_legacy_record_without_owner_id_falls_back_to_label(self) -> None:
+        record = self._record("a", created_by="oidc:userA", owner_id=None)
+        principal = Principal(kind="oidc", identifier="userA")
+        result = filter_ownership([record], principal, enforce=True)
+        assert [r.run_id for r in result] == ["a"]
+
+    def test_ambiguous_record_with_no_owner_info_fails_closed(self) -> None:
+        record = self._record("a", created_by=None, owner_id=None)
+        principal = Principal(kind="oidc", identifier="userA", owner_id="oidc:abc")
+        assert filter_ownership([record], principal, enforce=True) == []
+
+    def test_dev_and_service_principal_bypass_filter(self) -> None:
+        record = self._record("a", created_by="oidc:userA", owner_id="oidc:canonical-abc")
+        assert filter_ownership([record], Principal(kind="dev"), enforce=True) == [record]
+        assert filter_ownership([record], Principal(kind="service"), enforce=True) == [record]
+
+    def test_enforce_false_returns_all_records(self) -> None:
+        record = self._record("a", created_by=None, owner_id=None)
+        principal = Principal(kind="oidc", identifier="someone-else", owner_id="oidc:xyz")
+        assert filter_ownership([record], principal, enforce=False) == [record]

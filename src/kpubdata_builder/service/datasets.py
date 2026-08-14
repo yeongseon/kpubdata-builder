@@ -29,13 +29,20 @@ from ..spec import BuildSpec, JsonValue, parse_spec
 from ..spec.serializer import BUILDSPEC_SNAPSHOT_FILENAME
 from ..stages._path_safety import ensure_within
 from ..store import BuildEntry, BuildIndex
-from .auth import Principal
+from .auth import Principal, principal_owns
 from .stages import list_run_stages
 
 
 @dataclass(frozen=True)
 class RunRecord:
-    """dataset grouping에 필요한 run 단위 경량 요약(sidecar 미포함)."""
+    """dataset grouping에 필요한 run 단위 경량 요약(sidecar 미포함).
+
+    ``owner_id``는 canonical stable owner identity다(#505, additive). legacy
+    run은 이 필드가 없어 None이 되고, ``filter_ownership``이 ``created_by``
+    기반 legacy 비교로 폴백한다. 응답 직렬화 코드는 필드를 명시적으로 골라
+    담으므로(예: ``build_dataset_summary``, dispatch의 runs 목록) owner_id는
+    wire 응답에 자동으로 노출되지 않는다.
+    """
 
     run_id: str
     dataset_id: str
@@ -44,6 +51,7 @@ class RunRecord:
     finished_at: str | None
     spec_digest: str | None
     created_by: str | None
+    owner_id: str | None = None
 
 
 def sort_key(record: RunRecord) -> tuple[bool, str, str]:
@@ -91,10 +99,18 @@ def filter_ownership(
     run은 grouping/latest 선정에서 완전히 제외된다(#488 semantics D) — 여기서
     걸러진 뒤에야 grouping/latest 선택이 일어나므로, 다른 사용자의 run이 latest로
     뽑히거나 metadata에 섞이는 일이 없다.
+
+    소유권 판정 자체는 ``principal_owns()``(canonical owner_id 우선, legacy
+    created_by/label 폴백)를 공유한다(#505) — app.py의 ``_apply_ownership``,
+    query resolver와 동일한 단일 구현이다.
     """
     if not (enforce and principal is not None and principal.kind == "oidc"):
         return list(records)
-    return [r for r in records if r.created_by == principal.label]
+    return [
+        r
+        for r in records
+        if principal_owns(created_by=r.created_by, owner_id=r.owner_id, principal=principal)
+    ]
 
 
 def read_snapshot_dataset_id(output_root: Path, run_id: str) -> str | None:
@@ -168,6 +184,7 @@ def _entry_to_record(entry: BuildEntry) -> RunRecord | None:
         finished_at=entry.finished_at,
         spec_digest=entry.spec_digest,
         created_by=entry.created_by,
+        owner_id=entry.owner_id,
     )
 
 
@@ -237,6 +254,7 @@ def merge_run_records(
                 else record.spec_digest
             ),
             created_by=record.created_by,
+            owner_id=record.owner_id,
         )
     return [merged[run_id] for run_id in sorted(merged)]
 
@@ -254,6 +272,7 @@ def retain_canonical_run_records(
         started_at = manifest.get("started_at")
         finished_at = manifest.get("finished_at")
         created_by = manifest.get("created_by")
+        owner_id = manifest.get("owner_id")
         canonical.append(
             RunRecord(
                 run_id=record.run_id,
@@ -263,6 +282,7 @@ def retain_canonical_run_records(
                 finished_at=finished_at if isinstance(finished_at, str) else None,
                 spec_digest=record.spec_digest,
                 created_by=created_by if isinstance(created_by, str) else None,
+                owner_id=owner_id if isinstance(owner_id, str) else None,
             )
         )
     return canonical
@@ -301,6 +321,7 @@ def collect_run_records_from_filesystem(output_root: Path) -> list[RunRecord]:
         started_at = manifest.get("started_at")
         finished_at = manifest.get("finished_at")
         created_by = manifest.get("created_by")
+        owner_id = manifest.get("owner_id")
         records.append(
             RunRecord(
                 run_id=run_dir.name,
@@ -310,6 +331,7 @@ def collect_run_records_from_filesystem(output_root: Path) -> list[RunRecord]:
                 finished_at=finished_at if isinstance(finished_at, str) else None,
                 spec_digest=None,
                 created_by=created_by if isinstance(created_by, str) else None,
+                owner_id=owner_id if isinstance(owner_id, str) else None,
             )
         )
     return records

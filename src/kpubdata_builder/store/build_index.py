@@ -23,7 +23,11 @@ else:
 # 스키마 버전 2: status 어휘를 ok/failed/cancelled로 확장 (#334 비동기 job 모델 대비)
 # 스키마 버전 4: dataset_id 컬럼 추가 (#488). 정본은 BuildSpec snapshot(#487)이며,
 # 이 컬럼은 dataset→run 조회 성능을 위한 파생 검색 값일 뿐이다.
-SCHEMA_VERSION = 4
+# 스키마 버전 5: owner_id 컬럼 추가 (#505). 정본은 manifest.json이며, 이 컬럼은
+# canonical stable owner identity에 대한 파생 검색 값일 뿐이다. 이 인덱스는
+# 파생물이라 스키마 버전이 바뀌면 테이블을 DROP 후 재생성한다 — 기존 인덱스
+# 데이터는 사라지지만 manifest.json에서 rebuild_index()로 재구축할 수 있다.
+SCHEMA_VERSION = 5
 
 # 빌드 인덱스 status 어휘. ADR 0003 파생 캐시. manifest.json이 정본.
 BuildStatus = Literal["ok", "failed", "cancelled"]
@@ -44,6 +48,7 @@ class BuildEntry:
     error: str | None
     created_by: str | None = None
     dataset_id: str | None = None
+    owner_id: str | None = None
 
 
 class BuildIndex:
@@ -113,7 +118,8 @@ class BuildIndex:
                         spec_digest TEXT,
                         error TEXT,
                         created_by TEXT,
-                        dataset_id TEXT
+                        dataset_id TEXT,
+                        owner_id TEXT
                     )
                     """
                 )
@@ -154,6 +160,7 @@ class BuildIndex:
         error: str | None = None,
         created_by: str | None = None,
         dataset_id: str | None = None,
+        owner_id: str | None = None,
     ) -> None:
         """빌드 엔트리를 삽입 또는 대체한다.
 
@@ -167,6 +174,8 @@ class BuildIndex:
             created_by: 빌드를 요청한 주체 라벨 (선택, #388)
             dataset_id: BuildSpec.dataset_id (선택, #488). snapshot이 없는 legacy
                 run은 None — dataset_id를 추측해 채우지 않는다.
+            owner_id: canonical stable owner identity (선택, #505). manifest.json에
+                이 필드가 없는 legacy run은 None.
         """
         try:
             with self._transaction():
@@ -174,8 +183,8 @@ class BuildIndex:
                     """
                     INSERT OR REPLACE INTO builds
                     (run_id, status, started_at, finished_at, spec_digest, error, created_by,
-                     dataset_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                     dataset_id, owner_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         run_id,
@@ -186,6 +195,7 @@ class BuildIndex:
                         error,
                         created_by,
                         dataset_id,
+                        owner_id,
                     ),
                 )
         except Exception:
@@ -203,7 +213,7 @@ class BuildIndex:
         """
         sql = """
             SELECT run_id, status, started_at, finished_at, spec_digest, error, created_by,
-                   dataset_id
+                   dataset_id, owner_id
             FROM builds
             ORDER BY finished_at DESC
         """
@@ -221,6 +231,7 @@ class BuildIndex:
                 error=row[5],
                 created_by=row[6],
                 dataset_id=row[7],
+                owner_id=row[8],
             )
             for row in cur
         ]
@@ -238,7 +249,7 @@ class BuildIndex:
         """
         sql = """
             SELECT run_id, status, started_at, finished_at, spec_digest, error, created_by,
-                   dataset_id
+                   dataset_id, owner_id
             FROM builds
             WHERE dataset_id = ?
             ORDER BY finished_at DESC
@@ -257,6 +268,7 @@ class BuildIndex:
                 error=row[5],
                 created_by=row[6],
                 dataset_id=row[7],
+                owner_id=row[8],
             )
             for row in cur
         ]
@@ -273,7 +285,7 @@ class BuildIndex:
         cur = self._conn.execute(
             """
             SELECT run_id, status, started_at, finished_at, spec_digest, error, created_by,
-                   dataset_id
+                   dataset_id, owner_id
             FROM builds
             WHERE run_id = ?
             """,
@@ -291,6 +303,7 @@ class BuildIndex:
             error=row[5],
             created_by=row[6],
             dataset_id=row[7],
+            owner_id=row[8],
         )
 
     def delete(self, run_id: str) -> None:
@@ -395,6 +408,7 @@ def rebuild_index(output_root: Path) -> int:
                 spec_digest=spec_digest,
                 created_by=manifest.get("created_by"),
                 dataset_id=dataset_id,
+                owner_id=manifest.get("owner_id"),
             )
             count += 1
     finally:

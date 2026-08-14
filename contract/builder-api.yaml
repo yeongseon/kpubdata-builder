@@ -1404,6 +1404,10 @@ components:
           type: [string, "null"]
         created_by:
           type: [string, "null"]
+          description: >-
+            빌드를 요청한 principal의 display/legacy 라벨(#388). 사람이 읽는
+            표시용이며, ownership 판정에는 owner_id가 없는 legacy run에 한해
+            하위 호환 폴백으로만 쓰인다.
         quality_results:
           type: object
           description: >-

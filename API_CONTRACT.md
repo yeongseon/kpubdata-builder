@@ -162,6 +162,31 @@ v0.4 Builder service는 동기식 실행 모델을 유지합니다.
 - query는 HTTP worker pool과 별도인 bounded capacity를 사용합니다. Query timeout은 child
   process를 실제 종료하며 429/504 오류는 안정적인 `code`로 구분됩니다.
 
+### Stable Owner Identity (#505)
+
+- display identity(사람이 읽는 라벨)와 persistent resource ownership identity를 분리합니다.
+  `manifest.json`의 `created_by`는 기존(#388) display/legacy 라벨 그대로 유지되며, 신규
+  `owner_id`(additive)가 ownership 판정에 쓰이는 canonical stable identity입니다.
+- `owner_id`는 principal 종류별로 domain-separated SHA-256 해시입니다. OIDC는
+  `sha256(kind + "\0" + issuer + "\0" + subject)`로 issuer/subject 전체(트렁케이션 없이)를
+  해시해 사용합니다 — 이메일/표시 이름이 바뀌어도 값이 바뀌지 않고, subject 앞부분이
+  우연히 겹치는 다른 사용자와도 절대 같아지지 않습니다. raw `sub`/이메일 등 민감한
+  claim은 owner_id에도, 로그에도 직접 남기지 않습니다.
+- ownership 판정(`_check_ownership`, `/query`, dataset/quality/stage 목록)은 레코드와
+  principal 양쪽에 `owner_id`가 있으면 이를 우선 비교합니다. 어느 한쪽이라도 없으면(예:
+  #505 이전에 생성된 legacy run) 기존 `created_by`/label 비교로 폴백합니다 — 기존 리소스가
+  즉시 접근 불가가 되지 않습니다. `owner_id`도 `created_by`도 없는 레코드는 "누구나 접근
+  가능"으로 취급되지 않고 거부됩니다(fail-closed).
+- `owner_id`는 내부 ownership 판정 전용입니다. 디스크의 persisted `manifest.json`과
+  파생 `BuildIndex`에는 저장하지만 `/builds` 목록과
+  `GET /builds/{run_id}/manifest`를 포함한 HTTP 응답에서는 제거합니다. 따라서 OpenAPI
+  `BuildManifest`의 공개 property가 아니며 wire 계약과 API 계약 버전은 바뀌지 않습니다.
+- subject prefix 충돌 방지는 `owner_id`가 기록되는 #505 이후 신규 resource에 적용됩니다.
+  `owner_id`가 없는 pre-#505 legacy resource는 호환성을 위해 기존 `created_by` 라벨로
+  폴백하므로, 이미 저장된 truncated subject prefix 충돌을 소급해서 해소할 수 없습니다.
+- 특정 신규 IdP 채택이나 email/password 로그인은 이 절의 범위가 아닙니다 — 향후 IdP
+  결정(#515)과 무관하게 stable owner identity 계산 방식이 먼저 확정된 것입니다.
+
 ## 4. 인증과 CORS
 
 브라우저 클라이언트(Studio 등)와의 연동을 위해 CORS는 default-deny입니다.

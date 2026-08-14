@@ -17,6 +17,8 @@ from kpubdata_builder.service.auth import (
     AuthError,
     Principal,
     authenticate,
+    compute_owner_id,
+    principal_owns,
     validate_oidc_config,
 )
 
@@ -386,3 +388,168 @@ def test_pyjwt_supports_issuer_list() -> None:
     assert (major, minor) >= (2, 9), (
         f"pyjwt {jwt.__version__} < 2.9 — issuer list 미지원, auth.py 가 깨짐 (#434)"
     )
+
+
+class TestStableOwnerId:
+    """canonical owner_id 계산 (#505).
+
+    display identity(identifier/label)와 persistent ownership identity(owner_id)를
+    분리하고, OIDC subject 트렁케이션/concatenation collision이 owner_id에는
+    영향을 주지 않음을 검증한다.
+    """
+
+    def test_same_issuer_same_subject_same_owner_id(self, oidc_env: bytes) -> None:
+        token = _make_token(oidc_env)
+        r1 = authenticate(bearer_token=f"Bearer {token}")
+        r2 = authenticate(bearer_token=f"Bearer {token}")
+        assert isinstance(r1, Principal)
+        assert isinstance(r2, Principal)
+        assert r1.owner_id is not None
+        assert r1.owner_id == r2.owner_id
+
+    def test_different_issuer_same_subject_different_owner_id(
+        self, monkeypatch: pytest.MonkeyPatch, rsa_keypair: tuple[bytes, object]
+    ) -> None:
+        """동일 subject라도 issuer가 다르면 owner_id는 달라야 한다 (#505 완료 조건)."""
+        private_pem, public_key = rsa_keypair
+        other_issuer = "https://other-issuer.example.com"
+        monkeypatch.setenv("OIDC_ISSUER", f"{_ISSUER},{other_issuer}")
+        monkeypatch.setenv("OIDC_AUDIENCE", _AUDIENCE)
+        monkeypatch.setenv("OIDC_JWKS_URL", "http://localhost:0/jwks.json")
+        import kpubdata_builder.service.auth as auth_module
+
+        monkeypatch.setattr(auth_module, "_get_jwks_client", lambda: _FakeJWKSClient(public_key))
+
+        token_a = _make_token(private_pem, iss=_ISSUER)
+        token_b = _make_token(private_pem, iss=other_issuer)
+        ra = authenticate(bearer_token=f"Bearer {token_a}")
+        rb = authenticate(bearer_token=f"Bearer {token_b}")
+        assert isinstance(ra, Principal)
+        assert isinstance(rb, Principal)
+        # 동일 subject → 표시용 identifier(트렁케이션)는 같지만
+        assert ra.identifier == rb.identifier
+        # owner_id는 issuer가 다르므로 반드시 달라야 한다.
+        assert ra.owner_id != rb.owner_id
+
+    def test_same_issuer_different_subject_different_owner_id(self, oidc_env: bytes) -> None:
+        token_a = _make_token(oidc_env, sub="user-aaaaaaaaaa")
+        token_b = _make_token(oidc_env, sub="user-bbbbbbbbbb")
+        ra = authenticate(bearer_token=f"Bearer {token_a}")
+        rb = authenticate(bearer_token=f"Bearer {token_b}")
+        assert isinstance(ra, Principal)
+        assert isinstance(rb, Principal)
+        assert ra.owner_id != rb.owner_id
+
+    def test_concatenation_collision_prevented(
+        self, monkeypatch: pytest.MonkeyPatch, rsa_keypair: tuple[bytes, object]
+    ) -> None:
+        """issuer="ab"+subject="c" 와 issuer="a"+subject="bc" 는 구분자 없이
+        이어붙이면 같은 문자열이 되지만, ``\\0`` 구분자 덕분에 owner_id가
+        달라야 한다 (#505: prefix/concatenation collision 불가)."""
+        private_pem, public_key = rsa_keypair
+        monkeypatch.setenv("OIDC_ISSUER", "ab,a")
+        monkeypatch.setenv("OIDC_AUDIENCE", _AUDIENCE)
+        monkeypatch.setenv("OIDC_JWKS_URL", "http://localhost:0/jwks.json")
+        import kpubdata_builder.service.auth as auth_module
+
+        monkeypatch.setattr(auth_module, "_get_jwks_client", lambda: _FakeJWKSClient(public_key))
+
+        token1 = _make_token(private_pem, iss="ab", sub="c", aud=_AUDIENCE)
+        token2 = _make_token(private_pem, iss="a", sub="bc", aud=_AUDIENCE)
+        r1 = authenticate(bearer_token=f"Bearer {token1}")
+        r2 = authenticate(bearer_token=f"Bearer {token2}")
+        assert isinstance(r1, Principal)
+        assert isinstance(r2, Principal)
+        assert r1.owner_id != r2.owner_id
+
+    def test_owner_id_does_not_contain_raw_subject_or_email(self, oidc_env: bytes) -> None:
+        """owner_id/로그에 raw claim을 직접 노출하지 않는다 (#505)."""
+        token = _make_token(oidc_env, sub="super-secret-subject-value", email="victim@example.com")
+        principal = authenticate(bearer_token=f"Bearer {token}")
+        assert isinstance(principal, Principal)
+        assert principal.owner_id is not None
+        assert "super-secret-subject-value" not in principal.owner_id
+        assert "victim@example.com" not in principal.owner_id
+        # 표시용 identifier는 sub 앞 8자만 담아 로그 노출을 최소화한다 (기존 동작 불변).
+        assert principal.identifier == "super-se"
+
+    def test_display_identifier_change_does_not_affect_owner_id_matching(
+        self, oidc_env: bytes
+    ) -> None:
+        """display 라벨(identifier)이 바뀌어도(예: 향후 프로필 이름 갱신) 동일
+        owner_id를 가진 principal은 여전히 같은 owner로 판정되어야 한다 (#505)."""
+        token = _make_token(oidc_env)
+        principal = authenticate(bearer_token=f"Bearer {token}")
+        assert isinstance(principal, Principal)
+        renamed = Principal(
+            kind="oidc", identifier="totally-different-label", owner_id=principal.owner_id
+        )
+        assert principal_owns(created_by=None, owner_id=principal.owner_id, principal=renamed)
+
+    def test_empty_subject_rejected(self, oidc_env: bytes) -> None:
+        """빈 sub claim은 거부한다 — 여러 토큰이 같은 (issuer, "") owner_id로
+        수렴해 ownership이 섞이는 것을 막는다 (#505, fail-closed)."""
+        token = _make_token(oidc_env, sub="")
+        result = authenticate(bearer_token=f"Bearer {token}")
+        assert isinstance(result, AuthError)
+
+    def test_service_owner_id_stable_across_calls(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("KPUBDATA_BUILDER_API_KEY", "secret")
+        r1 = authenticate(api_key="secret")
+        r2 = authenticate(api_key="secret")
+        assert isinstance(r1, Principal)
+        assert isinstance(r2, Principal)
+        assert r1.owner_id is not None
+        assert r1.owner_id == r2.owner_id
+
+    def test_dev_owner_id_stable_and_namespaced(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("KPUBDATA_BUILDER_DEV_MODE", "true")
+        r1 = authenticate()
+        r2 = authenticate()
+        assert isinstance(r1, Principal)
+        assert isinstance(r2, Principal)
+        assert r1.owner_id is not None
+        assert r1.owner_id == r2.owner_id
+        assert r1.owner_id.startswith("dev:")
+
+    def test_cross_kind_owner_id_never_collides(self) -> None:
+        """dev/service/oidc owner_id는 동일 material이어도 kind로 domain
+        separation되어 절대 같아지지 않는다 (#505)."""
+        dev_id = compute_owner_id("dev", "local")
+        service_id = compute_owner_id("service", "local")
+        oidc_id = compute_owner_id("oidc", "local")
+        assert len({dev_id, service_id, oidc_id}) == 3
+
+
+class TestPrincipalOwns:
+    """principal_owns() — 모든 ownership consumer가 공유하는 단일 canonical 판정 (#505)."""
+
+    def test_matches_by_owner_id_when_both_present(self) -> None:
+        principal = Principal(kind="oidc", identifier="a", owner_id="oidc:deadbeef")
+        assert principal_owns(
+            created_by="oidc:mismatched-label", owner_id="oidc:deadbeef", principal=principal
+        )
+
+    def test_mismatched_owner_id_denied_even_if_label_matches(self) -> None:
+        """label이 같아도(트렁케이션 충돌 등) owner_id가 다르면 거부한다."""
+        principal = Principal(kind="oidc", identifier="a", owner_id="oidc:deadbeef")
+        assert not principal_owns(created_by="oidc:a", owner_id="oidc:other", principal=principal)
+
+    def test_legacy_record_falls_back_to_label(self) -> None:
+        """owner_id가 없는(#505 이전) 레코드는 created_by/label로 폴백한다."""
+        principal = Principal(kind="oidc", identifier="a", owner_id="oidc:deadbeef")
+        assert principal_owns(created_by="oidc:a", owner_id=None, principal=principal)
+
+    def test_legacy_principal_falls_back_to_label(self) -> None:
+        """owner_id가 없는 principal(예: 구성 경로)도 label 폴백으로 동작한다."""
+        principal = Principal(kind="oidc", identifier="a")
+        assert principal_owns(created_by="oidc:a", owner_id="oidc:deadbeef", principal=principal)
+
+    def test_ambiguous_record_with_neither_field_fails_closed(self) -> None:
+        """owner_id도 created_by도 없는 레코드는 "누구나 접근 가능"이 아니라 거부한다."""
+        principal = Principal(kind="oidc", identifier="a", owner_id="oidc:deadbeef")
+        assert not principal_owns(created_by=None, owner_id=None, principal=principal)
+
+    def test_non_owner_denied_via_legacy_path(self) -> None:
+        principal = Principal(kind="oidc", identifier="b", owner_id="oidc:deadbeef")
+        assert not principal_owns(created_by="oidc:a", owner_id=None, principal=principal)

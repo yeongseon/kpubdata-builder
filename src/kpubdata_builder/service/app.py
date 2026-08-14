@@ -49,7 +49,7 @@ from ..tabular import DEFAULT_PREVIEW_LIMIT
 from . import datasets as datasets_service
 from . import quality as quality_service
 from . import stages as stages_service
-from .auth import AuthError, Principal, authenticate
+from .auth import AuthError, Principal, authenticate, principal_owns
 
 logger = logging.getLogger(__name__)
 
@@ -82,33 +82,38 @@ def _enforce_ownership() -> bool:
     return os.environ.get(_OWNERSHIP_ENV, "").lower() in ("true", "1")
 
 
-def _read_manifest_created_by(service: BuilderService, run_id: str) -> str | None:
-    """manifest.json에서 created_by를 읽는다 (#389). 없거나 읽을 수 없으면 None."""
+def _read_manifest_ownership(service: BuilderService, run_id: str) -> tuple[str | None, str | None]:
+    """manifest.json에서 (created_by, owner_id)를 읽는다 (#389, #505).
+
+    없거나 읽을 수 없으면 (None, None). ``owner_id``는 #505 이전 manifest에는
+    없는 additive 필드다 — legacy manifest는 자연히 (created_by, None)이 된다.
+    """
     manifest_path = service._output_root / run_id / "manifest.json"
     if not manifest_path.exists():
-        return None
+        return None, None
     try:
         data = json.loads(manifest_path.read_text(encoding="utf-8"))
-        return cast(str | None, data.get("created_by"))
+        return cast(str | None, data.get("created_by")), cast(str | None, data.get("owner_id"))
     except Exception:
-        return None
+        return None, None
 
 
 def _check_ownership(
     service: BuilderService, run_id: str, principal: Principal
 ) -> ServiceResponse | None:
-    """소유권을 검사한다 (#389). 통과 시 None, 거부 시 403 ServiceResponse.
+    """소유권을 검사한다 (#389, #505). 통과 시 None, 거부 시 403 ServiceResponse.
 
     - ENFORCE_OWNERSHIP off → 항상 None (통과).
     - dev/service principal → 모든 run 접근 가능 (관리자 권한).
-    - oidc principal → created_by가 본인과 일치해야 함. NULL이면 거부.
+    - oidc principal → ``principal_owns()``(canonical owner_id 우선, legacy
+      created_by/label 폴백)로 판정. 둘 다 없으면 거부(fail-closed).
     """
     if not _enforce_ownership():
         return None
     if principal.kind in ("dev", "service"):
         return None
-    created_by = _read_manifest_created_by(service, run_id)
-    if created_by is not None and created_by == principal.label:
+    created_by, owner_id = _read_manifest_ownership(service, run_id)
+    if principal_owns(created_by=created_by, owner_id=owner_id, principal=principal):
         return None
     return ServiceResponse(403, {"error": "forbidden: not run owner"})
 
@@ -129,15 +134,34 @@ _BuildListEntry = dict[str, str | None]
 def _apply_ownership(
     entries: list[_BuildListEntry], principal: Principal | None
 ) -> list[_BuildListEntry]:
-    """list_builds 응답에서 본인 소유 run만 남긴다 (#433).
+    """list_builds 응답에서 본인 소유 run만 남긴다 (#433, #505).
 
     ENFORCE_OWNERSHIP+oidc principal일 때만 필터링. dev/service principal과
     principal=None은 통과 (관리자 권한 + 하위 호환). 인덱스 분기와 파일시스템
     폴백 양쪽에서 공통으로 적용해 폴백 경로가 필터를 우회하지 않게 한다.
+
+    각 entry는 판정용으로 내부 전용 "owner_id" 키를 담고 있어야 한다 — 응답
+    직전에 ``_strip_internal_fields``로 제거되므로 wire 응답 shape는 바뀌지
+    않는다.
     """
     if not (_enforce_ownership() and principal and principal.kind == "oidc"):
         return entries
-    return [e for e in entries if e.get("created_by") == principal.label]
+    return [
+        e
+        for e in entries
+        if principal_owns(
+            created_by=e.get("created_by"), owner_id=e.get("owner_id"), principal=principal
+        )
+    ]
+
+
+def _strip_internal_fields(entries: list[_BuildListEntry]) -> list[_BuildListEntry]:
+    """ownership 판정에만 쓰인 내부 전용 필드를 응답 직전에 제거한다 (#505).
+
+    ``owner_id``는 canonical hash일 뿐 클라이언트에 의미가 없고, 이를 노출하면
+    ``/builds`` 응답 wire shape가 바뀐다 — 계약 변경 없이 내부적으로만 쓴다.
+    """
+    return [{k: v for k, v in e.items() if k != "owner_id"} for e in entries]
 
 
 # Builder API 계약 버전. contract/builder-api.yaml의 info.version과 일치해야 하며
@@ -373,7 +397,12 @@ class BuilderService:
         return ServiceResponse(200, {"dataset_id": spec_or_error.dataset_id, "previews": previews})
 
     def build(
-        self, spec_yaml: str, *, run_id: str | None = None, created_by: str | None = None
+        self,
+        spec_yaml: str,
+        *,
+        run_id: str | None = None,
+        created_by: str | None = None,
+        owner_id: str | None = None,
     ) -> ServiceResponse:
         """파이프라인을 실행하고 결과를 반환한다.
 
@@ -382,6 +411,10 @@ class BuilderService:
             - 하나라도 소스 fetch/stage가 실패: 502 (upstream 소스 의존 실패).
               매니페스트는 partial 정책으로 남기 때문에 body에 outcomes와 manifest가
               실린다.
+
+        ``owner_id``는 canonical stable owner identity다(#505). ``created_by``는
+        기존(#388) display/legacy 라벨로 계속 함께 기록된다 — wire 계약은 바뀌지
+        않는다.
         """
         spec_or_error = self._load_validated(spec_yaml)
         if isinstance(spec_or_error, ServiceResponse):
@@ -395,6 +428,7 @@ class BuilderService:
                 output_root=self._output_root,
                 run_id=run_id,
                 created_by=created_by,
+                owner_id=owner_id,
             )
         finally:
             _close_request_client(client)
@@ -436,6 +470,7 @@ class BuilderService:
                 finished_at=finished_at,
                 spec_digest=result.spec_digest,
                 created_by=manifest_data.get("created_by"),
+                owner_id=manifest_data.get("owner_id"),
                 # dataset_id는 이 run이 실제로 실행한 canonical spec에서 곧바로 얻는다
                 # (snapshot과 동일한 값) — 파생 검색값일 뿐이므로 별도로 추측하지 않는다 (#488).
                 dataset_id=spec_or_error.dataset_id,
@@ -464,6 +499,12 @@ class BuilderService:
         return ServiceResponse(200, {"run_id": run_id, "files": list(files)})
 
     def manifest(self, run_id: str) -> ServiceResponse:
+        """persisted manifest를 읽되 내부 ownership 필드는 wire에서 제거한다.
+
+        ``owner_id``는 디스크의 ``manifest.json``과 BuildIndex에만 저장되는 내부
+        식별자다(#505). OpenAPI ``BuildManifest``는 실제 HTTP 응답의 SSOT이므로
+        이 메서드에서 명시적으로 제거해 공개 API 필드가 되지 않게 한다.
+        """
         try:
             validate_path_segment(run_id, field_name="run_id")
         except ValueError as exc:
@@ -484,6 +525,7 @@ class BuilderService:
             return ServiceResponse(500, {"error": f"failed to read manifest: {exc}"})
         if not isinstance(manifest, dict):
             return ServiceResponse(500, {"error": "invalid manifest: expected object"})
+        manifest.pop("owner_id", None)
         return ServiceResponse(200, cast(dict[str, JsonValue], manifest))
 
     def spec(self, run_id: str) -> ServiceResponse:
@@ -584,13 +626,12 @@ class BuilderService:
                         "started_at": entry.started_at,
                         "finished_at": entry.finished_at,
                         "created_by": entry.created_by,
+                        "owner_id": entry.owner_id,
                     }
                     for entry in entries
                 ]
-                return ServiceResponse(
-                    200,
-                    {"builds": cast(list[JsonValue], _apply_ownership(index_builds, principal))},
-                )
+                filtered = _strip_internal_fields(_apply_ownership(index_builds, principal))
+                return ServiceResponse(200, {"builds": cast(list[JsonValue], filtered)})
         except Exception:
             # 인덱스 조회 실패. ENFORCE_OWNERSHIP+oidc면 타인 run이 폴백으로
             # 새어나갈 수 있으므로 fail-closed로 빈 배열을 반환한다 (#433).
@@ -628,12 +669,11 @@ class BuilderService:
                     "started_at": manifest.get("started_at"),
                     "finished_at": manifest.get("finished_at"),
                     "created_by": manifest.get("created_by"),
+                    "owner_id": manifest.get("owner_id"),
                 }
             )
-        return ServiceResponse(
-            200,
-            {"builds": cast(list[JsonValue], _apply_ownership(fs_builds, principal))},
-        )
+        filtered = _strip_internal_fields(_apply_ownership(fs_builds, principal))
+        return ServiceResponse(200, {"builds": cast(list[JsonValue], filtered)})
 
     def _dataset_records(self, principal: Principal | None) -> list[datasets_service.RunRecord]:
         """dataset_id가 있는 접근 가능한 모든 run을 얻는다 (인덱스 우선, 파일시스템 폴백).
@@ -1053,7 +1093,9 @@ def dispatch(
             except ValueError as exc:
                 return ServiceResponse(400, {"error": str(exc)})
             run_id = run_id_value
-        return service.build(spec, run_id=run_id, created_by=principal.label)
+        return service.build(
+            spec, run_id=run_id, created_by=principal.label, owner_id=principal.owner_id
+        )
 
     if method == "GET" and path.startswith("/builds/") and path.endswith("/manifest"):
         rest = path[len("/builds/") :]

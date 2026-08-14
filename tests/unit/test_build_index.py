@@ -262,6 +262,53 @@ class TestBuildIndexDatasetId:
         assert builds[0].dataset_id == "dataset.sample"
 
 
+class TestBuildIndexOwnerId:
+    """owner_id 파생 컬럼 (#505). 정본은 manifest.json — 이 컬럼은 파생 검색 값."""
+
+    def test_insert_and_retrieve_owner_id(self, tmp_path: Path) -> None:
+        index = BuildIndex(tmp_path)
+        index.insert_or_replace(
+            run_id="run1",
+            status="ok",
+            started_at="2025-01-01T10:00:00Z",
+            finished_at="2025-01-01T10:05:00Z",
+            created_by="oidc:userA",
+            owner_id="oidc:deadbeef",
+        )
+        entry = index.get("run1")
+        assert entry is not None
+        assert entry.owner_id == "oidc:deadbeef"
+        assert entry.created_by == "oidc:userA"
+
+    def test_owner_id_defaults_to_none(self, tmp_path: Path) -> None:
+        """owner_id 미지정 삽입(#505 이전 호출부와 동일한 형태)은 None으로 남는다."""
+        index = BuildIndex(tmp_path)
+        index.insert_or_replace(
+            run_id="legacy",
+            status="ok",
+            started_at="2025-01-01T10:00:00Z",
+            finished_at="2025-01-01T10:05:00Z",
+            created_by="oidc:legacyUser",
+        )
+        entry = index.get("legacy")
+        assert entry is not None
+        assert entry.owner_id is None
+        assert entry.created_by == "oidc:legacyUser"
+
+    def test_list_builds_and_list_by_dataset_include_owner_id(self, tmp_path: Path) -> None:
+        index = BuildIndex(tmp_path)
+        index.insert_or_replace(
+            run_id="run1",
+            status="ok",
+            started_at="2025-01-01T10:00:00Z",
+            finished_at="2025-01-01T10:05:00Z",
+            dataset_id="dataset.sample",
+            owner_id="oidc:deadbeef",
+        )
+        assert index.list_builds()[0].owner_id == "oidc:deadbeef"
+        assert index.list_by_dataset("dataset.sample")[0].owner_id == "oidc:deadbeef"
+
+
 class TestRebuildIndex:
     """rebuild_index 함수 테스트."""
 
@@ -314,6 +361,44 @@ class TestRebuildIndex:
         # run_id로 정렬 확인 (finished_at DESC)
         assert builds[0].run_id == "run2"
         assert builds[1].run_id == "run1"
+
+    def test_rebuild_reads_owner_id_from_manifest(self, tmp_path: Path) -> None:
+        """rebuild_index는 manifest.json의 owner_id를 그대로 재인덱싱한다 (#505).
+
+        legacy manifest(owner_id 필드 없음)는 None으로 재구축되어야 한다.
+        """
+        (tmp_path / "run1").mkdir()
+        (tmp_path / "run1" / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "run_id": "run1",
+                    "status": "ok",
+                    "started_at": "2025-01-01T10:00:00Z",
+                    "finished_at": "2025-01-01T10:05:00Z",
+                    "created_by": "oidc:userA",
+                    "owner_id": "oidc:deadbeef",
+                }
+            )
+        )
+        (tmp_path / "run2-legacy").mkdir()
+        (tmp_path / "run2-legacy" / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "run_id": "run2-legacy",
+                    "status": "ok",
+                    "started_at": "2025-01-01T09:00:00Z",
+                    "finished_at": "2025-01-01T09:05:00Z",
+                    "created_by": "oidc:legacyUser",
+                }
+            )
+        )
+
+        count = rebuild_index(tmp_path)
+        assert count == 2
+
+        index = BuildIndex(tmp_path)
+        assert index.get("run1").owner_id == "oidc:deadbeef"  # type: ignore[union-attr]
+        assert index.get("run2-legacy").owner_id is None  # type: ignore[union-attr]
 
     def test_rebuild_indexes_digest_from_snapshot_bytes(self, tmp_path: Path) -> None:
         run_dir = tmp_path / "run1"
