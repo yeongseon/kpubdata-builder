@@ -224,9 +224,7 @@ def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
                 else:
                     # Same-origin 요청이면 특정 오리진 제한 없이 허용한다.
                     self.send_header("Access-Control-Allow-Origin", "*")
-                self.send_header(
-                    "Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS"
-                )
+                self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
                 self.send_header("Access-Control-Allow-Headers", _CORS_ALLOWED_HEADERS)
                 self.send_header("Access-Control-Max-Age", "86400")
 

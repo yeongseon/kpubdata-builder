@@ -156,9 +156,7 @@ def test_credential_get_contract_exposes_only_frozen_metadata() -> None:
     """#492 GET credential wire에는 provider/owner_id/raw secret이 없어야 한다."""
     contract = _load_contract()
     operation = contract["paths"]["/providers/{provider}/credential"]["get"]
-    schema_ref = operation["responses"]["200"]["content"]["application/json"]["schema"][
-        "$ref"
-    ]
+    schema_ref = operation["responses"]["200"]["content"]["application/json"]["schema"]["$ref"]
     schema = contract["components"]["schemas"][schema_ref.rsplit("/", 1)[-1]]
 
     assert set(schema["required"]) == {"configured", "masked", "updated_at"}

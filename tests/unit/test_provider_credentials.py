@@ -135,9 +135,7 @@ def test_credential_crud_masks_and_never_returns_raw_secret(
     principal = Principal("oidc", "user-a", "oidc:owner-a")
     secret = "raw-super-secret-value"
 
-    put = service.put_provider_credential(
-        "datago", {"credential": secret}, principal=principal
-    )
+    put = service.put_provider_credential("datago", {"credential": secret}, principal=principal)
     assert put.status_code == 200
     assert put.body["configured"] is True
     assert put.body["masked"] == "********"
@@ -263,9 +261,7 @@ def test_preview_build_test_and_manifest_scrub_raw_secret(
     def leaky_test(client: object, provider: str) -> None:
         raise RuntimeError(f"test rejected {secret}")
 
-    service, _ = _service(
-        tmp_path, repository, factory=_LeakyFactory(), test_operation=leaky_test
-    )
+    service, _ = _service(tmp_path, repository, factory=_LeakyFactory(), test_operation=leaky_test)
     preview = service.preview(_SPEC, principal=principal)
     build = service.build(_SPEC, run_id="scrubbed", principal=principal)
     tested = service.provider_status("datago", principal=principal)
@@ -355,9 +351,7 @@ def test_put_delete_http_routing_and_cors(
             assert "PUT" in methods
             assert "DELETE" in methods
 
-        delete = urllib.request.Request(
-            f"{base}/providers/datago/credential", method="DELETE"
-        )
+        delete = urllib.request.Request(f"{base}/providers/datago/credential", method="DELETE")
         with urllib.request.urlopen(delete, timeout=5) as response:
             assert response.status == 200
     finally:

@@ -475,9 +475,7 @@ class BuilderService:
             },
         )
 
-    def delete_provider_credential(
-        self, provider: str, *, principal: Principal
-    ) -> ServiceResponse:
+    def delete_provider_credential(self, provider: str, *, principal: Principal) -> ServiceResponse:
         """현재 principal의 Provider credential만 삭제한다."""
         known = self._known_provider(provider)
         if isinstance(known, ServiceResponse):
