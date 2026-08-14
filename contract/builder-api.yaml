@@ -1,17 +1,16 @@
 openapi: 3.1.0
 info:
   title: KPubData Builder Service API
-  version: "1.5.0"
+  version: "1.6.0"
   description: >-
     Builder 중심 서비스 계약. BuildSpec 검증, preview, build 실행, artifact 조회,
     계약 버전 조회를 제공한다. CLI와 HTTP service mode(#36)가 동일한 도메인 계약을
     공유한다. 본 문서는 BuilderService(service/app.py)의 dispatch 라우팅과 실제
     wire 형태를 기계 판독용(OpenAPI 3.1) 단일 소스로 고정하며, Studio 같은 소비자가
     타입 클라이언트를 생성하는 기준이 된다. v0.4에서는 동기식 build만 유지하며
-    비동기/publish 엔드포인트는 제외된다(ADR 0002, #226). v1.5.0은 built dataset
-    단위 조회(dataset_id로 여러 run을 grouping)와 Bronze/Silver/Gold stage
-    summary/preview API를 추가한다(#488, additive — 기존 엔드포인트는 변경되지
-    않는다).
+    비동기/publish 엔드포인트는 제외된다(ADR 0002, #226). v1.6.0은 built dataset
+    품질 결과 요약과 run별 quality/schema drift history API를 추가한다(#486,
+    additive — 기존 엔드포인트는 변경되지 않는다).
 servers:
   - url: http://localhost:8000
     description: 로컬 builder 개발 서버
@@ -368,6 +367,42 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DatasetRunsResponse"
+        "400":
+          description: dataset_id가 비어 있거나 limit이 잘못됨
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: 접근 가능한 run이 없는 dataset_id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /datasets/{dataset_id}/quality/history:
+    get:
+      operationId: listDatasetQualityHistory
+      summary: dataset_id의 구조화된 quality/schema drift history 조회 (#486)
+      parameters:
+        - $ref: "#/components/parameters/DatasetId"
+        - name: limit
+          in: query
+          required: false
+          description: "반환할 최대 run 수 (기본값: 50)"
+          schema:
+            type: integer
+            minimum: 1
+            default: 50
+      responses:
+        "200":
+          description: dataset의 quality history (newest first, 타 사용자 run 제외)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DatasetQualityHistoryResponse"
         "400":
           description: dataset_id가 비어 있거나 limit이 잘못됨
           content:
@@ -990,6 +1025,14 @@ components:
           type: object
           additionalProperties:
             type: integer
+        quality_results:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/SourceQualityResult"
+        schema_drift:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/SourceSchemaDrift"
         inputs_fingerprint:
           type: [string, "null"]
         created_by:
@@ -1077,12 +1120,83 @@ components:
           gold:
             $ref: "#/components/schemas/StageStatusValue"
 
+    QualityCheckResult:
+      type: object
+      required: [name, status, observed, threshold, column, message]
+      properties:
+        name:
+          type: string
+        status:
+          type: string
+          enum: [pass, warn]
+        observed:
+          $ref: "#/components/schemas/JsonValue"
+        threshold:
+          $ref: "#/components/schemas/JsonValue"
+        column:
+          type: [string, "null"]
+        message:
+          type: string
+
+    SourceQualityResult:
+      type: object
+      required: [source_key, status, checks]
+      properties:
+        source_key:
+          type: string
+        status:
+          type: string
+          enum: [pass, warn]
+        checks:
+          type: array
+          items:
+            $ref: "#/components/schemas/QualityCheckResult"
+
+    DatasetQualitySummary:
+      type: object
+      required: [status, sources]
+      properties:
+        status:
+          type: string
+          enum: [pass, warn]
+        sources:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/SourceQualityResult"
+
+    SchemaDriftFinding:
+      type: object
+      required: [kind, column, detail]
+      properties:
+        kind:
+          type: string
+        column:
+          type: [string, "null"]
+        detail:
+          type: string
+
+    SourceSchemaDrift:
+      type: object
+      required: [source_key, findings]
+      properties:
+        source_key:
+          type: string
+        findings:
+          type: array
+          items:
+            $ref: "#/components/schemas/SchemaDriftFinding"
+
+    DatasetSchemaDriftMap:
+      type: object
+      additionalProperties:
+        $ref: "#/components/schemas/SourceSchemaDrift"
+
     DatasetSummary:
       type: object
       description: >-
         동일 dataset_id를 공유하는 여러 run을 접근 가능한 latest run 기준으로
-        묶은 built dataset 요약. quality는 #486의 구조화된 품질 게이트가
-        선반영되지 않았으므로 항상 null이다(N/A) — 미평가를 PASS로 표시하지 않는다.
+        묶은 built dataset 요약. latest run manifest에 구조화된 quality 결과가
+        있으면 요약하고, 없는 legacy/미평가 run은 null로 둔다.
       required:
         - dataset_id
         - title
@@ -1124,8 +1238,9 @@ components:
         stages:
           $ref: "#/components/schemas/DatasetStageMap"
         quality:
-          type: "null"
-          description: "#486 선반영 안 함 — 구조화된 quality 결과가 없으므로 항상 null"
+          oneOf:
+            - $ref: "#/components/schemas/DatasetQualitySummary"
+            - type: "null"
 
     DatasetDetailResponse:
       type: object
@@ -1167,7 +1282,9 @@ components:
         stages:
           $ref: "#/components/schemas/DatasetStageMap"
         quality:
-          type: "null"
+          oneOf:
+            - $ref: "#/components/schemas/DatasetQualitySummary"
+            - type: "null"
         run_count:
           type: integer
           description: 이 principal에게 접근 가능한 이 dataset_id의 run 총 개수
@@ -1209,6 +1326,37 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/DatasetRunSummary"
+
+    DatasetQualityHistoryEntry:
+      type: object
+      required: [run_id, status, started_at, finished_at, quality, schema_drift]
+      properties:
+        run_id:
+          type: string
+        status:
+          type: string
+          enum: [ok, failed, cancelled]
+        started_at:
+          type: [string, "null"]
+        finished_at:
+          type: [string, "null"]
+        quality:
+          oneOf:
+            - $ref: "#/components/schemas/DatasetQualitySummary"
+            - type: "null"
+        schema_drift:
+          $ref: "#/components/schemas/DatasetSchemaDriftMap"
+
+    DatasetQualityHistoryResponse:
+      type: object
+      required: [dataset_id, runs]
+      properties:
+        dataset_id:
+          type: string
+        runs:
+          type: array
+          items:
+            $ref: "#/components/schemas/DatasetQualityHistoryEntry"
 
     StageState:
       type: object

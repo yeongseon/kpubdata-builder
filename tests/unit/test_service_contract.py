@@ -49,6 +49,7 @@ _DISPATCH_ROUTES: dict[tuple[str, str], str] = {
     ("/datasets", "GET"): "listDatasets",
     ("/datasets/{dataset_id}", "GET"): "getDataset",
     ("/datasets/{dataset_id}/runs", "GET"): "listDatasetRuns",
+    ("/datasets/{dataset_id}/quality/history", "GET"): "listDatasetQualityHistory",
     ("/builds/{run_id}/stages", "GET"): "listBuildStages",
     ("/builds/{run_id}/stages/{stage}", "GET"): "getBuildStageDetail",
 }
@@ -69,6 +70,7 @@ _REQUIRED_OPERATIONS = [
     ("/datasets", "get"),
     ("/datasets/{dataset_id}", "get"),
     ("/datasets/{dataset_id}/runs", "get"),
+    ("/datasets/{dataset_id}/quality/history", "get"),
     ("/builds/{run_id}/stages", "get"),
     ("/builds/{run_id}/stages/{stage}", "get"),
 ]
@@ -263,6 +265,7 @@ _IMPLEMENTED_OPERATIONS = {
     "listDatasets",
     "getDataset",
     "listDatasetRuns",
+    "listDatasetQualityHistory",
     "listBuildStages",
     "getBuildStageDetail",
 }
@@ -471,6 +474,7 @@ _OPERATION_STATUS_CODES: dict[str, set[int]] = {
     "listDatasets": {200, 400},
     "getDataset": {200, 400, 404},
     "listDatasetRuns": {200, 400, 404},
+    "listDatasetQualityHistory": {200, 400, 404},
     "listBuildStages": {200, 400, 403, 404},
     "getBuildStageDetail": {200, 400, 403, 404},
 }
@@ -861,6 +865,20 @@ class TestResponseConformance:
         resp = dispatch(_conform_service(tmp_path), "GET", "/datasets/nope/runs", None)
         assert resp.status_code == 404
         _assert_conforms(resp, "/datasets/{dataset_id}/runs", "GET")
+
+    def test_dataset_quality_history_200(self, tmp_path: Path) -> None:
+        service = _conform_service(tmp_path)
+        dispatch(
+            service, "POST", "/build", {"spec": _CONFORM_SPEC_YAML, "run_id": "conform-quality"}
+        )
+        resp = dispatch(service, "GET", "/datasets/dataset.conform/quality/history", None)
+        assert resp.status_code == 200
+        _assert_conforms(resp, "/datasets/{dataset_id}/quality/history", "GET")
+
+    def test_dataset_quality_history_404_missing(self, tmp_path: Path) -> None:
+        resp = dispatch(_conform_service(tmp_path), "GET", "/datasets/nope/quality/history", None)
+        assert resp.status_code == 404
+        _assert_conforms(resp, "/datasets/{dataset_id}/quality/history", "GET")
 
     def test_build_stages_200(self, tmp_path: Path) -> None:
         service = _conform_service(tmp_path)
