@@ -340,6 +340,12 @@ class BuilderService:
             kwargs["provider_keys"] = provider_keys
         elif provider_keys:
             raise RuntimeError("client_factory cannot accept principal provider credentials")
+        if provider_keys:
+            if not _factory_accepts_keyword(self._client_factory, "cache"):
+                raise RuntimeError("client_factory cannot disable credential response cache")
+            # kpubdata#263이 해결되기 전에는 credential이 cache key에 포함되지 않는다.
+            # 사용자별 credential을 쓰는 service client는 환경설정과 무관하게 cache를 끈다.
+            kwargs["cache"] = False
         if timeout is not None and _factory_accepts_keyword(self._client_factory, "timeout"):
             kwargs["timeout"] = timeout
         return self._client_factory(**kwargs)
@@ -431,7 +437,6 @@ class BuilderService:
         return ServiceResponse(
             200,
             {
-                "provider": metadata.provider,
                 "configured": metadata.configured,
                 "masked": metadata.masked,
                 "updated_at": metadata.updated_at,

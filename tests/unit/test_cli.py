@@ -6,7 +6,9 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from kpubdata import Client
 
+import kpubdata_builder.cli as cli_module
 from kpubdata_builder import __version__
 from kpubdata_builder.cli import build_parser, main
 from kpubdata_builder.publishers.base import PublishResult
@@ -38,6 +40,23 @@ exports:
 """.strip()
     + "\n"
 )
+
+
+def test_direct_cli_client_keeps_environment_cache_behavior(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """service가 아닌 direct CLI client는 cache override를 강제하지 않는다."""
+    captured: list[dict[str, object]] = []
+
+    def fake_from_env(**overrides: object) -> object:
+        captured.append(overrides)
+        return object()
+
+    monkeypatch.setattr(Client, "from_env", fake_from_env)
+
+    _ = cli_module._create_client()
+
+    assert captured == [{}]
 
 
 def test_build_parser_uses_program_name() -> None:

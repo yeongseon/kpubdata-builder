@@ -156,7 +156,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _create_client(
-    *, provider_keys: dict[str, str] | None = None, timeout: float | None = None
+    *,
+    provider_keys: dict[str, str] | None = None,
+    timeout: float | None = None,
+    cache: bool | None = None,
 ) -> SourceClient:
     """kpubdata 클라이언트를 환경설정으로 생성한다.
 
@@ -170,6 +173,8 @@ def _create_client(
         overrides["provider_keys"] = provider_keys
     if timeout is not None:
         overrides["timeout"] = timeout
+    if cache is not None:
+        overrides["cache"] = cache
     return cast(SourceClient, Client.from_env(**overrides))
 
 

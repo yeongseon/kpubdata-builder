@@ -152,6 +152,19 @@ def test_build_manifest_does_not_publish_internal_owner_id() -> None:
     assert "owner_id" not in manifest["properties"]
 
 
+def test_credential_get_contract_exposes_only_frozen_metadata() -> None:
+    """#492 GET credential wire에는 provider/owner_id/raw secret이 없어야 한다."""
+    contract = _load_contract()
+    operation = contract["paths"]["/providers/{provider}/credential"]["get"]
+    schema_ref = operation["responses"]["200"]["content"]["application/json"]["schema"][
+        "$ref"
+    ]
+    schema = contract["components"]["schemas"][schema_ref.rsplit("/", 1)[-1]]
+
+    assert set(schema["required"]) == {"configured", "masked", "updated_at"}
+    assert set(schema["properties"]) == {"configured", "masked", "updated_at"}
+
+
 def _complete_build_spec_payload() -> dict[str, Any]:
     return {
         "dataset_id": "dataset.contract",

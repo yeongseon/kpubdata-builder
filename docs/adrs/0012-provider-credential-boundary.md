@@ -24,9 +24,11 @@ Credential 해석 우선순위는 다음으로 고정한다.
 3. not configured
 
 Preview, Build, Provider Test는 같은 resolver를 사용한다. 요청마다 새 kpubdata
-Client를 만들고 닫으며 credential-sensitive Client나 response cache를 전역 공유하지
-않는다. Builder는 kpubdata provider 로직을 복제하지 않고 공개 `provider_keys`, runtime
-catalog, 구조화된 예외만 사용한다.
+Client를 만들고 닫는다. 또한 `KPUBDATA_CACHE=1` 여부와 무관하게 principal credential을
+사용하는 service Client에는 `cache=False`를 명시한다. kpubdata#263이 해결되기 전에는
+credential이 response cache key에 포함되지 않으므로, credential-sensitive response
+cache를 사용자 사이에서 재사용하지 않는 것이 필수다. Builder는 kpubdata provider
+로직을 복제하지 않고 공개 `provider_keys`, runtime catalog, 구조화된 예외만 사용한다.
 
 API는 raw credential과 `owner_id`를 반환하지 않는다. credential GET/PUT 응답은
 configured, 고정 masked 값, updated_at 등 metadata만 포함한다. Provider failure는

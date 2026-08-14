@@ -144,7 +144,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ProviderCredentialMetadata"
+                $ref: "#/components/schemas/ProviderCredentialGetResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -1223,6 +1223,21 @@ components:
       properties:
         provider:
           type: string
+        configured:
+          type: boolean
+        masked:
+          type: [string, "null"]
+          description: 설정 시 고정 마스크. credential 일부도 노출하지 않는다.
+        updated_at:
+          type: [string, "null"]
+          format: date-time
+
+    ProviderCredentialGetResponse:
+      type: object
+      required: [configured, masked, updated_at]
+      additionalProperties: false
+      description: GET credential 응답. provider, owner_id, credential 원문을 포함하지 않는다.
+      properties:
         configured:
           type: boolean
         masked:

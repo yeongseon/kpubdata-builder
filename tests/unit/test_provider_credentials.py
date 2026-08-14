@@ -84,13 +84,17 @@ class _Client:
 
 class _Factory:
     def __init__(self) -> None:
-        self.calls: list[tuple[dict[str, str], float | None, _Client]] = []
+        self.calls: list[tuple[dict[str, str], float | None, bool | None, _Client]] = []
 
     def __call__(
-        self, *, provider_keys: dict[str, str] | None = None, timeout: float | None = None
+        self,
+        *,
+        provider_keys: dict[str, str] | None = None,
+        timeout: float | None = None,
+        cache: bool | None = None,
     ) -> _Client:
         client = _Client(provider_keys or {})
-        self.calls.append((dict(provider_keys or {}), timeout, client))
+        self.calls.append((dict(provider_keys or {}), timeout, cache, client))
         return client
 
 
@@ -141,6 +145,7 @@ def test_credential_crud_masks_and_never_returns_raw_secret(
 
     get = service.provider_credential("datago", principal=principal)
     assert get.status_code == 200
+    assert set(get.body) == {"configured", "masked", "updated_at"}
     assert secret not in json.dumps(get.body)
     assert "owner_id" not in get.body
 
@@ -174,6 +179,7 @@ def test_user_credential_precedes_server_default_and_delete_falls_back(
     repository: SQLiteCredentialRepository,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("KPUBDATA_CACHE", "1")
     monkeypatch.setenv("KPUBDATA_DATAGO_API_KEY", "server-default")
     principal = Principal("oidc", "user-a", "oidc:owner-a")
     repository.put(cast(str, principal.owner_id), "datago", "user-secret")
@@ -182,11 +188,19 @@ def test_user_credential_precedes_server_default_and_delete_falls_back(
     preview = service.preview(_SPEC, principal=principal)
     assert preview.status_code == 200
     assert factory.calls[-1][0] == {"datago": "user-secret"}
+    assert factory.calls[-1][2] is False
+
+    repository.put(cast(str, principal.owner_id), "datago", "updated-user-secret")
+    preview_after_update = service.preview(_SPEC, principal=principal)
+    assert preview_after_update.status_code == 200
+    assert factory.calls[-1][0] == {"datago": "updated-user-secret"}
+    assert factory.calls[-1][2] is False
 
     _ = service.delete_provider_credential("datago", principal=principal)
     preview_after_delete = service.preview(_SPEC, principal=principal)
     assert preview_after_delete.status_code == 200
     assert factory.calls[-1][0] == {"datago": "server-default"}
+    assert factory.calls[-1][2] is False
 
 
 def test_preview_build_and_test_share_resolution_without_client_cache(
@@ -208,7 +222,7 @@ def test_preview_build_and_test_share_resolution_without_client_cache(
     assert service.provider_status("datago", principal=principal_a).status_code == 200
     assert service.preview(_SPEC, principal=principal_b).status_code == 200
 
-    credential_calls = [keys for keys, _, _ in factory.calls if keys]
+    credential_calls = [keys for keys, _, cache, _ in factory.calls if keys and cache is False]
     assert credential_calls[:3] == [
         {"datago": "credential-a"},
         {"datago": "credential-a"},
@@ -216,7 +230,7 @@ def test_preview_build_and_test_share_resolution_without_client_cache(
     ]
     assert credential_calls[-1] == {"datago": "credential-b"}
     assert seen_by_test == [{"datago": "credential-a"}]
-    assert len({id(client) for _, _, client in factory.calls}) == len(factory.calls)
+    assert len({id(client) for _, _, _, client in factory.calls}) == len(factory.calls)
 
 
 def test_preview_build_test_and_manifest_scrub_raw_secret(
@@ -240,9 +254,10 @@ def test_preview_build_test_and_manifest_scrub_raw_secret(
             *,
             provider_keys: dict[str, str] | None = None,
             timeout: float | None = None,
+            cache: bool | None = None,
         ) -> _Client:
             client = _LeakyClient(provider_keys or {})
-            self.calls.append((dict(provider_keys or {}), timeout, client))
+            self.calls.append((dict(provider_keys or {}), timeout, cache, client))
             return client
 
     def leaky_test(client: object, provider: str) -> None:
@@ -301,7 +316,7 @@ def test_not_configured_status_does_not_create_credential_client(
 
     assert response.body["status"] == "not_configured"
     assert response.body["configured"] is False
-    assert all(not keys for keys, _, _ in factory.calls)
+    assert all(not keys for keys, _, _, _ in factory.calls)
 
 
 def test_put_delete_http_routing_and_cors(
