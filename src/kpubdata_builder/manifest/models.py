@@ -14,6 +14,7 @@ from datetime import datetime
 
 from .environment import BuildEnvironment
 from .provenance import SourceProvenance
+from .quality import SourceQualityResult, SourceSchemaDrift
 from .schema_summary import SchemaSummary
 
 # 매니페스트 직렬화 형식의 버전. 형식이 호환 불가하게 바뀌면 major를 올려, 소비자가
@@ -55,6 +56,8 @@ class BuildManifest:
     build_environment: BuildEnvironment | None = None
     inputs_fingerprint: str | None = None
     created_by: str | None = None
+    quality_results: dict[str, SourceQualityResult] = field(default_factory=dict)
+    schema_drift: dict[str, SourceSchemaDrift] = field(default_factory=dict)
 
 
 __all__ = ["MANIFEST_SCHEMA_VERSION", "BuildManifest"]

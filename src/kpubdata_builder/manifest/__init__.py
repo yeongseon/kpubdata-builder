@@ -19,6 +19,12 @@ from .provenance import (
     compute_data_checksum,
     compute_inputs_fingerprint,
 )
+from .quality import (
+    QualityCheckResult,
+    SchemaDriftFinding,
+    SourceQualityResult,
+    SourceSchemaDrift,
+)
 from .schema_summary import FieldSummary, SchemaSummary, build_schema_summary
 from .writer import manifest_writer, write_manifest
 
@@ -27,8 +33,12 @@ __all__ = [
     "BuildEnvironment",
     "BuildManifest",
     "FieldSummary",
+    "QualityCheckResult",
+    "SchemaDriftFinding",
     "SchemaSummary",
     "SourceProvenance",
+    "SourceQualityResult",
+    "SourceSchemaDrift",
     "build_schema_summary",
     "build_source_provenance",
     "capture_build_environment",

@@ -46,6 +46,10 @@ def manifest_writer(manifest: BuildManifest, output_path: Path) -> None:
         "warnings": list(manifest.warnings),
         "errors": list(manifest.errors),
         "row_counts": manifest.row_counts,
+        "quality_results": {
+            key: asdict(result) for key, result in manifest.quality_results.items()
+        },
+        "schema_drift": {key: asdict(result) for key, result in manifest.schema_drift.items()},
         "schema_summaries": {
             key: asdict(summary) for key, summary in manifest.schema_summaries.items()
         },

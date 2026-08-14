@@ -13,7 +13,11 @@ from kpubdata_builder.manifest import (
     MANIFEST_SCHEMA_VERSION,
     BuildEnvironment,
     BuildManifest,
+    QualityCheckResult,
+    SchemaDriftFinding,
     SchemaSummary,
+    SourceQualityResult,
+    SourceSchemaDrift,
     build_schema_summary,
     build_source_provenance,
     capture_build_environment,
@@ -292,6 +296,64 @@ def test_manifest_writer_build_environment_defaults_to_null(tmp_path: Path) -> N
 
     payload = json.loads(output_path.read_text(encoding="utf-8"))
     assert payload["build_environment"] is None
+
+
+def test_manifest_writer_serializes_quality_results_and_schema_drift(tmp_path: Path) -> None:
+    manifest = BuildManifest(
+        build_id="build-1",
+        started_at=datetime(2026, 5, 26, 1, 0, 0, tzinfo=timezone.utc),
+        finished_at=datetime(2026, 5, 26, 1, 0, 0, tzinfo=timezone.utc),
+        quality_results={
+            "air": SourceQualityResult(
+                source_key="air",
+                status="warn",
+                checks=(
+                    QualityCheckResult(
+                        name="min_rows",
+                        status="warn",
+                        observed=2,
+                        threshold=3,
+                        message="행 수 2 < 최소 3",
+                    ),
+                ),
+            )
+        },
+        schema_drift={
+            "air": SourceSchemaDrift(
+                source_key="air",
+                findings=(
+                    SchemaDriftFinding(kind="column_added", column="new_col", detail="new column"),
+                ),
+            )
+        },
+    )
+    output_path = tmp_path / "manifest.json"
+
+    manifest_writer(manifest, output_path)
+
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["quality_results"] == {
+        "air": {
+            "source_key": "air",
+            "status": "warn",
+            "checks": [
+                {
+                    "name": "min_rows",
+                    "status": "warn",
+                    "observed": 2,
+                    "threshold": 3,
+                    "column": None,
+                    "message": "행 수 2 < 최소 3",
+                }
+            ],
+        }
+    }
+    assert payload["schema_drift"] == {
+        "air": {
+            "source_key": "air",
+            "findings": [{"kind": "column_added", "column": "new_col", "detail": "new column"}],
+        }
+    }
 
 
 def test_compute_inputs_fingerprint_is_order_independent_and_reproducible() -> None:
