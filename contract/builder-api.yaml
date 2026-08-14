@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: KPubData Builder Service API
-  version: "1.7.0"
+  version: "1.8.0"
   description: >-
     Builder 중심 서비스 계약. BuildSpec 검증, preview, build 실행, artifact 조회,
     계약 버전 조회를 제공한다. CLI와 HTTP service mode(#36)가 동일한 도메인 계약을
@@ -16,7 +16,8 @@ info:
     /builds/{run_id}/quality`는 `availability`(`available`/`partial`/`unavailable`)와
     `evaluated_checks`를 함께 반환해 "0건 평가"와 "애초에 계산된 적 없음"을
     구분한다(#514, additive). v1.7.0은 Silver/Gold read-only `/query`를
-    추가한다(#504, additive).
+    추가한다(#504, additive). v1.8.0은 stable principal별 encrypted Provider
+    credential CRUD와 Provider status/test API를 추가한다(#492, additive).
 servers:
   - url: http://localhost:8000
     description: 로컬 builder 개발 서버
@@ -68,6 +69,144 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "502":
           description: 카탈로그 조회 실패
+
+  /providers:
+    get:
+      operationId: listProviders
+      summary: 런타임 Provider와 현재 principal의 configured 상태 조회
+      responses:
+        "200":
+          description: Provider 목록. credential 원문과 owner_id는 포함하지 않는다.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: stable principal을 확인할 수 없음
+        "502":
+          description: 런타임 Provider 카탈로그 조회 실패
+
+  /providers/{provider}/status:
+    get:
+      operationId: getProviderStatus
+      summary: 현재 principal credential로 Provider 연결 상태 확인
+      parameters:
+        - $ref: "#/components/parameters/ProviderName"
+      responses:
+        "200":
+          description: 연결 상태 또는 not_configured 결과
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderTestResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: stable principal을 확인할 수 없음
+        "404":
+          description: 알려지지 않은 Provider
+        "502":
+          description: 런타임 Provider 카탈로그 조회 실패
+
+  /providers/{provider}/test:
+    post:
+      operationId: testProviderConnection
+      summary: 현재 principal credential로 lightweight connection test 실행
+      parameters:
+        - $ref: "#/components/parameters/ProviderName"
+      responses:
+        "200":
+          description: 구조화된 connection test 결과
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderTestResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: stable principal을 확인할 수 없음
+        "404":
+          description: 알려지지 않은 Provider
+        "502":
+          description: 런타임 Provider 카탈로그 조회 실패
+
+  /providers/{provider}/credential:
+    get:
+      operationId: getProviderCredential
+      summary: 현재 principal의 저장 credential 메타데이터 조회
+      parameters:
+        - $ref: "#/components/parameters/ProviderName"
+      responses:
+        "200":
+          description: 원문을 제외한 credential 메타데이터
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderCredentialMetadata"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: stable principal을 확인할 수 없음
+        "404":
+          description: 알려지지 않은 Provider
+        "502":
+          description: 런타임 Provider 카탈로그 조회 실패
+        "503":
+          description: encrypted credential store가 구성되지 않음
+    put:
+      operationId: putProviderCredential
+      summary: 현재 principal의 Provider credential 생성 또는 교체
+      parameters:
+        - $ref: "#/components/parameters/ProviderName"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProviderCredentialPutRequest"
+      responses:
+        "200":
+          description: 저장된 credential 메타데이터. 원문은 echo하지 않는다.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderCredentialMetadata"
+        "400":
+          description: credential 누락, 빈 값, 또는 허용되지 않은 필드
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: stable principal을 확인할 수 없음
+        "404":
+          description: 알려지지 않은 Provider
+        "502":
+          description: 런타임 Provider 카탈로그 조회 실패
+        "503":
+          description: encrypted credential store가 구성되지 않음
+    delete:
+      operationId: deleteProviderCredential
+      summary: 현재 principal의 저장 Provider credential 삭제
+      parameters:
+        - $ref: "#/components/parameters/ProviderName"
+      responses:
+        "200":
+          description: credential 삭제 완료. 존재하지 않아도 idempotent하게 성공한다.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderCredentialMetadata"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: stable principal을 확인할 수 없음
+        "404":
+          description: 알려지지 않은 Provider
+        "502":
+          description: 런타임 Provider 카탈로그 조회 실패
+        "503":
+          description: encrypted credential store가 구성되지 않음
 
   /validate:
     post:
@@ -122,6 +261,8 @@ paths:
                   - $ref: "#/components/schemas/ValidationError"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "502":
+          description: principal credential로 Provider client를 생성할 수 없음
 
   /build:
     post:
@@ -659,6 +800,15 @@ components:
         type: string
         enum: [bronze, silver, gold]
 
+    ProviderName:
+      name: provider
+      in: path
+      required: true
+      description: kpubdata runtime catalog에 등록된 Provider 식별자
+      schema:
+        type: string
+        pattern: "^[a-z0-9][a-z0-9_-]{0,63}$"
+
   schemas:
     Error:
       type: object
@@ -1030,6 +1180,84 @@ components:
           type: string
         requires_service_key:
           type: boolean
+
+    ProviderListResponse:
+      type: object
+      required: [providers]
+      additionalProperties: false
+      properties:
+        providers:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderSummary"
+
+    ProviderSummary:
+      type: object
+      required: [provider, requires_credential, configured]
+      additionalProperties: false
+      properties:
+        provider:
+          type: string
+        requires_credential:
+          type: boolean
+        configured:
+          type: boolean
+          description: user credential, server default, 또는 무인증 Provider이면 true
+
+    ProviderCredentialPutRequest:
+      type: object
+      required: [credential]
+      additionalProperties: false
+      properties:
+        credential:
+          type: string
+          minLength: 1
+          writeOnly: true
+          description: 저장할 raw credential. 응답, 로그, manifest, event에 포함하지 않는다.
+
+    ProviderCredentialMetadata:
+      type: object
+      required: [provider, configured, masked, updated_at]
+      additionalProperties: false
+      description: owner_id와 credential 원문을 포함하지 않는 사용자별 저장 메타데이터
+      properties:
+        provider:
+          type: string
+        configured:
+          type: boolean
+        masked:
+          type: [string, "null"]
+          description: 설정 시 고정 마스크. credential 일부도 노출하지 않는다.
+        updated_at:
+          type: [string, "null"]
+          format: date-time
+
+    ProviderTestResponse:
+      type: object
+      required: [provider, status, configured, latency_ms, checked_at]
+      additionalProperties: false
+      properties:
+        provider:
+          type: string
+        status:
+          type: string
+          enum: [connected, failed, not_configured]
+        configured:
+          type: boolean
+        latency_ms:
+          type: integer
+          minimum: 0
+        checked_at:
+          type: string
+          format: date-time
+        error_category:
+          type: string
+          enum: [auth, network, timeout, provider, unknown]
+        response_code:
+          type: integer
+          minimum: 100
+          maximum: 599
+          description: kpubdata가 구조적으로 신뢰 가능한 status를 제공한 경우에만 포함
 
     StructuredProblem:
       type: object

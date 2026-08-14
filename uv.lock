@@ -762,6 +762,7 @@ name = "kpubdata-builder"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "cryptography" },
     { name = "kpubdata" },
     { name = "polars" },
     { name = "pyyaml" },
@@ -803,6 +804,7 @@ publish = [
 [package.metadata]
 requires-dist = [
     { name = "build", marker = "extra == 'dev'", specifier = ">=1.2,<2" },
+    { name = "cryptography", specifier = ">=50,<51" },
     { name = "huggingface-hub", marker = "extra == 'huggingface'", specifier = ">=0.23,<2" },
     { name = "huggingface-hub", marker = "extra == 'publish'", specifier = ">=0.23,<2" },
     { name = "kaggle", marker = "extra == 'publish'", specifier = ">=1.6,<2" },
