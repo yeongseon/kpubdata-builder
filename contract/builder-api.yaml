@@ -1125,7 +1125,10 @@ components:
           description: >-
             available: 이 run이 시도한 모든 source의 quality 결과가 있다(0건일 수
             있음). partial: 일부 source만 있다(예: 한 source의 Silver 실패).
-            unavailable: quality_results 필드 자체가 없다(#486 이전 legacy run).
+            unavailable: 결과가 전혀 없다 — quality_results 필드 자체가 없는 legacy
+            run(#486 이전)뿐 아니라, 필드는 있지만(`{}`) 시도한 source 중 하나도
+            결과가 없는 새 run도 포함한다(예: 모든 source가 quality 단계 진입 전에
+            실패).
         evaluated_checks:
           type: integer
           minimum: 0

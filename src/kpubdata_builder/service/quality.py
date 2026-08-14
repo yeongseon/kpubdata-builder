@@ -86,14 +86,17 @@ def quality_availability(
     빈 ``{"quality_results": {}, "schema_drift": {}}``만으로는 "평가했지만 0건"과
     "애초에 계산된 적이 없음"을 구분할 수 없었다 — 이 함수가 그 구분을 담당한다.
 
-    - ``unavailable``: manifest에 quality_results 필드 자체가 없다(#486 이전
-      legacy run, 또는 quality 단계 진입 전 실패).
-    - ``partial``: quality_results는 있지만, 이 run이 실제로 시도한 source
+    - ``unavailable``: 결과가 전혀 없다. quality_results 필드 자체가 없는 legacy
+      run(#486 이전)뿐 아니라, 필드는 있지만(``quality_results: {}``) known
+      source 중 어느 하나도 커버하지 못하는 새 run도 포함한다 — manifest writer는
+      quality가 하나도 계산되지 않았어도 빈 ``{}``를 항상 기록하므로, 모든
+      source가 quality 단계 진입 전에 실패한 run에서 실제로 발생한다.
+    - ``partial``: quality_results가 있고, 이 run이 실제로 시도한 source
       (``stages.known_source_keys``) 중 일부만 커버한다 — 예: multi-source run에서
-      한 source의 Silver가 실패해 quality 평가 자체가 돌지 않은 경우.
+      한 source의 Silver만 실패해 quality 평가가 돌지 않은 경우.
     - ``available``: known source를 모두 커버한다(known_sources가 비어 있는
       legacy manifest도 포함). evaluated_checks==0일 수 있다 — 평가된 rule이
-      하나도 없는 것과 필드 자체가 없는 것을 구분하기 위해 별도로 available로
+      하나도 없는 것과 결과 자체가 없는 것을 구분하기 위해 별도로 available로
       취급한다.
     """
     raw_quality = manifest.get("quality_results")
@@ -108,8 +111,13 @@ def quality_availability(
             if isinstance(entry, dict) and entry.get("status") in ("pass", "warn", "fail"):
                 evaluated_checks += 1
 
-    if known_sources and not set(known_sources).issubset(raw_quality.keys()):
-        return "partial", evaluated_checks
+    known = set(known_sources)
+    if known:
+        covered = known & raw_quality.keys()
+        if not covered:
+            return "unavailable", evaluated_checks
+        if covered != known:
+            return "partial", evaluated_checks
     return "available", evaluated_checks
 
 

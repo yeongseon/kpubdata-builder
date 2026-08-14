@@ -504,6 +504,24 @@ class TestBuildQualityAvailability:
         assert resp.body["availability"] == "partial"
         assert resp.body["evaluated_checks"] == 1
 
+    def test_unavailable_when_no_known_source_has_quality_results(self, tmp_path: Path) -> None:
+        """새 manifest writer는 quality가 하나도 계산되지 않아도 quality_results={}를
+        항상 기록한다 — 모든 source가 quality 단계 진입 전에 실패한 run은 "일부만
+        커버"(partial)가 아니라 "결과가 전혀 없음"(unavailable)이어야 한다."""
+        _write_fixture_run(
+            tmp_path,
+            "r1",
+            dataset_id="d.a",
+            quality_results={},
+            inputs=("air", "traffic"),
+        )
+
+        resp = dispatch(_service(tmp_path), "GET", "/builds/r1/quality", None)
+
+        assert resp.status_code == 200
+        assert resp.body["availability"] == "unavailable"
+        assert resp.body["evaluated_checks"] == 0
+
     def test_unavailable_for_legacy_manifest_without_quality_results_field(
         self, tmp_path: Path
     ) -> None:

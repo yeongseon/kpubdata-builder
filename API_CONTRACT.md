@@ -111,8 +111,12 @@ v0.4 Builder service는 동기식 실행 모델을 유지합니다.
   함께 반환합니다. `available`은 이 run이 시도한 모든 source(`manifest.inputs`)의
   quality 결과가 있음을 뜻하며 `evaluated_checks`가 0일 수 있습니다(rule 미설정 등).
   `partial`은 일부 source만 결과가 있는 경우(예: multi-source run에서 한 source의
-  Silver가 실패)이고, `unavailable`은 `quality_results` 필드 자체가 없는 legacy
-  run(#486 이전)입니다. 이 필드는 additive이며 기존 `quality_results`/`schema_drift`
+  Silver가 실패)입니다. `unavailable`은 결과가 전혀 없는 경우로, `quality_results`
+  필드 자체가 없는 legacy run(#486 이전)뿐 아니라, 필드는 있지만(`{}`) 시도한
+  source 중 하나도 결과가 없는 새 run도 포함합니다(예: 모든 source가 quality
+  단계 진입 전에 실패 — manifest writer는 quality가 하나도 계산되지 않았어도
+  빈 `{}`를 항상 기록하므로 실제로 발생할 수 있습니다). 이 필드는 additive이며
+  기존 `quality_results`/`schema_drift`
   형태는 바뀌지 않습니다.
 - **PASS 포함 전체 보존**: `QualityCheckResult`는 실제로 평가된 check만 담되 PASS도
   포함합니다. rule 미설정/평가 불가(컬럼 없음, denominator 0 등)는 결과에서 아예
