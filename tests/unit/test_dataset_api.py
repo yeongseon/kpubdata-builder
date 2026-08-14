@@ -69,6 +69,8 @@ def _write_fixture_run(
     finished_at: str = "2025-01-01T00:05:00+00:00",
     errors: tuple[str, ...] = (),
     created_by: str | None = None,
+    quality_results: dict[str, object] | None = None,
+    schema_drift: dict[str, object] | None = None,
 ) -> None:
     """실제 파이프라인을 실행하지 않고 canonical snapshot + manifest만 기록한다.
 
@@ -89,6 +91,10 @@ def _write_fixture_run(
         "row_counts": row_counts or {},
         "created_by": created_by,
     }
+    if quality_results is not None:
+        manifest["quality_results"] = quality_results
+    if schema_drift is not None:
+        manifest["schema_drift"] = schema_drift
     (run_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
 
@@ -292,6 +298,95 @@ class TestDatasetGrouping:
         dispatch(service, "POST", "/build", {"spec": _spec_yaml("dataset.q"), "run_id": "r1"})
         resp = dispatch(service, "GET", "/datasets/dataset.q", None)
         assert resp.body["quality"] is None
+
+    def test_latest_dataset_summary_uses_manifest_quality_results(self, tmp_path: Path) -> None:
+        quality = {
+            "air": {
+                "source_key": "air",
+                "status": "warn",
+                "checks": [
+                    {
+                        "name": "min_rows",
+                        "status": "warn",
+                        "observed": 2,
+                        "threshold": 3,
+                        "column": None,
+                        "message": "행 수 2 < 최소 3",
+                    }
+                ],
+            }
+        }
+        _write_fixture_run(tmp_path, "r1", dataset_id="dataset.q", quality_results=quality)
+
+        resp = dispatch(_service(tmp_path), "GET", "/datasets/dataset.q", None)
+
+        assert resp.status_code == 200
+        assert resp.body["quality"] == {"status": "warn", "sources": quality}
+
+    def test_quality_history_returns_newest_manifest_results_first(self, tmp_path: Path) -> None:
+        older_quality = {
+            "air": {
+                "source_key": "air",
+                "status": "pass",
+                "checks": [
+                    {
+                        "name": "min_rows",
+                        "status": "pass",
+                        "observed": 10,
+                        "threshold": 3,
+                        "column": None,
+                        "message": "행 수 10 >= 최소 3",
+                    }
+                ],
+            }
+        }
+        newer_quality = {
+            "air": {
+                "source_key": "air",
+                "status": "warn",
+                "checks": [
+                    {
+                        "name": "min_rows",
+                        "status": "warn",
+                        "observed": 2,
+                        "threshold": 3,
+                        "column": None,
+                        "message": "행 수 2 < 최소 3",
+                    }
+                ],
+            }
+        }
+        drift = {
+            "air": {
+                "source_key": "air",
+                "findings": [{"kind": "column_added", "column": "v", "detail": "new column"}],
+            }
+        }
+        _write_fixture_run(
+            tmp_path,
+            "r1",
+            dataset_id="dataset.qhist",
+            started_at="2025-01-01T00:00:00+00:00",
+            finished_at="2025-01-01T00:05:00+00:00",
+            quality_results=older_quality,
+        )
+        _write_fixture_run(
+            tmp_path,
+            "r2",
+            dataset_id="dataset.qhist",
+            started_at="2025-01-02T00:00:00+00:00",
+            finished_at="2025-01-02T00:05:00+00:00",
+            quality_results=newer_quality,
+            schema_drift=drift,
+        )
+
+        resp = dispatch(_service(tmp_path), "GET", "/datasets/dataset.qhist/quality/history", None)
+
+        assert resp.status_code == 200
+        runs = cast(list[dict[str, object]], resp.body["runs"])
+        assert [run["run_id"] for run in runs] == ["r2", "r1"]
+        assert runs[0]["quality"] == {"status": "warn", "sources": newer_quality}
+        assert runs[0]["schema_drift"] == drift
 
     def test_legacy_run_without_snapshot_excluded_from_datasets(self, tmp_path: Path) -> None:
         service = _service(tmp_path)

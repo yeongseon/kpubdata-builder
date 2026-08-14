@@ -22,6 +22,7 @@ import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import yaml
 
@@ -279,6 +280,33 @@ def _status_from_manifest(
     return "cancelled" if fallback_status == "cancelled" else "ok"
 
 
+def _quality_summary(manifest: dict[str, object]) -> dict[str, JsonValue] | None:
+    raw_quality = manifest.get("quality_results")
+    if not isinstance(raw_quality, dict) or not raw_quality:
+        return None
+    sources: dict[str, dict[str, JsonValue]] = {}
+    for key, value in raw_quality.items():
+        if isinstance(key, str) and isinstance(value, dict):
+            sources[key] = cast(dict[str, JsonValue], value)
+    if not sources:
+        return None
+    status = (
+        "warn" if any(source.get("status") == "warn" for source in sources.values()) else "pass"
+    )
+    return {"status": status, "sources": cast(JsonValue, sources)}
+
+
+def _schema_drift(manifest: dict[str, object]) -> dict[str, JsonValue]:
+    raw_drift = manifest.get("schema_drift")
+    if not isinstance(raw_drift, dict):
+        return {}
+    drift: dict[str, JsonValue] = {}
+    for key, value in raw_drift.items():
+        if isinstance(key, str) and isinstance(value, dict):
+            drift[key] = cast(JsonValue, value)
+    return drift
+
+
 def collect_run_records_from_filesystem(output_root: Path) -> list[RunRecord]:
     """파일시스템을 직접 스캔해 dataset_id가 있는 run만 RunRecord로 만든다(인덱스 폴백).
 
@@ -325,10 +353,6 @@ def build_dataset_summary(output_root: Path, record: RunRecord) -> dict[str, Jso
 
     row_count는 단일 스칼라로 축약하지 않는다: multi-source run에서는 source별
     row_counts 맵과 그 합계(total_row_count)를 모두 제공한다(#488 semantics F).
-
-    quality는 항상 None이다 — #486(구조화된 quality gate)을 선반영하지 않으며,
-    현재의 log-only 품질 경고를 임의로 PASS/WARN/FAIL로 변환하지 않는다
-    (#488 semantics E).
     """
     spec = read_snapshot_spec(output_root, record.run_id)
     if spec is None or spec.dataset_id != record.dataset_id:
@@ -369,12 +393,25 @@ def build_dataset_summary(output_root: Path, record: RunRecord) -> dict[str, Jso
         "row_counts": row_counts,
         "total_row_count": total_row_count,
         "stages": stages,
-        "quality": None,
+        "quality": _quality_summary(manifest),
+    }
+
+
+def build_quality_history_entry(output_root: Path, record: RunRecord) -> dict[str, JsonValue]:
+    manifest = read_manifest(output_root, record.run_id) or {}
+    return {
+        "run_id": record.run_id,
+        "status": record.status,
+        "started_at": record.started_at,
+        "finished_at": record.finished_at,
+        "quality": _quality_summary(manifest),
+        "schema_drift": _schema_drift(manifest),
     }
 
 
 __all__ = [
     "RunRecord",
+    "build_quality_history_entry",
     "build_dataset_summary",
     "collect_run_records_from_filesystem",
     "collect_run_records_from_index",

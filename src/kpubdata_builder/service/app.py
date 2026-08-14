@@ -132,8 +132,7 @@ def _apply_ownership(
 # Builder API 계약 버전. contract/builder-api.yaml의 info.version과 일치해야 하며
 # (test_service_contract가 강제), 응답에 실어 Studio 같은 소비자가 하위 호환을
 # 협상할 수 있게 한다 (#209).
-# 1.4.0 -> 1.5.0: Dataset Catalog·Detail·Stage Summary API 추가 (#488, additive).
-API_CONTRACT_VERSION = "1.5.0"
+API_CONTRACT_VERSION = "1.6.0"
 
 
 @dataclass(frozen=True)
@@ -647,6 +646,19 @@ class BuilderService:
         ]
         return ServiceResponse(200, {"dataset_id": dataset_id, "runs": runs})
 
+    def list_dataset_quality_history(
+        self, dataset_id: str, *, limit: int = 50, principal: Principal | None = None
+    ) -> ServiceResponse:
+        records = self._dataset_records_for(dataset_id, principal)
+        if not records:
+            return ServiceResponse(404, {"error": f"dataset not found: {dataset_id}"})
+        ordered = sorted(records, key=datasets_service.sort_key, reverse=True)[:limit]
+        runs: list[JsonValue] = [
+            datasets_service.build_quality_history_entry(self._output_root, record)
+            for record in ordered
+        ]
+        return ServiceResponse(200, {"dataset_id": dataset_id, "runs": runs})
+
     def list_run_stages(self, run_id: str) -> ServiceResponse:
         """run에 알려진 모든 source의 Bronze/Silver/Gold 상태를 반환한다 (#488).
 
@@ -824,7 +836,13 @@ def dispatch(
         # 클라이언트가 %2F로 인코딩해야 이 라우팅과 충돌하지 않는다.
         raw_rest = path[len("/datasets/") :]
         is_runs_route = raw_rest.endswith("/runs")
-        raw_dataset_id = raw_rest[: -len("/runs")] if is_runs_route else raw_rest
+        is_quality_history_route = raw_rest.endswith("/quality/history")
+        if is_runs_route:
+            raw_dataset_id = raw_rest[: -len("/runs")]
+        elif is_quality_history_route:
+            raw_dataset_id = raw_rest[: -len("/quality/history")]
+        else:
+            raw_dataset_id = raw_rest
         if not raw_dataset_id:
             return ServiceResponse(400, {"error": "dataset_id must not be empty"})
         dataset_id = unquote(raw_dataset_id)
@@ -836,6 +854,14 @@ def dispatch(
             if isinstance(limit, ServiceResponse):
                 return limit
             return service.list_dataset_runs(dataset_id, limit=limit, principal=principal)
+
+        if is_quality_history_route:
+            limit = _parse_limit_query(query)
+            if isinstance(limit, ServiceResponse):
+                return limit
+            return service.list_dataset_quality_history(
+                dataset_id, limit=limit, principal=principal
+            )
 
         return service.get_dataset(dataset_id, principal=principal)
 
