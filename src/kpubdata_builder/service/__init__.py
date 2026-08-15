@@ -15,12 +15,16 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from .app import API_CONTRACT_VERSION, BuilderService, FileResponse, ServiceResponse, dispatch
     from .http import make_handler, serve
+    from .jobs import AsyncBuildExecutor, BuildJobSnapshot, BuildJobStatus
 
 __all__ = [
     "API_CONTRACT_VERSION",
     "BuilderService",
     "FileResponse",
     "ServiceResponse",
+    "AsyncBuildExecutor",
+    "BuildJobSnapshot",
+    "BuildJobStatus",
     "dispatch",
     "make_handler",
     "serve",
@@ -28,7 +32,7 @@ __all__ = [
 
 
 def __getattr__(name: str) -> Any:
-    """Facade exports are loaded lazily so query helpers stay cycle-free."""
+    """facade export를 lazy하게 로드해 query/jobs 의존성이 순환하지 않게 한다."""
     if name in {
         "API_CONTRACT_VERSION",
         "BuilderService",
@@ -43,4 +47,8 @@ def __getattr__(name: str) -> Any:
         from . import http
 
         return getattr(http, name)
+    if name in {"AsyncBuildExecutor", "BuildJobSnapshot", "BuildJobStatus"}:
+        from . import jobs
+
+        return getattr(jobs, name)
     raise AttributeError(name)

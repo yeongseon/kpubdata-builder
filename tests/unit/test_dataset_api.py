@@ -15,7 +15,6 @@ import yaml
 
 import kpubdata_builder.service.app as app_module
 from kpubdata_builder.service import BuilderService, dispatch
-from kpubdata_builder.service.app import _OWNERSHIP_ENV
 from kpubdata_builder.service.auth import Principal
 from kpubdata_builder.service.datasets import (
     RunRecord,
@@ -23,6 +22,7 @@ from kpubdata_builder.service.datasets import (
     is_more_recent,
     pick_latest,
 )
+from kpubdata_builder.service.ownership import _OWNERSHIP_ENV
 from kpubdata_builder.spec import JsonValue, parse_spec
 from kpubdata_builder.spec.serializer import write_buildspec_snapshot
 from kpubdata_builder.store import rebuild_index

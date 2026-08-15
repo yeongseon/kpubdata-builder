@@ -31,7 +31,7 @@ def _validated_rows(manifest: dict[str, object]) -> int | None:
     total = 0
     found = False
     for value in raw.values():
-        if isinstance(value, int):
+        if isinstance(value, int) and not isinstance(value, bool):
             total += value
             found = True
     return total if found else None
