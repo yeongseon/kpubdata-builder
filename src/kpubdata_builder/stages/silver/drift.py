@@ -151,13 +151,15 @@ def find_previous_silver(
     for run_dir in output_root.iterdir():
         if not run_dir.is_dir() or run_dir.name == current_run_id:
             continue
+        # 파일 존재 확인(stat)이 snapshot/manifest 읽기보다 저렴하므로 먼저
+        # 걸러서 run 수 × source 수만큼 반복되는 I/O를 줄인다.
+        silver_dir = run_dir / "silver" / source_segment
+        if not (silver_dir / "schema.json").is_file() or not (silver_dir / "stats.json").is_file():
+            continue
         if _run_dataset_id(run_dir) != dataset_id:
             continue
         succeeded, sort_key = _run_succeeded(run_dir)
         if not succeeded:
-            continue
-        silver_dir = run_dir / "silver" / source_segment
-        if not (silver_dir / "schema.json").is_file() or not (silver_dir / "stats.json").is_file():
             continue
         candidates.append((sort_key, run_dir.name, silver_dir))
     if not candidates:
