@@ -224,7 +224,7 @@ def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
                 else:
                     # Same-origin 요청이면 특정 오리진 제한 없이 허용한다.
                     self.send_header("Access-Control-Allow-Origin", "*")
-                self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+                self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
                 self.send_header("Access-Control-Allow-Headers", _CORS_ALLOWED_HEADERS)
                 self.send_header("Access-Control-Max-Age", "86400")
 
@@ -270,6 +270,12 @@ def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:  # noqa: N802 - http.server 규약
             self._dispatch("POST")
+
+        def do_PUT(self) -> None:  # noqa: N802 - http.server 규약
+            self._dispatch("PUT")
+
+        def do_DELETE(self) -> None:  # noqa: N802 - http.server 규약
+            self._dispatch("DELETE")
 
         def do_OPTIONS(self) -> None:  # noqa: N802 - http.server 규약
             # CORS preflight 요청에 응답한다 (#322). body 없이 204로 허용 헤더만 반환한다.

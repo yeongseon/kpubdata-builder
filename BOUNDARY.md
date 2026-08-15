@@ -13,6 +13,7 @@
 5. **Studio는 BuildSpec 계약이나 파이프라인 로직을 재정의할 수 없습니다.**
 6. **Builder는 Medallion stage(Bronze/Silver/Gold), staging layout, stage promotion rules, canonical transform engine(Polars)을 소유합니다. Studio는 stage-specific preview 요청과 stage artifact 표시를 할 수 있지만, stage transform을 구현하거나 promotion rule을 재정의해서는 안 됩니다.**
 7. **Builder는 Silver/Gold artifact에 대한 read-only SQL sandbox를 소유합니다. Studio는 명시적인 query 요청과 결과 표시를 담당합니다.**
+8. **Builder는 stable principal별 Provider credential의 암호화 저장·해석·연결 테스트를 소유합니다. Studio는 raw credential을 저장하지 않고 Builder API에 입력한 뒤 metadata만 표시합니다.**
 
 ## 3. 책임 분리표
 
@@ -24,6 +25,7 @@
 | Manifest | 스키마 정의, 직렬화, 보관 정책 | manifest 표시, 링크 제공 |
 | Publish | 원격 게시 수행, 성공/실패 기록 | publish 요청, 결과 표시 |
 | Query | Silver/Gold table resolve, read-only 실행, limit/timeout | SQL 명시 실행 요청, result preview 표시 |
+| Provider credential | owner_id별 encrypted-at-rest 저장, server default fallback, 요청별 client 격리, status/test | credential 입력 UX, masked/configured/status 표시 |
 
 ## 4. Studio가 해서는 안 되는 일
 
@@ -37,6 +39,8 @@ Studio는 다음을 구현하거나 소유하면 안 됩니다.
 - Bronze/Silver/Gold stage transform 구현
 - stage promotion rule 재정의
 - Polars 외 별도 canonical transform engine 도입
+- raw Provider credential을 browser storage나 Studio backend의 정본으로 보관
+- Builder의 owner_id 또는 credential resolution 우선순위를 재구현
 
 ## 5. 허용되는 Studio 역할
 

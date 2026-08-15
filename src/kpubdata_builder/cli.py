@@ -155,7 +155,12 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _create_client() -> SourceClient:
+def _create_client(
+    *,
+    provider_keys: dict[str, str] | None = None,
+    timeout: float | None = None,
+    cache: bool | None = None,
+) -> SourceClient:
     """kpubdata 클라이언트를 환경설정으로 생성한다.
 
     테스트에서 monkeypatch로 대체할 수 있도록 별도 함수로 분리한다. 실제
@@ -163,7 +168,14 @@ def _create_client() -> SourceClient:
     """
     from kpubdata import Client
 
-    return cast(SourceClient, Client.from_env())
+    overrides: dict[str, object] = {}
+    if provider_keys is not None:
+        overrides["provider_keys"] = provider_keys
+    if timeout is not None:
+        overrides["timeout"] = timeout
+    if cache is not None:
+        overrides["cache"] = cache
+    return cast(SourceClient, Client.from_env(**overrides))
 
 
 def _run_validate(spec_path: str) -> int:

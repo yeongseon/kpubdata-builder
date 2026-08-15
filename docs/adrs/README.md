@@ -15,6 +15,7 @@ KPubData Builder의 주요 설계 결정을 기록합니다. 각 ADR은 배경·
 | [0009](./0009-user-authentication-google-oidc.md) | 사용자 인증 모델: Google OIDC ID 토큰 검증 | 제안됨 | #383 |
 | [0010](./0010-artifactstore-state-backend.md) | ArtifactStore 추상화 + BuildIndex 백엔드 분리 | 제안됨 | #375 |
 | [0011](./0011-buildspec-assistant-grounding.md) | BuildSpec 어시스턴트 그라운딩 계약 | 제안됨 | #415 |
+| [0012](./0012-provider-credential-boundary.md) | 사용자별 Provider Credential 저장과 Client 격리 | 승인됨 | #492, #505 |
 
 ## 작성 규칙
 

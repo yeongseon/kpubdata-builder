@@ -645,7 +645,9 @@ class TestHttpAdapter:
         with urllib.request.urlopen(req, timeout=2.0) as response:
             assert response.status == 204
             assert response.headers["Access-Control-Allow-Origin"] == "*"
-            assert response.headers["Access-Control-Allow-Methods"] == "GET, POST, OPTIONS"
+            assert response.headers["Access-Control-Allow-Methods"] == (
+                "GET, POST, PUT, DELETE, OPTIONS"
+            )
             assert (
                 response.headers["Access-Control-Allow-Headers"]
                 == "Content-Type, X-API-Key, Authorization"

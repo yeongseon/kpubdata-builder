@@ -14,9 +14,11 @@ Studio 같은 외부 UI가 Builder를 호출할 수 있도록 validate/preview/b
 from __future__ import annotations
 
 import heapq
+import inspect
 import json
 import logging
-from collections.abc import Callable, Mapping
+import os
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, cast, runtime_checkable
@@ -27,6 +29,11 @@ from kpubdata import Client
 from kpubdata.core.models import DatasetRef
 from typing_extensions import assert_never
 
+from ..credentials import (
+    AesGcmCredentialCipher,
+    CredentialRepository,
+    SQLiteCredentialRepository,
+)
 from ..errors import SpecLoadError, ValidationError
 from ..pipeline import preview_build, run_build
 from ..quality import QualityCheckResult
@@ -52,8 +59,22 @@ from . import quality as quality_service
 from . import stages as stages_service
 from .auth import AuthError, Principal, authenticate
 from .jobs import AsyncBuildExecutor, generate_run_id
+from .providers import (
+    CredentialResolver,
+    ProviderCredentialConflictError,
+    ProviderDescriptor,
+    ProviderTestOperation,
+    default_provider_test,
+    provider_descriptors,
+    run_provider_test,
+    test_result_body,
+)
 
 logger = logging.getLogger(__name__)
+
+_CREDENTIAL_MASTER_KEY_ENV = "KPUBDATA_BUILDER_CREDENTIAL_MASTER_KEY"
+_PROVIDER_TEST_TIMEOUT_ENV = "KPUBDATA_BUILDER_PROVIDER_TEST_TIMEOUT"
+_DEFAULT_PROVIDER_TEST_TIMEOUT = 10.0
 
 
 @runtime_checkable
@@ -64,6 +85,52 @@ class _CloseableClient(Protocol):
 def _close_request_client(client: SourceClient) -> None:
     if isinstance(client, _CloseableClient):
         client.close()
+
+
+def _credential_repository_from_env(output_root: Path) -> CredentialRepository | None:
+    """master key가 설정된 경우에만 encrypted repository를 활성화한다."""
+    encoded_key = os.environ.get(_CREDENTIAL_MASTER_KEY_ENV)
+    if not encoded_key:
+        return None
+    cipher = AesGcmCredentialCipher.from_base64(encoded_key)
+    return SQLiteCredentialRepository(
+        output_root / ".service" / "provider-credentials.sqlite3", cipher
+    )
+
+
+def _factory_accepts_keyword(factory: Callable[..., SourceClient], keyword: str) -> bool:
+    """factory가 특정 keyword 또는 **kwargs를 받는지 side effect 없이 판정한다."""
+    try:
+        parameters = inspect.signature(factory).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD or parameter.name == keyword
+        for parameter in parameters
+    )
+
+
+def _redact_secret_text(value: str | None, secrets: Iterable[str]) -> str | None:
+    """응답/manifest 문자열에서 현재 요청 credential 원문을 제거한다."""
+    if value is None:
+        return None
+    redacted = value
+    for secret in sorted(set(secrets), key=len, reverse=True):
+        if secret:
+            redacted = redacted.replace(secret, "[REDACTED]")
+    return redacted
+
+
+def _redact_json_secrets(value: object, secrets: Iterable[str]) -> object:
+    """JSON tree의 모든 문자열에서 credential을 재귀적으로 제거한다."""
+    secret_values = tuple(secrets)
+    if isinstance(value, str):
+        return _redact_secret_text(value, secret_values)
+    if isinstance(value, list):
+        return [_redact_json_secrets(item, secret_values) for item in value]
+    if isinstance(value, dict):
+        return {key: _redact_json_secrets(item, secret_values) for key, item in value.items()}
+    return value
 
 
 def _authenticated_provider_names(client: SourceClient) -> frozenset[str]:
@@ -170,7 +237,7 @@ def _strip_internal_fields(entries: list[_BuildListEntry]) -> list[_BuildListEnt
 # 1.4.0 -> 1.5.0: Dataset Catalog·Detail·Stage Summary API 추가 (#488, additive).
 # 1.5.0 -> 1.6.0: 구조화된 Quality/Schema Drift 결과, quality history/detail API 추가
 # (#486, additive — 기존 엔드포인트는 변경되지 않는다).
-API_CONTRACT_VERSION = "1.7.0"
+API_CONTRACT_VERSION = "1.8.0"
 
 
 @dataclass(frozen=True)
@@ -232,8 +299,11 @@ class BuilderService:
         self,
         *,
         output_root: Path,
-        client_factory: Callable[[], SourceClient],
+        client_factory: Callable[..., SourceClient],
         query_service: QueryService | None = None,
+        credential_repository: CredentialRepository | None = None,
+        provider_test_operation: ProviderTestOperation = default_provider_test,
+        provider_test_timeout: float | None = None,
         async_max_workers: int = 10,
         async_max_queue_size: int = 10,
     ) -> None:
@@ -241,9 +311,191 @@ class BuilderService:
         self._client_factory = client_factory
         self._build_index = BuildIndex(output_root)  # #309, ADR 0003
         self._query_service = query_service or QueryService()
+        repository = credential_repository or _credential_repository_from_env(output_root)
+        self._credential_resolver = CredentialResolver(repository)
+        self._provider_test_operation = provider_test_operation
+        configured_timeout = os.environ.get(_PROVIDER_TEST_TIMEOUT_ENV)
+        self._provider_test_timeout = (
+            provider_test_timeout
+            if provider_test_timeout is not None
+            else float(configured_timeout or _DEFAULT_PROVIDER_TEST_TIMEOUT)
+        )
+        if self._provider_test_timeout <= 0:
+            raise ValueError("provider test timeout must be positive")
         self._async_builds = AsyncBuildExecutor(
             max_workers=async_max_workers,
             max_queue_size=async_max_queue_size,
+        )
+
+    def _create_client(
+        self,
+        principal: Principal | None = None,
+        *,
+        providers: Iterable[str] = (),
+        timeout: float | None = None,
+        resolved_provider_keys: Mapping[str, str] | None = None,
+    ) -> SourceClient:
+        """요청 principal의 credential로 격리된 새 provider client를 만든다."""
+        provider_names = tuple(dict.fromkeys(providers))
+        provider_keys = dict(resolved_provider_keys or {})
+        if resolved_provider_keys is None and principal is not None and provider_names:
+            provider_keys = self._credential_resolver.provider_keys(
+                principal.owner_id, provider_names
+            )
+
+        kwargs: dict[str, object] = {}
+        if provider_keys:
+            if not _factory_accepts_keyword(self._client_factory, "provider_keys"):
+                raise RuntimeError("client_factory cannot accept principal provider credentials")
+            kwargs["provider_keys"] = provider_keys
+            if not _factory_accepts_keyword(self._client_factory, "cache"):
+                raise RuntimeError("client_factory cannot disable credential response cache")
+            # kpubdata#263이 해결되기 전에는 credential이 cache key에 포함되지 않는다.
+            # 사용자별 credential을 쓰는 service client는 환경설정과 무관하게 cache를 끈다.
+            kwargs["cache"] = False
+        if timeout is not None and _factory_accepts_keyword(self._client_factory, "timeout"):
+            kwargs["timeout"] = timeout
+        return self._client_factory(**kwargs)
+
+    def _runtime_providers(self) -> tuple[ProviderDescriptor, ...] | ServiceResponse:
+        client = self._create_client()
+        try:
+            return provider_descriptors(client)
+        except Exception:
+            return ServiceResponse(502, {"error": "provider catalog unavailable"})
+        finally:
+            _close_request_client(client)
+
+    def _known_provider(self, provider: str) -> ProviderDescriptor | ServiceResponse:
+        providers = self._runtime_providers()
+        if isinstance(providers, ServiceResponse):
+            return providers
+        match = next((item for item in providers if item.name == provider), None)
+        if match is None:
+            return ServiceResponse(404, {"error": "provider not found"})
+        return match
+
+    def providers(self, *, principal: Principal) -> ServiceResponse:
+        """런타임 Provider 목록과 현재 principal의 configured 상태를 반환한다."""
+        descriptors = self._runtime_providers()
+        if isinstance(descriptors, ServiceResponse):
+            return descriptors
+        if principal.owner_id is None:
+            return ServiceResponse(403, {"error": "stable principal is required"})
+        items: list[JsonValue] = []
+        for descriptor in descriptors:
+            resolved = self._credential_resolver.resolve(principal.owner_id, descriptor.name)
+            configured = not descriptor.requires_credential or resolved.value is not None
+            items.append(
+                {
+                    "provider": descriptor.name,
+                    "requires_credential": descriptor.requires_credential,
+                    "configured": configured,
+                }
+            )
+        return ServiceResponse(200, {"providers": items})
+
+    def provider_status(self, provider: str, *, principal: Principal) -> ServiceResponse:
+        """현재 principal credential로 lightweight connection test를 수행한다."""
+        descriptor = self._known_provider(provider)
+        if isinstance(descriptor, ServiceResponse):
+            return descriptor
+        if principal.owner_id is None:
+            return ServiceResponse(403, {"error": "stable principal is required"})
+        resolved = self._credential_resolver.resolve(principal.owner_id, provider)
+        configured = not descriptor.requires_credential or resolved.value is not None
+        client: SourceClient | None = None
+        try:
+            if configured:
+                client = self._create_client(
+                    principal, providers=(provider,), timeout=self._provider_test_timeout
+                )
+            result = run_provider_test(
+                provider=provider,
+                configured=configured,
+                client=client,
+                operation=self._provider_test_operation,
+            )
+            return ServiceResponse(200, cast(dict[str, JsonValue], test_result_body(result)))
+        except Exception:
+            # Client 생성 실패도 원문 예외를 로그/응답하지 않고 unknown으로 제한한다.
+            result = run_provider_test(
+                provider=provider,
+                configured=True,
+                client=cast(SourceClient, object()),
+                operation=lambda _client, _provider: (_ for _ in ()).throw(RuntimeError()),
+            )
+            return ServiceResponse(200, cast(dict[str, JsonValue], test_result_body(result)))
+        finally:
+            if client is not None:
+                _close_request_client(client)
+
+    def provider_credential(self, provider: str, *, principal: Principal) -> ServiceResponse:
+        """원문 없이 현재 principal의 저장 credential 메타데이터를 반환한다."""
+        known = self._known_provider(provider)
+        if isinstance(known, ServiceResponse):
+            return known
+        repository = self._credential_resolver.repository
+        if repository is None:
+            return ServiceResponse(503, {"error": "credential store is not configured"})
+        if principal.owner_id is None:
+            return ServiceResponse(403, {"error": "stable principal is required"})
+        metadata = repository.get_metadata(principal.owner_id, provider)
+        return ServiceResponse(
+            200,
+            {
+                "configured": metadata.configured,
+                "masked": metadata.masked,
+                "updated_at": metadata.updated_at,
+            },
+        )
+
+    def put_provider_credential(
+        self,
+        provider: str,
+        body: Mapping[str, JsonValue] | None,
+        *,
+        principal: Principal,
+    ) -> ServiceResponse:
+        """현재 principal의 Provider credential을 생성 또는 교체한다."""
+        known = self._known_provider(provider)
+        if isinstance(known, ServiceResponse):
+            return known
+        repository = self._credential_resolver.repository
+        if repository is None:
+            return ServiceResponse(503, {"error": "credential store is not configured"})
+        if principal.owner_id is None:
+            return ServiceResponse(403, {"error": "stable principal is required"})
+        if body is None or set(body) != {"credential"}:
+            return ServiceResponse(400, {"error": "body must contain only 'credential'"})
+        credential = body.get("credential")
+        if not isinstance(credential, str) or not credential.strip():
+            return ServiceResponse(400, {"error": "credential must be a non-empty string"})
+        metadata = repository.put(principal.owner_id, provider, credential)
+        return ServiceResponse(
+            200,
+            {
+                "provider": metadata.provider,
+                "configured": metadata.configured,
+                "masked": metadata.masked,
+                "updated_at": metadata.updated_at,
+            },
+        )
+
+    def delete_provider_credential(self, provider: str, *, principal: Principal) -> ServiceResponse:
+        """현재 principal의 Provider credential만 삭제한다."""
+        known = self._known_provider(provider)
+        if isinstance(known, ServiceResponse):
+            return known
+        repository = self._credential_resolver.repository
+        if repository is None:
+            return ServiceResponse(503, {"error": "credential store is not configured"})
+        if principal.owner_id is None:
+            return ServiceResponse(403, {"error": "stable principal is required"})
+        _ = repository.delete(principal.owner_id, provider)
+        return ServiceResponse(
+            200,
+            {"provider": provider, "configured": False, "masked": None, "updated_at": None},
         )
 
     def query(
@@ -306,7 +558,7 @@ class BuilderService:
         접근 + 8개 provider 하드코딩 튜플을 써서 kpubdata에 provider가 추가돼도
         카탈로그에 안 떴다 (#436). 시크릿 값은 노출하지 않고 필요 여부만 표시한다.
         """
-        client = self._client_factory()
+        client = self._create_client()
         try:
             all_datasets = cast(Client, client).datasets.list()
             auth_provider_names = _authenticated_provider_names(client)
@@ -360,7 +612,13 @@ class BuilderService:
             },
         )
 
-    def preview(self, spec_yaml: str, *, limit: int = DEFAULT_PREVIEW_LIMIT) -> ServiceResponse:
+    def preview(
+        self,
+        spec_yaml: str,
+        *,
+        limit: int = DEFAULT_PREVIEW_LIMIT,
+        principal: Principal | None = None,
+    ) -> ServiceResponse:
         """각 소스의 스키마와 샘플 행을 산출한다 (파일 미기록)."""
         if limit < 1:
             return ServiceResponse(400, {"error": "'limit' must be a positive integer"})
@@ -368,7 +626,22 @@ class BuilderService:
         if isinstance(spec_or_error, ServiceResponse):
             return spec_or_error
 
-        client = self._client_factory()
+        provider_names = tuple(source.provider for source in spec_or_error.sources)
+        try:
+            provider_keys = (
+                self._credential_resolver.provider_keys(principal.owner_id, provider_names)
+                if principal is not None
+                else {}
+            )
+            client = self._create_client(
+                principal,
+                providers=provider_names,
+                resolved_provider_keys=provider_keys,
+            )
+        except (ProviderCredentialConflictError, ValueError) as exc:
+            return ServiceResponse(400, {"error": str(exc)})
+        except Exception:
+            return ServiceResponse(502, {"error": "provider client unavailable"})
         try:
             result = preview_build(spec_or_error, client=client, limit=limit)
         finally:
@@ -377,7 +650,7 @@ class BuilderService:
             {
                 "source_key": p.source_key,
                 "status": p.status,
-                "error": p.error,
+                "error": _redact_secret_text(p.error, provider_keys.values()),
                 "schema": [
                     {
                         "name": column.name,
@@ -409,6 +682,7 @@ class BuilderService:
         run_id: str | None = None,
         created_by: str | None = None,
         owner_id: str | None = None,
+        principal: Principal | None = None,
     ) -> ServiceResponse:
         """파이프라인을 실행하고 결과를 반환한다.
 
@@ -426,7 +700,22 @@ class BuilderService:
         if isinstance(spec_or_error, ServiceResponse):
             return spec_or_error
 
-        client = self._client_factory()
+        provider_names = tuple(source.provider for source in spec_or_error.sources)
+        try:
+            provider_keys = (
+                self._credential_resolver.provider_keys(principal.owner_id, provider_names)
+                if principal is not None
+                else {}
+            )
+            client = self._create_client(
+                principal,
+                providers=provider_names,
+                resolved_provider_keys=provider_keys,
+            )
+        except (ProviderCredentialConflictError, ValueError) as exc:
+            return ServiceResponse(400, {"error": str(exc)})
+        except Exception:
+            return ServiceResponse(502, {"error": "provider client unavailable"})
         try:
             result = run_build(
                 spec_or_error,
@@ -438,12 +727,24 @@ class BuilderService:
             )
         finally:
             _close_request_client(client)
+        secret_values = tuple(provider_keys.values())
+        if secret_values:
+            try:
+                manifest_data = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+                redacted_manifest = _redact_json_secrets(manifest_data, secret_values)
+                if redacted_manifest != manifest_data:
+                    result.manifest_path.write_text(
+                        json.dumps(redacted_manifest, ensure_ascii=False, indent=2) + "\n",
+                        encoding="utf-8",
+                    )
+            except (OSError, json.JSONDecodeError):
+                return ServiceResponse(500, {"error": "failed to secure build manifest"})
         outcomes: list[JsonValue] = [
             {
                 "source_key": outcome.source_key,
                 "status": outcome.status,
                 "stages_completed": list(outcome.stages_completed),
-                "error": outcome.error,
+                "error": _redact_secret_text(outcome.error, secret_values),
             }
             for outcome in result.outcomes
         ]
@@ -462,7 +763,7 @@ class BuilderService:
             first_error = next(
                 (o.error for o in result.outcomes if o.status != "ok" and o.error), None
             )
-            body["error"] = first_error or "build failed"
+            body["error"] = _redact_secret_text(first_error, secret_values) or "build failed"
 
         # ADR 0003: 빌드 완료 후 인덱스 갱신 (best-effort, 실패해도 빌드 성공 유지)
         try:
@@ -1065,6 +1366,29 @@ def dispatch(
     if method == "GET" and path == "/catalog":
         return service.catalog()
 
+    if method == "GET" and path == "/providers":
+        return service.providers(principal=principal)
+
+    if path.startswith("/providers/"):
+        rest = path[len("/providers/") :]
+        segments = rest.split("/")
+        if len(segments) != 2 or not segments[0]:
+            return ServiceResponse(404, {"error": f"not found: {method} {path}"})
+        provider = unquote(segments[0]).strip().lower()
+        operation = segments[1]
+        if not provider:
+            return ServiceResponse(400, {"error": "provider must not be empty"})
+        if method == "GET" and operation == "status":
+            return service.provider_status(provider, principal=principal)
+        if method == "POST" and operation == "test":
+            return service.provider_status(provider, principal=principal)
+        if method == "GET" and operation == "credential":
+            return service.provider_credential(provider, principal=principal)
+        if method == "PUT" and operation == "credential":
+            return service.put_provider_credential(provider, body, principal=principal)
+        if method == "DELETE" and operation == "credential":
+            return service.delete_provider_credential(provider, principal=principal)
+
     if method == "POST" and path == "/query":
         return service.query(body, principal=principal)
 
@@ -1126,7 +1450,7 @@ def dispatch(
             limit = limit_value
         else:
             limit = DEFAULT_PREVIEW_LIMIT
-        return service.preview(spec, limit=limit)
+        return service.preview(spec, limit=limit, principal=principal)
 
     if method == "POST" and path == "/build":
         spec = _spec_from_body(body)
@@ -1149,7 +1473,11 @@ def dispatch(
                 return ServiceResponse(400, {"error": str(exc)})
             run_id = run_id_value
         return service.build(
-            spec, run_id=run_id, created_by=principal.label, owner_id=principal.owner_id
+            spec,
+            run_id=run_id,
+            created_by=principal.label,
+            owner_id=principal.owner_id,
+            principal=principal,
         )
 
     if method == "POST" and path == "/builds":
