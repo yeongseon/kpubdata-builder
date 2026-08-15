@@ -430,6 +430,7 @@ def test_publish_kaggle_end_to_end(
         # --output-dir가 BuilderService.output_root로 올바르게 전달되는지 확인한다 (#249 review).
         assert isinstance(service, BuilderService)
         captured_kwargs["output_root"] = service._output_root
+        captured_kwargs["async_max_workers"] = service._async_builds._executor._max_workers
 
     monkeypatch.setattr(http_module, "serve", fake_serve)
 
@@ -452,6 +453,7 @@ def test_publish_kaggle_end_to_end(
         "host": "0.0.0.0",
         "port": 9123,
         "max_workers": 10,
+        "async_max_workers": 10,
         "output_root": tmp_path,
     }
     assert "serving kpubdata-builder" in out

@@ -12,12 +12,16 @@ from __future__ import annotations
 
 from .app import API_CONTRACT_VERSION, BuilderService, FileResponse, ServiceResponse, dispatch
 from .http import make_handler, serve
+from .jobs import AsyncBuildExecutor, BuildJobSnapshot, BuildJobStatus
 
 __all__ = [
     "API_CONTRACT_VERSION",
     "BuilderService",
     "FileResponse",
     "ServiceResponse",
+    "AsyncBuildExecutor",
+    "BuildJobSnapshot",
+    "BuildJobStatus",
     "dispatch",
     "make_handler",
     "serve",
