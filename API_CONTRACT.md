@@ -38,6 +38,8 @@ v0.4 Builder service는 동기식 실행 모델을 유지합니다.
 | preview source 실패 | HTTP 요청 자체는 성공할 수 있으며, source별 `status`/`error`로 실패를 표현 |
 | build source 실패 | upstream/source 의존 실패로 처리하고 가능한 경우 manifest를 남김 |
 | run별 BuildSpec 조회 | `GET /builds/{run_id}/spec`으로 redaction된 canonical YAML과 그 bytes의 digest를 반환 |
+| built dataset 조회 | `GET /datasets`, `GET /datasets/{dataset_id}`, `GET /datasets/{dataset_id}/runs`로 `BuildSpec.dataset_id` 단위 grouping/latest run/run history를 반환 |
+| stage summary/preview | `GET /builds/{run_id}/stages`, `GET /builds/{run_id}/stages/{stage}`로 source별 Bronze/Silver/Gold 상태와 안전한 요약을 반환 |
 | 인증 실패 | `401`은 재인증 대상, `403`은 권한 요청 대상, `503`은 JWKS 일시 장애 대상 |
 
 정책과 구현이 다르면 구현 각주를 늘리지 말고 다음 순서로 정리합니다.
@@ -66,6 +68,34 @@ v0.4 Builder service는 동기식 실행 모델을 유지합니다.
   수는 없으며, credential은 환경/서비스 설정에서 다시 공급해야 합니다.
 - `spec_digest`는 원본 객체가 아니라 **실제로 저장된 redaction 후 canonical snapshot bytes**의
   SHA-256입니다. credential 값만 다른 두 spec은 의도적으로 같은 snapshot/digest가 될 수 있습니다.
+
+### Built Dataset과 Stage Summary/Preview (#488)
+
+- **identity**: built dataset의 identity는 오직 `BuildSpec.dataset_id`입니다. 디렉터리
+  이름이나 source catalog 이름으로 추측하지 않습니다. `buildspec.yaml` snapshot(#487)이
+  없는 legacy run의 dataset_id는 추측하지 않으며, `GET /datasets*` grouping에서
+  조용히 제외됩니다(`GET /builds`에는 계속 나타남).
+- **latest run**: 각 dataset은 principal이 접근 가능한 run 중 `finished_at` 기준
+  최신 run으로 요약됩니다. 동일 `finished_at`은 `run_id` 내림차순으로 결정적으로
+  타이브레이크합니다. ownership 필터링은 latest 선정보다 먼저 적용되므로, 동일
+  dataset_id를 가진 타 사용자의 run이 latest 후보나 metadata에 섞이지 않습니다.
+- **row_count**: multi-source dataset의 row_count는 단일 스칼라로 축약하지 않습니다.
+  `row_counts`(source_key별 맵)와 `total_row_count`(합계)를 함께 제공합니다.
+- **quality**: `#486`(구조화된 quality gate)이 선반영되지 않았으므로 `quality` 필드는
+  항상 `null`입니다. 현재의 log-only 품질 경고를 임의로 PASS/WARN/FAIL로 변환하지
+  않습니다 — 미평가는 PASS가 아닙니다.
+- **stage status**: `completed`/`failed`/`not_run`/`unavailable` 네 가지로 구분합니다.
+  파일시스템 존재만으로 성공을 추측하지 않고, manifest의 실패 기록과 sidecar
+  완전성을 함께 봐서 partial/failed run에서도 "Bronze 성공 → Silver 실패 → Gold
+  미실행" 같은 상태를 구분합니다.
+- **secret/path 비노출**: Bronze의 `fetch_params`/`provenance.fetch_params`, Gold
+  export의 `options`/`output_path`, 그리고 어떤 응답에서도 절대 filesystem 경로는
+  노출되지 않습니다. Silver `sample`은 build 시점에 이미 persist된 preview 상한
+  (기본 5행) 안에서만 반환되며 parquet 전체를 읽지 않습니다.
+- `dataset_id`는 slash/space 등 경로에 그대로 쓸 수 없는 문자를 포함할 수 있으므로,
+  `GET /datasets/{dataset_id}` 경로의 `dataset_id`는 클라이언트가 percent-encoding해야
+  합니다. `BuildSpec.dataset_id` 자체에는 이 API 때문에 새로운 제약을 추가하지
+  않았습니다.
 
 ## 4. 인증과 CORS
 

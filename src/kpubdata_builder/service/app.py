@@ -21,7 +21,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, cast, runtime_checkable
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, unquote
 
 import yaml
 from kpubdata import Client
@@ -37,6 +37,8 @@ from ..stages._path_safety import ensure_within, validate_path_segment
 from ..stages.bronze.build import SourceClient
 from ..store import BuildIndex
 from ..tabular import DEFAULT_PREVIEW_LIMIT
+from . import datasets as datasets_service
+from . import stages as stages_service
 from .auth import AuthError, Principal, authenticate
 from .jobs import AsyncBuildExecutor, generate_run_id
 
@@ -132,7 +134,8 @@ def _apply_ownership(
 # Builder API 계약 버전. contract/builder-api.yaml의 info.version과 일치해야 하며
 # (test_service_contract가 강제), 응답에 실어 Studio 같은 소비자가 하위 호환을
 # 협상할 수 있게 한다 (#209).
-API_CONTRACT_VERSION = "1.4.0"
+# 1.4.0 -> 1.5.0: Dataset Catalog·Detail·Stage Summary API 추가 (#488, additive).
+API_CONTRACT_VERSION = "1.5.0"
 
 
 @dataclass(frozen=True)
@@ -365,6 +368,9 @@ class BuilderService:
                 finished_at=finished_at,
                 spec_digest=result.spec_digest,
                 created_by=manifest_data.get("created_by"),
+                # dataset_id는 이 run이 실제로 실행한 canonical spec에서 곧바로 얻는다
+                # (snapshot과 동일한 값) — 파생 검색값일 뿐이므로 별도로 추측하지 않는다 (#488).
+                dataset_id=spec_or_error.dataset_id,
             )
         except Exception:
             # 인덱스 갱신 실패는 무시 (ADR 0003)
@@ -610,6 +616,180 @@ class BuilderService:
             {"builds": cast(list[JsonValue], _apply_ownership(fs_builds, principal))},
         )
 
+    def _dataset_records(self, principal: Principal | None) -> list[datasets_service.RunRecord]:
+        """dataset_id가 있는 접근 가능한 모든 run을 얻는다 (인덱스 우선, 파일시스템 폴백).
+
+        ownership 필터를 grouping/latest 선정보다 먼저 적용한다 — 동일 dataset_id의
+        타 사용자 run이 latest 후보에 섞이지 않게 한다 (#488 semantics D).
+        """
+        index_records = datasets_service.collect_run_records_from_index(self._build_index) or []
+        filesystem_records = datasets_service.collect_run_records_from_filesystem(self._output_root)
+        records = datasets_service.merge_run_records(index_records, filesystem_records)
+        records = datasets_service.retain_canonical_run_records(self._output_root, records)
+        return datasets_service.filter_ownership(records, principal, enforce=_enforce_ownership())
+
+    def _dataset_records_for(
+        self, dataset_id: str, principal: Principal | None
+    ) -> list[datasets_service.RunRecord]:
+        """특정 dataset_id의 접근 가능한 canonical run을 모두 얻는다."""
+        return [
+            record for record in self._dataset_records(principal) if record.dataset_id == dataset_id
+        ]
+
+    def list_datasets(
+        self, *, limit: int = 50, principal: Principal | None = None
+    ) -> ServiceResponse:
+        """동일 dataset_id의 여러 run을 하나의 built dataset으로 묶어 목록을 반환한다 (#488).
+
+        각 dataset은 접근 가능한 run 중 latest run(finished_at 기준, 동일 시각은
+        run_id 내림차순 타이브레이크)의 canonical snapshot·manifest·stage 상태로
+        요약된다. legacy run(snapshot 없음)은 grouping 대상에서 제외된다.
+        """
+        records = self._dataset_records(principal)
+        latest_by_dataset = datasets_service.group_latest_by_dataset(records)
+        ordered = sorted(
+            latest_by_dataset.values(),
+            key=datasets_service.sort_key,
+            reverse=True,
+        )
+        items: list[JsonValue] = []
+        for record in ordered:
+            if len(items) >= limit:
+                break
+            view = datasets_service.build_dataset_summary(self._output_root, record)
+            if view is not None:
+                items.append(view)
+        return ServiceResponse(200, {"datasets": items})
+
+    def get_dataset(
+        self, dataset_id: str, *, principal: Principal | None = None
+    ) -> ServiceResponse:
+        """단일 built dataset의 canonical 요약을 반환한다 (#488).
+
+        접근 가능한 run이 하나도 없으면(dataset_id가 실제로 없거나, 있어도 전부
+        타 사용자 소유이면) 404 — 어느 경우인지는 구분해 노출하지 않는다.
+        """
+        records = self._dataset_records_for(dataset_id, principal)
+        if not records:
+            return ServiceResponse(404, {"error": f"dataset not found: {dataset_id}"})
+        latest = datasets_service.pick_latest(records)
+        view = datasets_service.build_dataset_summary(self._output_root, latest)
+        if view is None:
+            return ServiceResponse(404, {"error": f"dataset not found: {dataset_id}"})
+        view["run_count"] = len(records)
+        return ServiceResponse(200, view)
+
+    def list_dataset_runs(
+        self, dataset_id: str, *, limit: int = 50, principal: Principal | None = None
+    ) -> ServiceResponse:
+        """dataset_id의 접근 가능한 run history를 최신순으로 반환한다 (#488).
+
+        타 사용자의 run은 제외된다. 접근 가능한 run이 하나도 없으면 404 —
+        /datasets/{dataset_id}와 동일한 존재 판정 정책을 공유한다.
+        """
+        records = self._dataset_records_for(dataset_id, principal)
+        if not records:
+            return ServiceResponse(404, {"error": f"dataset not found: {dataset_id}"})
+        ordered = sorted(records, key=datasets_service.sort_key, reverse=True)[:limit]
+        runs: list[JsonValue] = [
+            {
+                "run_id": r.run_id,
+                "status": r.status,
+                "started_at": r.started_at,
+                "finished_at": r.finished_at,
+                "spec_digest": r.spec_digest,
+                "created_by": r.created_by,
+            }
+            for r in ordered
+        ]
+        return ServiceResponse(200, {"dataset_id": dataset_id, "runs": runs})
+
+    def list_run_stages(self, run_id: str) -> ServiceResponse:
+        """run에 알려진 모든 source의 Bronze/Silver/Gold 상태를 반환한다 (#488).
+
+        호출 전에 run_id 검증·존재 확인·ownership 게이팅이 끝나 있어야 한다
+        (dispatch가 다른 /builds/{run_id}/* 라우트와 동일한 순서로 처리한다).
+        """
+        manifest = datasets_service.read_manifest(self._output_root, run_id)
+        if manifest is None:
+            return ServiceResponse(404, {"error": f"manifest not found: {run_id}"})
+        summaries = stages_service.list_run_stages(self._output_root, run_id, manifest)
+        sources: list[JsonValue] = [
+            {
+                "source_key": s.source_key,
+                "bronze": {"status": s.bronze, "available": s.bronze == "completed"},
+                "silver": {"status": s.silver, "available": s.silver == "completed"},
+                "gold": {"status": s.gold, "available": s.gold == "completed"},
+            }
+            for s in summaries
+        ]
+        return ServiceResponse(200, {"run_id": run_id, "sources": sources})
+
+    def get_run_stage_detail(
+        self, run_id: str, stage: str, source_key: str, *, limit: int
+    ) -> ServiceResponse:
+        """단일 source의 단일 stage에 대한 안전한 summary/preview를 반환한다 (#488).
+
+        순서: stage 이름 검증(구조) → manifest에서 known source 확인 → 각 stage
+        reader가 sidecar만 읽어 응답을 구성한다. raw fetch_params/export
+        options/credential/absolute path는 어디에도 담지 않는다.
+        """
+        if stage not in stages_service.STAGE_NAMES:
+            return ServiceResponse(
+                400, {"error": f"invalid stage: {stage!r}; must be one of bronze/silver/gold"}
+            )
+        manifest = datasets_service.read_manifest(self._output_root, run_id)
+        if manifest is None:
+            return ServiceResponse(404, {"error": f"manifest not found: {run_id}"})
+        summary = stages_service.stage_status_for_source(
+            self._output_root, run_id, manifest, source_key
+        )
+        if summary is None:
+            return ServiceResponse(404, {"error": f"unknown source: {source_key}"})
+
+        status = stages_service.stage_status_of(summary, stage)
+        body: dict[str, JsonValue] = {
+            "run_id": run_id,
+            "stage": stage,
+            "source_key": source_key,
+            "status": status,
+            "available": status == "completed",
+        }
+
+        if stage == "bronze":
+            bronze = stages_service.bronze_detail(self._output_root, run_id, source_key)
+            spec = datasets_service.read_snapshot_spec(self._output_root, run_id)
+            matched = stages_service.match_source_ref(spec, source_key) if spec else None
+            body["provider"] = matched.provider if matched is not None else None
+            body["dataset"] = matched.dataset if matched is not None else None
+            body["fetched_at"] = bronze.fetched_at if bronze is not None else None
+            body["record_count"] = bronze.record_count if bronze is not None else None
+        elif stage == "silver":
+            silver = stages_service.silver_detail(
+                self._output_root, run_id, source_key, limit=limit
+            )
+            body["row_count"] = silver.row_count if silver is not None else None
+            body["schema"] = silver.schema if silver is not None else []
+            body["statistics"] = silver.statistics if silver is not None else None
+            body["validation"] = silver.validation if silver is not None else None
+            body["sample"] = silver.sample if silver is not None else []
+        else:  # gold
+            gold = stages_service.gold_detail(self._output_root, run_id, source_key)
+            body["row_count"] = gold.row_count if gold is not None else None
+            body["columns"] = cast(JsonValue, gold.columns) if gold is not None else []
+            body["splits"] = cast(JsonValue, gold.splits) if gold is not None else None
+            body["exports"] = (
+                cast(JsonValue, [{"kind": kind} for kind in gold.export_kinds])
+                if gold is not None
+                else []
+            )
+            # Gold sample sidecar가 아직 없으므로 만들어내지 않는다 — Silver sample을
+            # 가장하지 않고 명시적으로 unavailable을 표현한다.
+            body["sample"] = None
+            body["sample_available"] = False
+
+        return ServiceResponse(200, body)
+
     def _load_validated(self, spec_yaml: str) -> BuildSpec | ServiceResponse:
         """spec_yaml을 파싱·검증하고, 실패 시 오류 ServiceResponse를 반환한다."""
         try:
@@ -636,6 +816,21 @@ def _spec_from_body(body: Mapping[str, JsonValue] | None) -> str | ServiceRespon
     if not isinstance(spec_value, str):
         return ServiceResponse(400, {"error": "'spec' must be a YAML string"})
     return spec_value
+
+
+def _parse_limit_query(query: str, *, default: int = 50) -> int | ServiceResponse:
+    """``?limit=N`` 쿼리 파라미터를 파싱한다. 없으면 default, 형식이 잘못되면 400 (#488)."""
+    query_params = parse_qs(query)
+    if "limit" not in query_params:
+        return default
+    raw_limit = query_params["limit"][-1]
+    try:
+        value = int(raw_limit)
+    except ValueError:
+        return ServiceResponse(400, {"error": "'limit' must be a positive integer"})
+    if value < 1:
+        return ServiceResponse(400, {"error": "'limit' must be a positive integer"})
+    return value
 
 
 def dispatch(
@@ -671,6 +866,35 @@ def dispatch(
 
     if method == "GET" and path == "/catalog":
         return service.catalog()
+
+    if method == "GET" and path == "/datasets":
+        limit = _parse_limit_query(query)
+        if isinstance(limit, ServiceResponse):
+            return limit
+        return service.list_datasets(limit=limit, principal=principal)
+
+    if method == "GET" and path.startswith("/datasets/"):
+        # dataset_id는 BuildSpec.dataset_id 값 그대로일 수 있어 slash/space 등을
+        # 포함할 수 있다 (#488). http.server는 percent-encoding을 자동으로 풀지
+        # 않으므로, "/runs" 접미사를 아직 인코딩된 원문 상태에서 먼저 떼어낸 뒤
+        # 남은 단일 세그먼트만 unquote한다 — dataset_id 안의 literal '/'는
+        # 클라이언트가 %2F로 인코딩해야 이 라우팅과 충돌하지 않는다.
+        raw_rest = path[len("/datasets/") :]
+        is_runs_route = raw_rest.endswith("/runs")
+        raw_dataset_id = raw_rest[: -len("/runs")] if is_runs_route else raw_rest
+        if not raw_dataset_id:
+            return ServiceResponse(400, {"error": "dataset_id must not be empty"})
+        dataset_id = unquote(raw_dataset_id)
+        if not dataset_id:
+            return ServiceResponse(400, {"error": "dataset_id must not be empty"})
+
+        if is_runs_route:
+            limit = _parse_limit_query(query)
+            if isinstance(limit, ServiceResponse):
+                return limit
+            return service.list_dataset_runs(dataset_id, limit=limit, principal=principal)
+
+        return service.get_dataset(dataset_id, principal=principal)
 
     if method == "POST" and path == "/validate":
         spec = _spec_from_body(body)
@@ -760,6 +984,69 @@ def dispatch(
         if ownership_error is not None:
             return ownership_error
         return service.spec(run_id)
+
+    if method == "GET" and path.startswith("/builds/") and "/stages" in path:
+        rest = path[len("/builds/") :]
+        segments = rest.split("/")
+        run_id = segments[0]
+        try:
+            validate_path_segment(run_id, field_name="run_id")
+        except ValueError as exc:
+            return ServiceResponse(400, {"error": str(exc)})
+
+        if len(segments) == 2 and segments[1] == "stages":
+            existence_error = _check_run_exists(service, run_id)
+            if existence_error is not None:
+                return existence_error
+            ownership_error = _check_ownership(service, run_id, principal)
+            if ownership_error is not None:
+                return ownership_error
+            return service.list_run_stages(run_id)
+
+        if len(segments) == 3 and segments[1] == "stages" and segments[2]:
+            stage = segments[2]
+            if stage not in stages_service.STAGE_NAMES:
+                return ServiceResponse(
+                    400, {"error": f"invalid stage: {stage!r}; must be one of bronze/silver/gold"}
+                )
+            query_params = parse_qs(query)
+            source_values = query_params.get("source")
+            if not source_values or not source_values[-1]:
+                return ServiceResponse(400, {"error": "'source' query parameter is required"})
+            source_key = source_values[-1]
+            # source는 sidecar 경로에 이어붙기 전 known source인지 확인해야 하지만
+            # (dispatch에서는 manifest를 읽지 않는다), 문자 구성만이라도 여기서
+            # 구조적으로 먼저 거부한다 — path traversal에 쓰일 수 없게 한다.
+            try:
+                validate_path_segment(source_key, field_name="source")
+            except ValueError as exc:
+                return ServiceResponse(400, {"error": str(exc)})
+
+            limit = stages_service.DEFAULT_STAGE_PREVIEW_LIMIT
+            if "limit" in query_params:
+                raw_limit = query_params["limit"][-1]
+                try:
+                    limit = int(raw_limit)
+                except ValueError:
+                    return ServiceResponse(400, {"error": "'limit' must be a positive integer"})
+                if limit < 1 or limit > stages_service.MAX_STAGE_PREVIEW_LIMIT:
+                    return ServiceResponse(
+                        400,
+                        {
+                            "error": (
+                                "'limit' must be a positive integer up to "
+                                f"{stages_service.MAX_STAGE_PREVIEW_LIMIT}"
+                            )
+                        },
+                    )
+
+            existence_error = _check_run_exists(service, run_id)
+            if existence_error is not None:
+                return existence_error
+            ownership_error = _check_ownership(service, run_id, principal)
+            if ownership_error is not None:
+                return ownership_error
+            return service.get_run_stage_detail(run_id, stage, source_key, limit=limit)
 
     if method == "GET" and path.startswith("/artifacts/"):
         rest = path[len("/artifacts/") :]
