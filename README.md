@@ -274,7 +274,7 @@ curl -X POST http://localhost:8000/validate \
 
 인증 실패 시 `401 Unauthorized` 응답이 반환됩니다.
 
-자세한 내용은 [ADR 0006 — 서비스 인증 & 배포(Docker) 스토리](./docs/adrs/0006-service-auth-and-deployment.md)와 [API_CONTRACT.md](./API_CONTRACT.md)를 참고하세요.
+자세한 내용은 [ADR 0006 — 서비스 인증 & 배포(Docker) 스토리](./docs/adrs/0006-service-auth-and-deployment.md)와 [API_CONTRACT.md](./API_CONTRACT.md)를 참고하세요. Studio용 named request/response example은 [OpenAPI 예제 추출 가이드](./docs/guides/openapi-examples.md)에 따라 JSON으로 추출할 수 있습니다.
 
 ---
 

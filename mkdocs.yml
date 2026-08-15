@@ -27,6 +27,7 @@ nav:
       - 도메인 모델: DOMAIN_MODEL.md
       - 내보내기 모델: EXPORT_MODEL.md
       - 에러 처리: guides/error-handling.md
+      - OpenAPI 예제 추출: guides/openapi-examples.md
       - 배포 가이드: deploy.md
       - 예제:
           - 서울 아파트 실거래가: examples/seoul-apt-trade.md
