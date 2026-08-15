@@ -392,6 +392,7 @@ def _run_serve(*, output_dir: str, host: str, port: int, max_workers: int | None
     service = BuilderService(
         output_root=Path(output_dir),
         client_factory=_create_client,
+        async_max_workers=max_workers,
     )
     # 장시간 실행 명령이므로 시작 로그가 파이프 버퍼링에 갈리지 않도록 즉시 flush한다.
     print(

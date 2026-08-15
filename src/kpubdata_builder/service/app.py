@@ -27,6 +27,7 @@ from urllib.parse import parse_qs, unquote
 import yaml
 from kpubdata import Client
 from kpubdata.core.models import DatasetRef
+from typing_extensions import assert_never
 
 from ..credentials import (
     AesGcmCredentialCipher,
@@ -53,9 +54,11 @@ from ..stages.bronze.build import SourceClient
 from ..store import BuildIndex
 from ..tabular import DEFAULT_PREVIEW_LIMIT
 from . import datasets as datasets_service
+from . import ownership as ownership_module
 from . import quality as quality_service
 from . import stages as stages_service
-from .auth import AuthError, Principal, authenticate, principal_owns
+from .auth import AuthError, Principal, authenticate
+from .jobs import AsyncBuildExecutor, generate_run_id
 from .providers import (
     CredentialResolver,
     ProviderCredentialConflictError,
@@ -69,11 +72,9 @@ from .providers import (
 
 logger = logging.getLogger(__name__)
 
-_OWNERSHIP_ENV = "ENFORCE_OWNERSHIP"
 _CREDENTIAL_MASTER_KEY_ENV = "KPUBDATA_BUILDER_CREDENTIAL_MASTER_KEY"
 _PROVIDER_TEST_TIMEOUT_ENV = "KPUBDATA_BUILDER_PROVIDER_TEST_TIMEOUT"
 _DEFAULT_PROVIDER_TEST_TIMEOUT = 10.0
-
 
 @runtime_checkable
 class _CloseableClient(Protocol):
@@ -144,7 +145,7 @@ def _requires_service_key(dataset: DatasetRef, auth_provider_names: frozenset[st
 
 def _enforce_ownership() -> bool:
     """run 소유권 강제가 활성화되어 있는지 (#389). 기본 off — 하위 호환."""
-    return os.environ.get(_OWNERSHIP_ENV, "").lower() in ("true", "1")
+    return ownership_module.enforce_ownership()
 
 
 def _read_manifest_ownership(service: BuilderService, run_id: str) -> tuple[str | None, str | None]:
@@ -168,17 +169,14 @@ def _check_ownership(
 ) -> ServiceResponse | None:
     """소유권을 검사한다 (#389, #505). 통과 시 None, 거부 시 403 ServiceResponse.
 
-    - ENFORCE_OWNERSHIP off → 항상 None (통과).
-    - dev/service principal → 모든 run 접근 가능 (관리자 권한).
-    - oidc principal → ``principal_owns()``(canonical owner_id 우선, legacy
-      created_by/label 폴백)로 판정. 둘 다 없으면 거부(fail-closed).
+    게이팅(env/관리자)과 판정 모두 ``service.ownership.ownership_allows``
+    공용 predicate로 한다(#504 review) — 비교는 ``principal_owns``(#505:
+    canonical owner_id 우선, legacy created_by/label 폴백)를 따른다.
     """
-    if not _enforce_ownership():
-        return None
-    if principal.kind in ("dev", "service"):
-        return None
     created_by, owner_id = _read_manifest_ownership(service, run_id)
-    if principal_owns(created_by=created_by, owner_id=owner_id, principal=principal):
+    if ownership_module.ownership_allows(
+        created_by=created_by, owner_id=owner_id, principal=principal
+    ):
         return None
     return ServiceResponse(403, {"error": "forbidden: not run owner"})
 
@@ -214,8 +212,11 @@ def _apply_ownership(
     return [
         e
         for e in entries
-        if principal_owns(
-            created_by=e.get("created_by"), owner_id=e.get("owner_id"), principal=principal
+        if ownership_module.ownership_allows(
+            created_by=e.get("created_by"),
+            owner_id=e.get("owner_id"),
+            principal=principal,
+            enforce=True,
         )
     ]
 
@@ -302,6 +303,8 @@ class BuilderService:
         credential_repository: CredentialRepository | None = None,
         provider_test_operation: ProviderTestOperation = default_provider_test,
         provider_test_timeout: float | None = None,
+        async_max_workers: int = 10,
+        async_max_queue_size: int = 10,
     ) -> None:
         self._output_root = output_root
         self._client_factory = client_factory
@@ -318,6 +321,10 @@ class BuilderService:
         )
         if self._provider_test_timeout <= 0:
             raise ValueError("provider test timeout must be positive")
+        self._async_builds = AsyncBuildExecutor(
+            max_workers=async_max_workers,
+            max_queue_size=async_max_queue_size,
+        )
 
     def _create_client(
         self,
@@ -493,7 +500,7 @@ class BuilderService:
     def query(
         self, body: Mapping[str, JsonValue] | None, *, principal: Principal
     ) -> ServiceResponse:
-        """Execute one validated SQL query against a server-resolved stage table."""
+        """서버가 resolve한 stage 테이블에 대해 검증된 SQL 쿼리 1건을 실행한다."""
         try:
             request = _query_request_from_body(body)
             context = resolve_query_context(self._output_root, request, principal)
@@ -779,6 +786,55 @@ class BuilderService:
             pass
 
         return ServiceResponse(status_code, body)
+
+    def submit_build(
+        self, spec_yaml: str, *, run_id: str | None = None, created_by: str | None = None
+    ) -> ServiceResponse:
+        """비동기 build job을 큐에 넣고 초기 상태를 반환한다 (#482)."""
+        resolved_run_id = run_id or generate_run_id()
+        if self._build_index.get(resolved_run_id) is not None:
+            return ServiceResponse(
+                409,
+                {
+                    "error": "run_id already completed",
+                    "run_id": resolved_run_id,
+                },
+            )
+        result = self._async_builds.submit(
+            spec_yaml=spec_yaml,
+            run_id=resolved_run_id,
+            created_by=created_by,
+            runner=self._run_build_job,
+        )
+        match result.status:
+            case "accepted":
+                if result.snapshot is None:
+                    raise RuntimeError("accepted async build is missing snapshot")
+                return ServiceResponse(202, result.snapshot.to_body())
+            case "existing":
+                if result.snapshot is None:
+                    raise RuntimeError("existing async build is missing snapshot")
+                return ServiceResponse(200, result.snapshot.to_body())
+            case "queue_full":
+                return ServiceResponse(429, {"error": "async build queue is full"})
+            case unreachable:
+                assert_never(unreachable)
+
+    def build_status(self, run_id: str) -> ServiceResponse:
+        """active/terminal 비동기 build job 상태를 반환한다 (#482)."""
+        try:
+            validate_path_segment(run_id, field_name="run_id")
+        except ValueError as exc:
+            return ServiceResponse(400, {"error": str(exc)})
+        snapshot = self._async_builds.get(run_id)
+        if snapshot is None:
+            return ServiceResponse(404, {"error": f"build job not found: {run_id}"})
+        return ServiceResponse(200, snapshot.to_body())
+
+    def _run_build_job(
+        self, spec_yaml: str, run_id: str, created_by: str | None
+    ) -> ServiceResponse:
+        return self.build(spec_yaml, run_id=run_id, created_by=created_by)
 
     def artifacts(self, run_id: str) -> ServiceResponse:
         """실행 워크스페이스의 산출물 파일 목록을 반환한다."""
@@ -1423,6 +1479,26 @@ def dispatch(
             principal=principal,
         )
 
+    if method == "POST" and path == "/builds":
+        spec = _spec_from_body(body)
+        if isinstance(spec, ServiceResponse):
+            return spec
+        async_run_id: str | None = None
+        if body is not None and "run_id" in body:
+            run_id_value = body["run_id"]
+            if not isinstance(run_id_value, str) or not run_id_value.strip():
+                return ServiceResponse(400, {"error": "'run_id' must be a non-empty string"})
+            try:
+                validate_path_segment(run_id_value, field_name="run_id")
+            except ValueError as exc:
+                return ServiceResponse(400, {"error": str(exc)})
+            async_run_id = run_id_value
+        return service.submit_build(spec, run_id=async_run_id, created_by=principal.label)
+
+    if method == "GET" and path.startswith("/builds/") and "/" not in path[len("/builds/") :]:
+        run_id = path[len("/builds/") :]
+        return service.build_status(run_id)
+
     if method == "GET" and path.startswith("/builds/") and path.endswith("/manifest"):
         rest = path[len("/builds/") :]
         parts = rest.split("/", 1)
@@ -1532,7 +1608,7 @@ def dispatch(
         rest = path[len("/artifacts/") :]
         parts = rest.split("/", 1)
         run_id = parts[0]
-        # run_id를 소유권 검사보다 먼저 검증 (#439). _read_manifest_created_by 가
+        # run_id를 소유권 검사보다 먼저 검증 (#439). _read_manifest_ownership 이
         # 검증 없이 경로를 조립하므로 "../" 등 unsafe 세그먼트가 _check_ownership
         # 보다 먼저 도달해야 한다.
         try:

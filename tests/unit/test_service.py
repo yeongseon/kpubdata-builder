@@ -16,9 +16,9 @@ import pytest
 
 import kpubdata_builder.service.app as app_module
 from kpubdata_builder.service import BuilderService, ServiceResponse, dispatch
-from kpubdata_builder.service.app import _OWNERSHIP_ENV
 from kpubdata_builder.service.auth import Principal
 from kpubdata_builder.service.http import _clear_cors_cache, make_handler
+from kpubdata_builder.service.ownership import _OWNERSHIP_ENV
 from kpubdata_builder.spec import JsonValue
 
 VALID_SPEC_YAML = (

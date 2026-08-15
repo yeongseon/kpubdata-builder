@@ -372,7 +372,7 @@ def rebuild_index(output_root: Path) -> int:
 
             try:
                 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
+            except (json.JSONDecodeError, UnicodeDecodeError, OSError):
                 continue
 
             status = "failed" if manifest.get("errors") else "ok"
@@ -381,7 +381,9 @@ def rebuild_index(output_root: Path) -> int:
             snapshot_path = run_dir / BUILDSPEC_SNAPSHOT_FILENAME
             spec_digest: str | None = None
             dataset_id: str | None = None
-            if snapshot_path.is_file():
+            # is_file()은 symlink를 따라가므로, 워크스페이스 밖 파일을
+            # 해시하는 것을 막기 위해 symlink는 명시적으로 거부한다.
+            if snapshot_path.is_file() and not snapshot_path.is_symlink():
                 try:
                     snapshot_bytes = snapshot_path.read_bytes()
                 except OSError:
