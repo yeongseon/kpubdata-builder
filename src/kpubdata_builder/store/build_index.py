@@ -273,6 +273,142 @@ class BuildIndex:
             for row in cur
         ]
 
+    def list_recent_owned(
+        self, *, limit: int, principal_owner_id: str | None, principal_label: str
+    ) -> list[BuildEntry]:
+        """principal 소유 build만 최신 완료 순으로 최대 ``limit``개 반환한다 (#527).
+
+        ownership 필터를 Python에서 전체 결과에 사후 적용하기 전에 LIMIT을
+        걸면(예: 전역 최신 10건을 먼저 가져온 뒤 필터링), 다른 principal의
+        최신 run들이 LIMIT을 다 채워 본인의 recent run이 잘릴 수 있다 — 이
+        메서드는 필터를 SQL WHERE로 LIMIT보다 먼저 적용해 그 문제를 없앤다.
+
+        정책은 ``service.auth.principal_owns()``(#505)와 정확히 동일해야
+        한다:
+
+        - 레코드와 principal 양쪽 모두 ``owner_id``가 있으면 그 값을 비교한다
+          (``principal_owner_id``가 아닌 경우에만).
+        - 그 외(레코드에 ``owner_id``가 없거나 principal에 ``owner_id``가
+          없음)에는 ``created_by == principal_label``로 폴백한다.
+        - 어느 쪽도 매치하지 않으면 제외한다(fail-closed) — SQL의 NULL 비교는
+          자연히 조건을 만족시키지 않으므로 별도 처리가 필요 없다.
+
+        Args:
+            limit: 반환할 최대 빌드 수.
+            principal_owner_id: 요청 principal의 canonical stable owner_id.
+                ``None``이면(legacy/owner_id 미설정 principal) 레코드
+                ``owner_id``와 무관하게 항상 ``created_by`` 비교로 폴백한다
+                (``principal_owns()``와 동일).
+            principal_label: 요청 principal의 legacy 비교용 label
+                (``Principal.label``).
+
+        Returns:
+            BuildEntry 목록 (finished_at 내림차순, 최대 limit개).
+        """
+        if principal_owner_id is not None:
+            sql = """
+                SELECT run_id, status, started_at, finished_at, spec_digest, error, created_by,
+                       dataset_id, owner_id
+                FROM builds
+                WHERE (owner_id IS NOT NULL AND owner_id = ?)
+                   OR (owner_id IS NULL AND created_by = ?)
+                ORDER BY finished_at DESC
+                LIMIT ?
+            """
+            params: tuple[object, ...] = (principal_owner_id, principal_label, limit)
+        else:
+            sql = """
+                SELECT run_id, status, started_at, finished_at, spec_digest, error, created_by,
+                       dataset_id, owner_id
+                FROM builds
+                WHERE created_by = ?
+                ORDER BY finished_at DESC
+                LIMIT ?
+            """
+            params = (principal_label, limit)
+        cur = self._conn.execute(sql, params)
+        return [
+            BuildEntry(
+                run_id=row[0],
+                status=cast(BuildStatus, row[1]),
+                started_at=row[2],
+                finished_at=row[3],
+                spec_digest=row[4],
+                error=row[5],
+                created_by=row[6],
+                dataset_id=row[7],
+                owner_id=row[8],
+            )
+            for row in cur
+        ]
+
+    def list_between(self, start_iso: str, end_iso: str) -> list[BuildEntry]:
+        """``[start_iso, end_iso)`` 반열린 구간에 완료된 빌드를 오름차순으로 반환한다 (#516).
+
+        ``finished_at``이 문자열 비교로 구간 안에 드는 행에 더해 ``finished_at``이
+        NULL인 행도 함께 반환한다 — SQL에서는 어느 구간에 속하는지 판정할 수 없는
+        값이므로 침묵하며 제외하지 않고 호출자에게 넘겨 malformed로 셀 수 있게
+        한다(#516 partial 판정). ISO 8601 UTC(``Z`` suffix, zero-padded) 형식이면
+        문자열 정렬이 시각 정렬과 일치하지만, 그 형식을 벗어나면서 문자열 정렬상
+        구간 밖으로 벗어나는 극단적인 legacy 값은 이 쿼리 자체에서 걸러질 수 있다
+        — 실제 배포에서 malformed 값은 대체로 같은 날짜 prefix를 공유하는 손상된
+        ISO 문자열(NULL 포함)이라 이 한계는 좁다. ``idx_builds_finished_at``
+        인덱스를 활용해 테이블 전체를 로드하지 않는다.
+
+        Args:
+            start_iso: 구간 시작(포함), ISO 8601 UTC 문자열.
+            end_iso: 구간 끝(제외), ISO 8601 UTC 문자열.
+
+        Returns:
+            BuildEntry 목록 (finished_at 오름차순, NULL은 먼저 온다).
+        """
+        cur = self._conn.execute(
+            """
+            SELECT run_id, status, started_at, finished_at, spec_digest, error, created_by,
+                   dataset_id, owner_id
+            FROM builds
+            WHERE finished_at IS NULL OR (finished_at >= ? AND finished_at < ?)
+            ORDER BY finished_at ASC
+            """,
+            (start_iso, end_iso),
+        )
+        return [
+            BuildEntry(
+                run_id=row[0],
+                status=cast(BuildStatus, row[1]),
+                started_at=row[2],
+                finished_at=row[3],
+                spec_digest=row[4],
+                error=row[5],
+                created_by=row[6],
+                dataset_id=row[7],
+                owner_id=row[8],
+            )
+            for row in cur
+        ]
+
+    def latest_successful_finished_at(self) -> str | None:
+        """가장 최근 성공(``status='ok'``) 빌드의 ``finished_at``을 반환한다 (#516).
+
+        Artifact Store의 ``last_write_at`` 근거로 쓰인다 — 실제 성공한 빌드가
+        artifact를 기록했다는 확실한 증거만 반환하며, 성공 기록이 없으면
+        ``None``이다("모른다"를 임의 값으로 채우지 않는다). ``idx_builds_finished_at``
+        인덱스를 활용하는 bounded 쿼리다.
+
+        Returns:
+            ISO 8601 문자열 또는 성공 기록이 없으면 None.
+        """
+        cur = self._conn.execute(
+            """
+            SELECT finished_at FROM builds
+            WHERE status = 'ok' AND finished_at IS NOT NULL
+            ORDER BY finished_at DESC
+            LIMIT 1
+            """
+        )
+        row = cur.fetchone()
+        return cast(str | None, row[0]) if row is not None else None
+
     def get(self, run_id: str) -> BuildEntry | None:
         """특정 빌드를 조회한다.
 
