@@ -30,6 +30,7 @@ from ..spec.serializer import BUILDSPEC_SNAPSHOT_FILENAME
 from ..stages._path_safety import ensure_within
 from ..store import BuildEntry, BuildIndex
 from .auth import Principal
+from .ownership import ownership_allows
 from .stages import list_run_stages
 
 
@@ -86,15 +87,22 @@ def filter_ownership(
 ) -> list[RunRecord]:
     """list_builds의 _apply_ownership과 동일한 정책으로 접근 가능한 run만 남긴다.
 
-    ENFORCE_OWNERSHIP + oidc principal일 때만 필터링한다. dev/service principal과
-    principal=None은 통과(관리자 권한 + 하위 호환). 동일 dataset_id라도 타 사용자의
-    run은 grouping/latest 선정에서 완전히 제외된다(#488 semantics D) — 여기서
-    걸러진 뒤에야 grouping/latest 선택이 일어나므로, 다른 사용자의 run이 latest로
-    뽑히거나 metadata에 섞이는 일이 없다.
+    판정은 ``service.ownership.ownership_allows`` 공용 predicate를 쓴다
+    (#504 review) — ``query.resolver``/``app._check_ownership``과 같은
+    semantics를 공유한다. ENFORCE_OWNERSHIP + oidc principal일 때만
+    필터링한다. dev/service principal과 principal=None은 통과(관리자 권한 +
+    하위 호환). 동일 dataset_id라도 타 사용자의 run은 grouping/latest 선정에서
+    완전히 제외된다(#488 semantics D) — 여기서 걸러진 뒤에야 grouping/latest
+    선택이 일어나므로, 다른 사용자의 run이 latest로 뽑히거나 metadata에
+    섞이는 일이 없다.
     """
     if not (enforce and principal is not None and principal.kind == "oidc"):
         return list(records)
-    return [r for r in records if r.created_by == principal.label]
+    return [
+        r
+        for r in records
+        if ownership_allows(created_by=r.created_by, principal=principal, enforce=enforce)
+    ]
 
 
 def read_snapshot_dataset_id(output_root: Path, run_id: str) -> str | None:

@@ -41,6 +41,7 @@ v0.4 Builder service는 동기식 실행 모델을 유지합니다.
 | built dataset 조회 | `GET /datasets`, `GET /datasets/{dataset_id}`, `GET /datasets/{dataset_id}/runs`로 `BuildSpec.dataset_id` 단위 grouping/latest run/run history를 반환 |
 | stage summary/preview | `GET /builds/{run_id}/stages`, `GET /builds/{run_id}/stages/{stage}`로 source별 Bronze/Silver/Gold 상태와 안전한 요약을 반환 |
 | structured quality/drift | `GET /builds/{run_id}/quality`로 run의 source별 `quality_results`/`schema_drift`를, `GET /datasets/{dataset_id}/quality/history`로 dataset의 run별 PASS/WARN/FAIL 집계 이력을 반환 |
+| read-only query | `POST /query`가 server-resolved Silver/Gold table을 logical `dataset`으로 등록하고 별도 capacity/timeout 안에서 실행 |
 | 인증 실패 | `401`은 재인증 대상, `403`은 권한 요청 대상, `503`은 JWKS 일시 장애 대상 |
 
 정책과 구현이 다르면 구현 각주를 늘리지 말고 다음 순서로 정리합니다.
@@ -152,6 +153,14 @@ v0.4 Builder service는 동기식 실행 모델을 유지합니다.
 - `GET /datasets`, `GET /datasets/{dataset_id}` 응답의 `quality` 필드는 여전히 항상
   `null`입니다. 임의 종합 quality score를 만들지 않기 위한 의도적 설계이며, 구조화된
   결과는 위 두 전용 엔드포인트로 조회합니다.
+
+### Read-only Query (#504)
+
+- `/query`는 `dataset` physical relation을 최소 한 번 참조하는 단일 SELECT/CTE만
+  허용합니다. CTE의 `dataset` shadowing, recursive CTE, 외부 table/table function,
+  filesystem/network 접근, DML/DDL은 거부합니다.
+- query는 HTTP worker pool과 별도인 bounded capacity를 사용합니다. Query timeout은 child
+  process를 실제 종료하며 429/504 오류는 안정적인 `code`로 구분됩니다.
 
 ## 4. 인증과 CORS
 

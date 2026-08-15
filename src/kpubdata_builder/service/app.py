@@ -16,7 +16,6 @@ from __future__ import annotations
 import heapq
 import json
 import logging
-import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,6 +30,15 @@ from typing_extensions import assert_never
 from ..errors import SpecLoadError, ValidationError
 from ..pipeline import preview_build, run_build
 from ..quality import QualityCheckResult
+from ..query.engine import QueryExecutionError, QueryTimeoutError
+from ..query.models import QueryRequest, QueryStage
+from ..query.resolver import (
+    QueryArtifactUnavailableError,
+    QueryContextError,
+    resolve_query_context,
+)
+from ..query.security import UnsafeQueryError, validate_read_only_sql
+from ..query.service import QueryBusyError, QueryService
 from ..spec import BuildSpec, JsonValue, parse_spec
 from ..spec.serializer import BUILDSPEC_SNAPSHOT_FILENAME, compute_spec_digest
 from ..spec.validator import validate_spec
@@ -39,14 +47,13 @@ from ..stages.bronze.build import SourceClient
 from ..store import BuildIndex
 from ..tabular import DEFAULT_PREVIEW_LIMIT
 from . import datasets as datasets_service
+from . import ownership as ownership_module
 from . import quality as quality_service
 from . import stages as stages_service
 from .auth import AuthError, Principal, authenticate
 from .jobs import AsyncBuildExecutor, generate_run_id
 
 logger = logging.getLogger(__name__)
-
-_OWNERSHIP_ENV = "ENFORCE_OWNERSHIP"
 
 
 @runtime_checkable
@@ -72,7 +79,7 @@ def _requires_service_key(dataset: DatasetRef, auth_provider_names: frozenset[st
 
 def _enforce_ownership() -> bool:
     """run 소유권 강제가 활성화되어 있는지 (#389). 기본 off — 하위 호환."""
-    return os.environ.get(_OWNERSHIP_ENV, "").lower() in ("true", "1")
+    return ownership_module.enforce_ownership()
 
 
 def _read_manifest_created_by(service: BuilderService, run_id: str) -> str | None:
@@ -92,16 +99,14 @@ def _check_ownership(
 ) -> ServiceResponse | None:
     """소유권을 검사한다 (#389). 통과 시 None, 거부 시 403 ServiceResponse.
 
-    - ENFORCE_OWNERSHIP off → 항상 None (통과).
-    - dev/service principal → 모든 run 접근 가능 (관리자 권한).
-    - oidc principal → created_by가 본인과 일치해야 함. NULL이면 거부.
+    판정 자체는 ``service.ownership.ownership_allows`` 공용 predicate를
+    쓴다(#504 review) — ``query.resolver``/``datasets.filter_ownership``과
+    같은 semantics를 공유한다.
     """
-    if not _enforce_ownership():
-        return None
-    if principal.kind in ("dev", "service"):
-        return None
     created_by = _read_manifest_created_by(service, run_id)
-    if created_by is not None and created_by == principal.label:
+    if ownership_module.ownership_allows(
+        created_by=created_by, principal=principal, enforce=_enforce_ownership()
+    ):
         return None
     return ServiceResponse(403, {"error": "forbidden: not run owner"})
 
@@ -139,7 +144,7 @@ def _apply_ownership(
 # 1.4.0 -> 1.5.0: Dataset Catalog·Detail·Stage Summary API 추가 (#488, additive).
 # 1.5.0 -> 1.6.0: 구조화된 Quality/Schema Drift 결과, quality history/detail API 추가
 # (#486, additive — 기존 엔드포인트는 변경되지 않는다).
-API_CONTRACT_VERSION = "1.6.0"
+API_CONTRACT_VERSION = "1.7.0"
 
 
 @dataclass(frozen=True)
@@ -202,15 +207,59 @@ class BuilderService:
         *,
         output_root: Path,
         client_factory: Callable[[], SourceClient],
+        query_service: QueryService | None = None,
         async_max_workers: int = 10,
         async_max_queue_size: int = 10,
     ) -> None:
         self._output_root = output_root
         self._client_factory = client_factory
         self._build_index = BuildIndex(output_root)  # #309, ADR 0003
+        self._query_service = query_service or QueryService()
         self._async_builds = AsyncBuildExecutor(
             max_workers=async_max_workers,
             max_queue_size=async_max_queue_size,
+        )
+
+    def query(
+        self, body: Mapping[str, JsonValue] | None, *, principal: Principal
+    ) -> ServiceResponse:
+        """서버가 resolve한 stage 테이블에 대해 검증된 SQL 쿼리 1건을 실행한다."""
+        try:
+            request = _query_request_from_body(body)
+            context = resolve_query_context(self._output_root, request, principal)
+            validated = validate_read_only_sql(request.sql)
+            result = self._query_service.execute(
+                context.table_path, validated.canonical_sql, limit=request.limit
+            )
+        except PermissionError:
+            return ServiceResponse(403, {"error": "forbidden", "code": "forbidden"})
+        except QueryArtifactUnavailableError:
+            return ServiceResponse(
+                404, {"error": "query artifact unavailable", "code": "artifact_unavailable"}
+            )
+        except QueryContextError as exc:
+            return ServiceResponse(400, {"error": str(exc), "code": "invalid_context"})
+        except UnsafeQueryError as exc:
+            return ServiceResponse(400, {"error": str(exc), "code": "unsafe_query"})
+        except QueryBusyError:
+            return ServiceResponse(429, {"error": "query is busy", "code": "query_busy"})
+        except QueryTimeoutError:
+            return ServiceResponse(504, {"error": "query timed out", "code": "query_timeout"})
+        except QueryExecutionError:
+            return ServiceResponse(
+                400, {"error": "query execution failed", "code": "query_execution_failed"}
+            )
+        except ValueError as exc:
+            return ServiceResponse(400, {"error": str(exc), "code": "invalid_request"})
+
+        return ServiceResponse(
+            200,
+            {
+                "columns": list(result.columns),
+                "rows": list(result.rows),
+                "truncated": result.truncated,
+                "execution_ms": result.execution_ms,
+            },
         )
 
     def version(self) -> ServiceResponse:
@@ -892,6 +941,39 @@ def _spec_from_body(body: Mapping[str, JsonValue] | None) -> str | ServiceRespon
     return spec_value
 
 
+def _query_request_from_body(body: Mapping[str, JsonValue] | None) -> QueryRequest:
+    if body is None:
+        raise ValueError("request body is required")
+    if not set(body).issubset({"dataset_id", "run_id", "stage", "source", "sql", "limit"}):
+        raise ValueError("request contains unknown fields")
+    dataset_id = body.get("dataset_id")
+    run_id = body.get("run_id")
+    stage = body.get("stage")
+    sql = body.get("sql")
+    source = body.get("source")
+    limit = body.get("limit", 100)
+    if not isinstance(dataset_id, str) or not dataset_id:
+        raise ValueError("dataset_id must be a non-empty string")
+    if not isinstance(run_id, str) or not run_id:
+        raise ValueError("run_id must be a non-empty string")
+    if stage not in ("silver", "gold"):
+        raise ValueError("stage must be silver or gold")
+    if not isinstance(sql, str) or not sql:
+        raise ValueError("sql must be a non-empty string")
+    if source is not None and (not isinstance(source, str) or not source):
+        raise ValueError("source must be a non-empty string when provided")
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 500:
+        raise ValueError("limit must be an integer from 1 to 500")
+    return QueryRequest(
+        dataset_id=dataset_id,
+        run_id=run_id,
+        stage=cast(QueryStage, stage),
+        source=source,
+        sql=sql,
+        limit=limit,
+    )
+
+
 def _parse_limit_query(query: str, *, default: int = 50) -> int | ServiceResponse:
     """``?limit=N`` 쿼리 파라미터를 파싱한다. 없으면 default, 형식이 잘못되면 400 (#488)."""
     query_params = parse_qs(query)
@@ -940,6 +1022,9 @@ def dispatch(
 
     if method == "GET" and path == "/catalog":
         return service.catalog()
+
+    if method == "POST" and path == "/query":
+        return service.query(body, principal=principal)
 
     if method == "GET" and path == "/datasets":
         limit = _parse_limit_query(query)

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: KPubData Builder Service API
-  version: "1.6.0"
+  version: "1.7.0"
   description: >-
     Builder 중심 서비스 계약. BuildSpec 검증, preview, build 실행, artifact 조회,
     계약 버전 조회를 제공한다. CLI와 HTTP service mode(#36)가 동일한 도메인 계약을
@@ -15,7 +15,8 @@ info:
     API를 추가한다(#486, additive — 기존 엔드포인트는 변경되지 않는다). `GET
     /builds/{run_id}/quality`는 `availability`(`available`/`partial`/`unavailable`)와
     `evaluated_checks`를 함께 반환해 "0건 평가"와 "애초에 계산된 적 없음"을
-    구분한다(#514, additive).
+    구분한다(#514, additive). v1.7.0은 Silver/Gold read-only `/query`를
+    추가한다(#504, additive).
 servers:
   - url: http://localhost:8000
     description: 로컬 builder 개발 서버
@@ -555,6 +556,56 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /query:
+    post:
+      operationId: queryBuiltDataset
+      summary: 서버가 resolve한 Silver/Gold table에 read-only SQL 실행
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QueryRequest"
+      responses:
+        "200":
+          description: bounded query result preview
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueryResponse"
+        "400":
+          description: invalid context, unsafe SQL, syntax/execution failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: query context 소유권 위반
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: stage artifact unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          description: query 전용 capacity 포화. child process는 생성되지 않는다.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "504":
+          description: query process timeout 및 강제 종료
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
 components:
   securitySchemes:
     ApiKeyAuth:
@@ -616,6 +667,38 @@ components:
         error:
           type: string
           description: 사람이 읽는 오류 요약 메시지
+        code:
+          type: string
+          description: 클라이언트 분기용 안정적인 오류 코드(새 endpoint에서 사용)
+
+    QueryRequest:
+      type: object
+      additionalProperties: false
+      required: [dataset_id, run_id, stage, sql]
+      properties:
+        dataset_id: {type: string}
+        run_id: {type: string}
+        stage: {type: string, enum: [silver, gold]}
+        source: {type: string}
+        sql: {type: string, maxLength: 65536}
+        limit: {type: integer, minimum: 1, maximum: 500, default: 100}
+
+    QueryResponse:
+      type: object
+      additionalProperties: false
+      required: [columns, rows, truncated, execution_ms]
+      properties:
+        columns:
+          type: array
+          items: {type: string}
+        rows:
+          type: array
+          items:
+            type: object
+            additionalProperties:
+              $ref: "#/components/schemas/JsonValue"
+        truncated: {type: boolean}
+        execution_ms: {type: integer, minimum: 0}
 
     ValidationError:
       type: object
