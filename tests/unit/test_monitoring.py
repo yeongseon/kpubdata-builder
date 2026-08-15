@@ -197,9 +197,24 @@ class TestLatencyRecorder:
 
         monkeypatch.setattr(recorder, "_lock", _BrokenLock())
         recorder.record(10.0)  # 예외를 던지지 않아야 한다.
-        sample_count, p95 = recorder.snapshot()
-        assert sample_count == 0
-        assert p95 is None
+
+    def test_snapshot_failure_returns_none_not_zero(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """collector 실패는 (0, None)이 아니라 None으로 구분된다 (#527).
+
+        (0, None)은 "정상 무표본"이고, None은 "측정 자체가 불가"다 — 이 둘을
+        같은 값으로 뭉개면 api_status()가 항상 available로 위장하게 된다.
+        """
+        recorder = LatencyRecorder()
+
+        class _BrokenLock:
+            def __enter__(self) -> None:
+                raise RuntimeError("simulated lock failure")
+
+            def __exit__(self, *exc: object) -> None:
+                return None
+
+        monkeypatch.setattr(recorder, "_lock", _BrokenLock())
+        assert recorder.snapshot() is None  # 예외를 던지지 않되, (0, None)도 아니다.
 
 
 class TestApiStatus:
@@ -216,6 +231,23 @@ class TestApiStatus:
         assert status.availability == "available"
         assert status.sample_count == 1
         assert status.p95_latency_ms == 5.0
+
+    def test_unavailable_when_collector_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """collector 실패(#527)는 available+0으로 위장하지 않고 unavailable+null+null이다."""
+        recorder = LatencyRecorder()
+
+        class _BrokenLock:
+            def __enter__(self) -> None:
+                raise RuntimeError("simulated lock failure")
+
+            def __exit__(self, *exc: object) -> None:
+                return None
+
+        monkeypatch.setattr(recorder, "_lock", _BrokenLock())
+        status = api_status(recorder)
+        assert status.availability == "unavailable"
+        assert status.sample_count is None
+        assert status.p95_latency_ms is None
 
 
 # =============================================================================
@@ -521,7 +553,10 @@ class TestArtifactStoreStatus:
 
 
 def _api(
-    *, availability: Availability = "available", sample_count: int = 0, p95: float | None = None
+    *,
+    availability: Availability = "available",
+    sample_count: int | None = 0,
+    p95: float | None = None,
 ) -> ApiStatus:
     return ApiStatus(availability=availability, sample_count=sample_count, p95_latency_ms=p95)
 
@@ -581,6 +616,16 @@ class TestAggregateStatus:
             queue=_queue(),
             workers=_workers(),
             artifact_store=_artifact(availability="unavailable", last_write_at=None),
+        )
+        assert status == "degraded"
+
+    def test_api_unavailable_is_degraded(self) -> None:
+        """api collector 실패(#527)로 availability=unavailable이면 aggregate도 degraded."""
+        status = aggregate_status(
+            api=_api(availability="unavailable", sample_count=None, p95=None),
+            queue=_queue(),
+            workers=_workers(),
+            artifact_store=_artifact(),
         )
         assert status == "degraded"
 
@@ -671,7 +716,7 @@ class TestBuildStatistics:
         assert all(b.total == 0 for b in stats.buckets)
         assert stats.recent_runs == ()
 
-    def test_counts_ok_failed_cancelled_in_correct_bucket(self, tmp_path: Path) -> None:
+    def test_counts_success_failed_cancelled_in_correct_bucket(self, tmp_path: Path) -> None:
         index = BuildIndex(tmp_path)
         index.insert_or_replace(
             run_id="ok-1", status="ok", started_at=None, finished_at="2026-08-15T09:15:00Z"
@@ -693,7 +738,8 @@ class TestBuildStatistics:
         )
         bucket_09 = next(b for b in stats.buckets if b.bucket_start == "2026-08-15T09:00:00Z")
         assert bucket_09.total == 3
-        assert bucket_09.ok == 1
+        # 내부 BuildIndex status "ok"는 wire 필드 "success"로 매핑된다 (#527).
+        assert bucket_09.success == 1
         assert bucket_09.failed == 1
         assert bucket_09.cancelled == 1
         assert bucket_09.bucket_end == "2026-08-15T10:00:00Z"
@@ -829,6 +875,43 @@ class TestBuildStatistics:
         assert run_ids == {"mine"}
         total = sum(b.total for b in stats.buckets)
         assert total == 1
+
+    def test_recent_run_survives_limit_when_older_than_other_users_runs(
+        self, tmp_path: Path
+    ) -> None:
+        """#527: 다른 사용자의 최신 run 10건이 있어도 그보다 오래된 내 recent run이
+
+        ownership 필터 이전에 걸린 전역 LIMIT(10)에 밀려 잘리지 않는다 —
+        필터가 LIMIT보다 먼저 SQL에서 적용돼야 한다(``BuildIndex.list_recent_owned``).
+        """
+        index = BuildIndex(tmp_path)
+        index.insert_or_replace(
+            run_id="mine-old",
+            status="ok",
+            started_at=None,
+            finished_at="2020-01-01T00:00:00Z",  # 아래 다른 사용자 run 10건보다 모두 오래됨.
+            created_by="oidc:userA",
+        )
+        for i in range(10):
+            index.insert_or_replace(
+                run_id=f"theirs-{i:02d}",
+                status="ok",
+                started_at=None,
+                finished_at=f"2026-08-15T{i:02d}:00:00Z",  # 전부 mine-old보다 최신.
+                created_by="oidc:userB",
+            )
+        principal = Principal(kind="oidc", identifier="userA")
+        stats = build_statistics(
+            index,
+            window="24h",
+            bucket="hour",
+            principal=principal,
+            enforce_ownership=True,
+            now=_NOW,
+        )
+        run_ids = {r.run_id for r in stats.recent_runs}
+        assert "mine-old" in run_ids
+        assert "theirs-00" not in run_ids
 
     def test_ownership_not_filtered_when_enforcement_off(self, tmp_path: Path) -> None:
         index = BuildIndex(tmp_path)

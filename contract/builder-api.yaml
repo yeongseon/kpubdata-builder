@@ -2300,11 +2300,15 @@ components:
     MonitoringApiStatus:
       type: object
       description: >-
-        Builder API 요청 처리 latency 상태. 이 응답이 생성된다는 사실 자체가
-        API가 응답 중임을 증명하므로 availability는 항상 available이다.
-        Healthy/Degraded 같은 latency 임계값 판정은 근거(ADR/config)가 없어
-        이번 버전에서 발명하지 않는다 — raw sample_count/p95_latency_ms만
-        제공한다.
+        Builder API 요청 처리 latency 상태. availability=available은 latency
+        collector(ring buffer)가 정상적으로 표본을 읽어낼 수 있었다는 뜻이며,
+        collector 자체가 손상되어 표본을 읽을 수 없으면(#527) unavailable +
+        sample_count=null + p95_latency_ms=null이다 — "정상 무표본"
+        (available + sample_count=0 + p95_latency_ms=null)과 "측정 불가"를
+        같은 값으로 뭉개지 않는다. 이 subsystem 실패는 원 요청이나 이
+        monitoring 응답 자체를 실패시키지 않는다. Healthy/Degraded 같은
+        latency 임계값 판정은 근거(ADR/config)가 없어 이번 버전에서 발명하지
+        않는다 — raw sample_count/p95_latency_ms만 제공한다.
       required: [availability, sample_count, p95_latency_ms]
       additionalProperties: false
       properties:
@@ -2312,12 +2316,16 @@ components:
           type: string
           enum: [available, partial, unavailable]
         sample_count:
-          type: integer
+          type: [integer, "null"]
           minimum: 0
-          description: 최근 최대 1000개 요청 ring buffer에 현재 보관된 표본 수.
+          description: >-
+            최근 최대 1000개 요청 ring buffer에 현재 보관된 표본 수.
+            availability가 unavailable이면(collector 실패) null.
         p95_latency_ms:
           type: [number, "null"]
-          description: sample_count가 0이면 null. nearest-rank 방식(보간 없음)으로 계산.
+          description: >-
+            sample_count가 0이거나 availability가 unavailable이면 null.
+            nearest-rank 방식(보간 없음)으로 계산.
 
     MonitoringQueueStatus:
       type: object
@@ -2425,8 +2433,12 @@ components:
 
     MonitoringBuildBucket:
       type: object
-      description: "[bucket_start, bucket_end) 반열린 구간의 build 카운트 (UTC)."
-      required: [bucket_start, bucket_end, total, ok, failed, cancelled]
+      description: >-
+        [bucket_start, bucket_end) 반열린 구간의 build 카운트 (UTC). success는
+        내부 BuildIndex status "ok"를 외부 wire 명명으로 매핑한 값이다(#527) —
+        내부 BuildIndex status vocabulary(ok/failed/cancelled) 자체는 바뀌지
+        않는다.
+      required: [bucket_start, bucket_end, total, success, failed, cancelled]
       additionalProperties: false
       properties:
         bucket_start:
@@ -2438,7 +2450,7 @@ components:
         total:
           type: integer
           minimum: 0
-        ok:
+        success:
           type: integer
           minimum: 0
         failed:

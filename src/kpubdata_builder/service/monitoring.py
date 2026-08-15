@@ -67,13 +67,19 @@ class LatencyRecorder:
             # metric collection 실패가 요청 실패로 전파되면 안 된다 (#516).
             pass
 
-    def snapshot(self) -> tuple[int, float | None]:
-        """``(sample_count, p95_latency_ms)``를 반환한다. 표본이 없으면 p95는 None."""
+    def snapshot(self) -> tuple[int, float | None] | None:
+        """``(sample_count, p95_latency_ms)``를 반환한다. 표본이 없으면 p95는 None.
+
+        collector 자체가 실패하면(lock 손상 등) ``None``을 반환한다(#527) —
+        "정상 무표본"(``(0, None)``)과 "측정 subsystem 실패"를 같은 값으로
+        뭉개지 않기 위함이며, 이 실패가 예외로 전파되지도 않는다(호출자인
+        ``api_status()``가 ``None``을 ``unavailable``로 구분해 매핑한다).
+        """
         try:
             with self._lock:
                 samples = list(self._samples)
         except Exception:
-            return 0, None
+            return None
         return _p95(samples)
 
 
@@ -94,19 +100,29 @@ def _p95(samples: list[float]) -> tuple[int, float | None]:
 @dataclass(frozen=True)
 class ApiStatus:
     availability: Availability
-    sample_count: int
+    sample_count: int | None
     p95_latency_ms: float | None
 
 
 def api_status(recorder: LatencyRecorder) -> ApiStatus:
     """Builder API 상태를 반환한다.
 
-    이 함수가 호출된다는 사실 자체가 프로세스가 응답 중임을 증명하므로
-    availability는 항상 ``available``이다. Healthy/Degraded 같은 latency
-    임계값 판정은 근거(ADR/config)가 없어 이번 PR에서 발명하지 않는다 — raw
-    ``sample_count``/``p95_latency_ms``만 제공한다.
+    ``dispatch()``가 실행되어 이 함수가 호출된다는 사실 자체는 프로세스가
+    응답 중임을 증명하지만, latency collector(``LatencyRecorder``) 자체가
+    손상되어 표본을 읽을 수 없는 경우(#527)까지 ``available``로 위장하지
+    않는다 — ``recorder.snapshot()``이 ``None``을 반환하면(collector 실패)
+    ``unavailable`` + ``sample_count=None`` + ``p95_latency_ms=None``이고,
+    정상적으로 무표본이면(``(0, None)``) ``available`` + ``sample_count=0`` +
+    ``p95_latency_ms=None``이다 — "0표본"과 "측정 불가"를 구분한다. 이
+    subsystem 판정 실패는 원 요청(dispatch)이나 이 monitoring 요청 자체를
+    실패시키지 않는다(``snapshot()``이 예외를 전파하지 않으므로). Healthy/
+    Degraded 같은 latency 임계값 판정은 근거(ADR/config)가 없어 이번 PR에서
+    발명하지 않는다 — raw ``sample_count``/``p95_latency_ms``만 제공한다.
     """
-    sample_count, p95 = recorder.snapshot()
+    snapshot = recorder.snapshot()
+    if snapshot is None:
+        return ApiStatus(availability="unavailable", sample_count=None, p95_latency_ms=None)
+    sample_count, p95 = snapshot
     return ApiStatus(availability="available", sample_count=sample_count, p95_latency_ms=p95)
 
 
@@ -224,10 +240,18 @@ def aggregate_status(
 
 @dataclass(frozen=True)
 class BuildBucket:
+    """시간 bucket당 build 카운트 (#516 wire 계약: total/success/failed/cancelled).
+
+    ``success``는 ``BuildIndex``/``BuildEntry.status``의 내부 값 ``"ok"``를
+    외부 Monitoring API 명명으로 매핑한 것이다(#527) — 내부 BuildIndex status
+    vocabulary(``ok``/``failed``/``cancelled``)는 그대로 두고, 이 wire 필드
+    이름만 계약에 맞춘다.
+    """
+
     bucket_start: str
     bucket_end: str
     total: int
-    ok: int
+    success: int
     failed: int
     cancelled: int
 
@@ -288,18 +312,32 @@ def _isoformat_z(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _should_enforce_ownership(principal: Principal | None, *, enforce: bool) -> bool:
+    """ownership 필터를 적용해야 하는지 판정한다 (#516, #505).
+
+    ``app._apply_ownership``/``datasets.filter_ownership``과 동일한 정책 —
+    ENFORCE_OWNERSHIP+oidc principal일 때만 필터링하며, dev/service/None은
+    관리자 권한으로 통과한다. ``_filter_ownership``(Python 사후 필터)와
+    ``BuildIndex.list_recent_owned``(SQL push-down, #527) 양쪽이 이 판정을
+    공유해 정책이 어긋나지 않게 한다.
+    """
+    return enforce and principal is not None and principal.kind == "oidc"
+
+
 def _filter_ownership(
     entries: list[BuildEntry], principal: Principal | None, *, enforce: bool
 ) -> list[BuildEntry]:
     """BuildEntry 목록에 기존 ownership 정책을 적용한다 (#516, #505).
 
-    ``app._apply_ownership``/``datasets.filter_ownership``과 동일한 정책 —
-    ENFORCE_OWNERSHIP+oidc principal일 때만 필터링하며, dev/service/None은
-    관리자 권한으로 통과한다. Monitoring 집계·recent runs가 다른 principal의
-    run metadata를 노출하는 side channel이 되지 않도록 한다.
+    Monitoring 집계·recent runs가 다른 principal의 run metadata를 노출하는
+    side channel이 되지 않도록 한다. bucket 집계(``raw_entries``)처럼 이미
+    전체 window를 로드한 뒤라 LIMIT 손실 우려가 없는 경우에만 쓴다 —
+    LIMIT이 걸린 recent runs 조회는 대신 ``BuildIndex.list_recent_owned``로
+    필터를 먼저 SQL에서 적용한다(#527, 아래 ``build_statistics`` 참조).
     """
-    if not (enforce and principal is not None and principal.kind == "oidc"):
+    if not _should_enforce_ownership(principal, enforce=enforce):
         return entries
+    assert principal is not None  # _should_enforce_ownership이 이미 보장
     return [
         e
         for e in entries
@@ -324,6 +362,13 @@ def build_statistics(
     - BuildIndex 쿼리 자체가 실패하면 ``unavailable`` (buckets 비어있음).
     - 쿼리는 성공했지만 malformed timestamp로 일부 행이 제외되면 ``partial``.
     - 쿼리 성공 + 제외 없음이면 ``available`` (0건이어도 유효한 available).
+
+    recent runs는 ``_RECENT_RUNS_LIMIT``(10)으로 bounded된 조회다. ownership을
+    강제해야 하면(#505) 그 필터를 LIMIT **이전에** SQL에서 적용한다(#527) —
+    먼저 전역 최신 10건을 가져온 뒤 Python에서 걸러내면, 다른 principal의
+    최신 run들이 LIMIT을 다 채워 정작 요청자 본인의 recent run이 잘릴 수
+    있다. bucket 집계(``raw_entries``)는 이미 window 전체를 LIMIT 없이
+    가져오므로 이 문제가 없어 기존처럼 사후(Python) 필터링한다.
     """
     current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     window_seconds = _SUPPORTED_WINDOWS[window]
@@ -333,7 +378,15 @@ def build_statistics(
 
     try:
         raw_entries = build_index.list_between(_isoformat_z(window_start), _isoformat_z(window_end))
-        recent_entries = build_index.list_builds(limit=_RECENT_RUNS_LIMIT)
+        if _should_enforce_ownership(principal, enforce=enforce_ownership):
+            assert principal is not None  # _should_enforce_ownership이 이미 보장
+            recent_entries = build_index.list_recent_owned(
+                limit=_RECENT_RUNS_LIMIT,
+                principal_owner_id=principal.owner_id,
+                principal_label=principal.label,
+            )
+        else:
+            recent_entries = build_index.list_builds(limit=_RECENT_RUNS_LIMIT)
     except Exception:
         return BuildStatistics(
             window=window,
@@ -345,7 +398,10 @@ def build_statistics(
         )
 
     scoped_entries = _filter_ownership(raw_entries, principal, enforce=enforce_ownership)
-    scoped_recent = _filter_ownership(recent_entries, principal, enforce=enforce_ownership)
+    # recent_entries는 이미 위에서 필요 시 SQL push-down으로 걸러졌다(#527) —
+    # 여기서 다시 Python 필터를 적용하지 않는다(중복도 아니고, LIMIT이 이미
+    # 걸린 뒤라 손실을 되돌릴 수도 없다).
+    scoped_recent = recent_entries
 
     bucket_count = window_seconds // bucket_seconds
     bucket_starts = [
@@ -378,7 +434,8 @@ def build_statistics(
             bucket_start=_isoformat_z(start),
             bucket_end=_isoformat_z(start + timedelta(seconds=bucket_seconds)),
             total=counters[_isoformat_z(start)]["total"],
-            ok=counters[_isoformat_z(start)]["ok"],
+            # 내부 BuildIndex status "ok" -> 외부 wire 필드 "success" (#527).
+            success=counters[_isoformat_z(start)]["ok"],
             failed=counters[_isoformat_z(start)]["failed"],
             cancelled=counters[_isoformat_z(start)]["cancelled"],
         )

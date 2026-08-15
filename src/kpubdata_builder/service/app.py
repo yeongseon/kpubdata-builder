@@ -250,9 +250,12 @@ def _strip_internal_fields(entries: list[_BuildListEntry]) -> list[_BuildListEnt
 # 옵션 추가 (#497, additive — 기존 필드는 유지된다). limit 상한(1000) 신규 도입은
 # behavioral tightening(이전엔 상한 없음) — 그 이상 값은 400.
 # 1.9.0 -> 1.10.0: GET /monitoring/summary, GET /monitoring/builds 추가 (#516,
-# additive — 기존 엔드포인트는 변경되지 않는다). Async build queue/worker는 이
-# 저장소에 아직 구현되어 있지 않아(ADR 0008 Proposed) availability=unavailable로
-# 명시적으로 보고한다.
+# additive — 기존 엔드포인트는 변경되지 않는다). Async build queue/worker는
+# 기존 AsyncBuildExecutor/AsyncBuildJobRegistry(#511/#513)의 read-only
+# snapshot을 반영하며, 정상 runtime에서는 availability=available이다.
+# MonitoringSummaryResponse.status(healthy/degraded)는 required subsystem
+# availability로부터 계산되는 deterministic aggregate다(latency threshold
+# 미사용).
 API_CONTRACT_VERSION = "1.10.0"
 
 
@@ -1302,7 +1305,9 @@ class BuilderService:
                 "bucket_start": b.bucket_start,
                 "bucket_end": b.bucket_end,
                 "total": b.total,
-                "ok": b.ok,
+                # wire 계약은 success/failed/cancelled다(#527) — 내부 BuildIndex
+                # status 값 "ok"는 그대로 두고 외부 필드 이름만 매핑한다.
+                "success": b.success,
                 "failed": b.failed,
                 "cancelled": b.cancelled,
             }

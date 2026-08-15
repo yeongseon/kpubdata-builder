@@ -309,6 +309,141 @@ class TestBuildIndexOwnerId:
         assert index.list_by_dataset("dataset.sample")[0].owner_id == "oidc:deadbeef"
 
 
+class TestListRecentOwned:
+    """``list_recent_owned`` (#527) — ownership 필터를 LIMIT 이전에 SQL에서
+
+    적용해, 다른 principal의 최신 run들이 LIMIT을 채워 요청자 본인의 recent
+    run이 잘리지 않게 한다. 정책은 ``service.auth.principal_owns()``(#505)와
+    정확히 동일해야 한다.
+    """
+
+    def test_owner_id_match_takes_priority(self, tmp_path: Path) -> None:
+        index = BuildIndex(tmp_path)
+        index.insert_or_replace(
+            run_id="mine",
+            status="ok",
+            started_at=None,
+            finished_at="2025-01-01T10:00:00Z",
+            created_by="oidc:otherLabel",  # label은 다르지만 owner_id가 일치.
+            owner_id="oidc:deadbeef",
+        )
+        entries = index.list_recent_owned(
+            limit=10, principal_owner_id="oidc:deadbeef", principal_label="oidc:userA"
+        )
+        assert [e.run_id for e in entries] == ["mine"]
+
+    def test_legacy_created_by_fallback_when_record_owner_id_missing(self, tmp_path: Path) -> None:
+        """레코드에 owner_id가 없는 legacy run은 created_by로 폴백해 매치한다."""
+        index = BuildIndex(tmp_path)
+        index.insert_or_replace(
+            run_id="legacy-mine",
+            status="ok",
+            started_at=None,
+            finished_at="2025-01-01T10:00:00Z",
+            created_by="oidc:userA",
+            owner_id=None,
+        )
+        entries = index.list_recent_owned(
+            limit=10, principal_owner_id="oidc:deadbeef", principal_label="oidc:userA"
+        )
+        assert [e.run_id for e in entries] == ["legacy-mine"]
+
+    def test_principal_without_owner_id_always_falls_back_to_created_by(
+        self, tmp_path: Path
+    ) -> None:
+        """principal에 owner_id가 없으면 레코드 owner_id 유무와 무관하게 created_by로 비교한다."""
+        index = BuildIndex(tmp_path)
+        index.insert_or_replace(
+            run_id="has-owner-id",
+            status="ok",
+            started_at=None,
+            finished_at="2025-01-01T10:00:00Z",
+            created_by="oidc:userA",
+            owner_id="oidc:deadbeef",  # 레코드엔 owner_id가 있지만 principal엔 없다.
+        )
+        entries = index.list_recent_owned(
+            limit=10, principal_owner_id=None, principal_label="oidc:userA"
+        )
+        assert [e.run_id for e in entries] == ["has-owner-id"]
+
+    def test_no_match_is_excluded_fail_closed(self, tmp_path: Path) -> None:
+        index = BuildIndex(tmp_path)
+        index.insert_or_replace(
+            run_id="theirs",
+            status="ok",
+            started_at=None,
+            finished_at="2025-01-01T10:00:00Z",
+            created_by="oidc:userB",
+            owner_id="oidc:otherhash",
+        )
+        entries = index.list_recent_owned(
+            limit=10, principal_owner_id="oidc:deadbeef", principal_label="oidc:userA"
+        )
+        assert entries == []
+
+    def test_no_created_by_no_owner_id_is_excluded(self, tmp_path: Path) -> None:
+        """created_by/owner_id 둘 다 없는 레코드는 어떤 principal과도 매치하지 않는다."""
+        index = BuildIndex(tmp_path)
+        index.insert_or_replace(
+            run_id="anonymous",
+            status="ok",
+            started_at=None,
+            finished_at="2025-01-01T10:00:00Z",
+            created_by=None,
+            owner_id=None,
+        )
+        entries = index.list_recent_owned(
+            limit=10, principal_owner_id="oidc:deadbeef", principal_label="oidc:userA"
+        )
+        assert entries == []
+
+    def test_filter_applied_before_limit_so_own_older_run_is_not_crowded_out(
+        self, tmp_path: Path
+    ) -> None:
+        """다른 사용자의 최신 run 10건보다 내 run이 오래돼도 LIMIT에 밀려 잘리지 않는다 (#527)."""
+        index = BuildIndex(tmp_path)
+        index.insert_or_replace(
+            run_id="mine-old",
+            status="ok",
+            started_at=None,
+            finished_at="2025-01-01T00:00:00Z",  # 다른 사용자 run 10건보다 모두 오래됨.
+            created_by="oidc:userA",
+            owner_id="oidc:deadbeef",
+        )
+        for i in range(10):
+            index.insert_or_replace(
+                run_id=f"theirs-{i:02d}",
+                status="ok",
+                started_at=None,
+                finished_at=f"2025-01-02T{i:02d}:00:00Z",  # 전부 내 run보다 최신.
+                created_by="oidc:userB",
+                owner_id="oidc:otherhash",
+            )
+        entries = index.list_recent_owned(
+            limit=10, principal_owner_id="oidc:deadbeef", principal_label="oidc:userA"
+        )
+        assert [e.run_id for e in entries] == ["mine-old"]
+
+    def test_limit_is_respected_after_filtering(self, tmp_path: Path) -> None:
+        index = BuildIndex(tmp_path)
+        for i in range(15):
+            index.insert_or_replace(
+                run_id=f"mine-{i:02d}",
+                status="ok",
+                started_at=None,
+                finished_at=f"2025-01-01T{i:02d}:00:00Z",
+                created_by="oidc:userA",
+                owner_id="oidc:deadbeef",
+            )
+        entries = index.list_recent_owned(
+            limit=10, principal_owner_id="oidc:deadbeef", principal_label="oidc:userA"
+        )
+        assert len(entries) == 10
+        # finished_at 내림차순 — 가장 최근 10건(09~14가 아니라 05~14)이어야 한다.
+        assert entries[0].run_id == "mine-14"
+        assert entries[-1].run_id == "mine-05"
+
+
 class TestRebuildIndex:
     """rebuild_index 함수 테스트."""
 

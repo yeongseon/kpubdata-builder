@@ -273,6 +273,75 @@ class BuildIndex:
             for row in cur
         ]
 
+    def list_recent_owned(
+        self, *, limit: int, principal_owner_id: str | None, principal_label: str
+    ) -> list[BuildEntry]:
+        """principal 소유 build만 최신 완료 순으로 최대 ``limit``개 반환한다 (#527).
+
+        ownership 필터를 Python에서 전체 결과에 사후 적용하기 전에 LIMIT을
+        걸면(예: 전역 최신 10건을 먼저 가져온 뒤 필터링), 다른 principal의
+        최신 run들이 LIMIT을 다 채워 본인의 recent run이 잘릴 수 있다 — 이
+        메서드는 필터를 SQL WHERE로 LIMIT보다 먼저 적용해 그 문제를 없앤다.
+
+        정책은 ``service.auth.principal_owns()``(#505)와 정확히 동일해야
+        한다:
+
+        - 레코드와 principal 양쪽 모두 ``owner_id``가 있으면 그 값을 비교한다
+          (``principal_owner_id``가 아닌 경우에만).
+        - 그 외(레코드에 ``owner_id``가 없거나 principal에 ``owner_id``가
+          없음)에는 ``created_by == principal_label``로 폴백한다.
+        - 어느 쪽도 매치하지 않으면 제외한다(fail-closed) — SQL의 NULL 비교는
+          자연히 조건을 만족시키지 않으므로 별도 처리가 필요 없다.
+
+        Args:
+            limit: 반환할 최대 빌드 수.
+            principal_owner_id: 요청 principal의 canonical stable owner_id.
+                ``None``이면(legacy/owner_id 미설정 principal) 레코드
+                ``owner_id``와 무관하게 항상 ``created_by`` 비교로 폴백한다
+                (``principal_owns()``와 동일).
+            principal_label: 요청 principal의 legacy 비교용 label
+                (``Principal.label``).
+
+        Returns:
+            BuildEntry 목록 (finished_at 내림차순, 최대 limit개).
+        """
+        if principal_owner_id is not None:
+            sql = """
+                SELECT run_id, status, started_at, finished_at, spec_digest, error, created_by,
+                       dataset_id, owner_id
+                FROM builds
+                WHERE (owner_id IS NOT NULL AND owner_id = ?)
+                   OR (owner_id IS NULL AND created_by = ?)
+                ORDER BY finished_at DESC
+                LIMIT ?
+            """
+            params: tuple[object, ...] = (principal_owner_id, principal_label, limit)
+        else:
+            sql = """
+                SELECT run_id, status, started_at, finished_at, spec_digest, error, created_by,
+                       dataset_id, owner_id
+                FROM builds
+                WHERE created_by = ?
+                ORDER BY finished_at DESC
+                LIMIT ?
+            """
+            params = (principal_label, limit)
+        cur = self._conn.execute(sql, params)
+        return [
+            BuildEntry(
+                run_id=row[0],
+                status=cast(BuildStatus, row[1]),
+                started_at=row[2],
+                finished_at=row[3],
+                spec_digest=row[4],
+                error=row[5],
+                created_by=row[6],
+                dataset_id=row[7],
+                owner_id=row[8],
+            )
+            for row in cur
+        ]
+
     def list_between(self, start_iso: str, end_iso: str) -> list[BuildEntry]:
         """``[start_iso, end_iso)`` 반열린 구간에 완료된 빌드를 오름차순으로 반환한다 (#516).
 

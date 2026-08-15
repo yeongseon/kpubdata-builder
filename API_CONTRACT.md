@@ -206,7 +206,11 @@ v0.4 Builder service는 동기식 실행 모델을 유지합니다.
   degraded). Provider 상태(#492)는 optional이라 이 판정에 포함되지 않습니다.
 - **Builder API 상태**: `dispatch()` 실행 시간을 최근 최대 1000개 요청의 bounded
   ring buffer로 기록하고 nearest-rank(보간 없음) 방식으로 p95를 계산합니다.
-  `sample_count=0`이면 `p95_latency_ms=null`입니다. Healthy/Degraded 같은 latency
+  `sample_count=0`이면 `p95_latency_ms=null`입니다. collector 자체가 손상되어
+  표본을 읽을 수 없으면(#527) `availability=unavailable` +
+  `sample_count=null` + `p95_latency_ms=null`입니다 — "정상 무표본"과 "측정
+  불가"를 같은 값으로 뭉개지 않으며, 이 subsystem 실패가 원 요청이나
+  monitoring 응답 자체를 실패시키지 않습니다. Healthy/Degraded 같은 latency
   임계값 판정은 근거(ADR/config)가 없어 발명하지 않았습니다 — raw
   `sample_count`/`p95_latency_ms`만 제공합니다.
 - **Queue/Worker**: async build 실행 모델은 `AsyncBuildExecutor`/
@@ -234,14 +238,21 @@ v0.4 Builder service는 동기식 실행 모델을 유지합니다.
   빌드만 기록, ADR 0003)입니다. 현재 `window=24h`/`bucket=hour`만 지원하며 다른
   값은 400입니다. malformed timestamp(파싱 실패, NULL 포함)는 집계에서 제외되고
   `excluded_count`에 반영되며 전체 `availability`는 `partial`이 됩니다(BuildIndex
-  쿼리 자체 실패는 `unavailable`, 정상 집계 결과 0건은 `available`).
+  쿼리 자체 실패는 `unavailable`, 정상 집계 결과 0건은 `available`). bucket 카운트
+  wire 필드는 `total`/`success`/`failed`/`cancelled`입니다 — 내부 BuildIndex
+  status 값 `ok`는 그대로 두고(변경 없음) 외부 Monitoring API 필드 이름만
+  `success`로 매핑합니다(#527).
 - **Provider 상태**는 요청마다 실제 네트워크 프로브를 유발하므로(#492) 이번 버전의
   Monitoring 응답에는 포함되지 않습니다.
 - **Ownership**: 시스템 aggregate(`api`/`queue`/`workers`/`artifact_store`)는 개별
   run의 dataset/owner/credential 정보를 포함하지 않아 필터링이 필요 없습니다.
   `/monitoring/builds`의 버킷 집계와 recent runs는 `ENFORCE_OWNERSHIP`+oidc
-  principal일 때 `principal_owns()`로 필터링해 다른 사용자의 run이 섞이지
-  않습니다(#505와 동일 정책).
+  principal일 때 `principal_owns()`(#505)와 동일한 정책으로 필터링해 다른
+  사용자의 run이 섞이지 않습니다. bucket 집계는 window 전체를 먼저 가져온 뒤
+  필터링해도 손실이 없지만, `recent_runs`는 고정 10건 LIMIT이 걸린 조회라 필터를
+  LIMIT **이전에** SQL에서 적용합니다(`BuildIndex.list_recent_owned`, #527) —
+  그렇지 않으면 다른 principal의 최신 run들이 LIMIT을 다 채워 요청자 본인의
+  recent run이 빠질 수 있습니다.
 
 ## 4. 인증과 CORS
 
