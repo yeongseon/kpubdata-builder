@@ -227,6 +227,14 @@ SPDX 식별자 또는 자유 텍스트 라이선스 선언입니다. `publish: t
 
 ### 4.11 `quality` (optional)
 
+Silver 통계·테이블에 대한 품질 규칙 선언입니다. 각 규칙 위반은 `quality.evaluator`가
+`QualityCheckResult`(PASS 포함)로 구조화해 manifest(`quality_results`)와
+`GET /builds/{run_id}/quality`, `GET /datasets/{dataset_id}/quality/history`에
+반영합니다(#486). Preview(`POST /preview`)와 Build는 동일한 evaluator를 공유하므로
+같은 데이터/규칙에는 항상 같은 판정을 냅니다.
+
+#### 기존 syntax (#446, 하위 호환)
+
 ```yaml
 quality:
   max_duplicate_rate: 0.01
@@ -237,13 +245,95 @@ quality:
 
 | 필드 | 타입 | 설명 |
 | :--- | :--- | :--- |
-| `max_duplicate_rate` | number | 허용할 최대 중복 행 비율 |
+| `max_duplicate_rate` | number | 허용할 최대 중복 행 비율. 초과 시 위반(초과가 아니면 위반 아님 — 경계값은 통과). |
 | `max_null_ratio` | object<string, number> | 컬럼별 허용 최대 null 비율 |
-| `min_rows` | integer | 요구하는 최소 행 수 |
+| `min_rows` | integer | 요구하는 최소 행 수. 미만이면 위반. |
 
-현재 품질 정책은 Silver의 기존 `row_count`, `null_counts`, `duplicate_rate` 통계를
-사용합니다. 확장 rule과 구조화된 PASS/WARN/FAIL 결과는 #486 범위이며 이 계약에
-선반영하지 않습니다.
+기존 syntax의 위반은 기본적으로 **WARN**입니다 — Build는 계속 진행하고 결과만
+기록합니다(#446 시절 semantics 그대로 유지).
+
+#### 명시적 WARN/FAIL severity (#486)
+
+각 규칙에 대응하는 `*_severity` 필드로 명시적 심각도를 선언할 수 있습니다. 값은
+`"warn"`(기본) 또는 `"fail"`이며, `max_null_ratio`는 컬럼별 override 맵을 씁니다.
+
+```yaml
+quality:
+  max_duplicate_rate: 0.01
+  max_duplicate_rate_severity: fail   # 명시적 FAIL
+  max_null_ratio:
+    temperature: 0.05
+  max_null_ratio_severity:
+    temperature: warn                 # 명시적 WARN(기본과 동일하지만 선언 가능)
+  min_rows: 100
+  min_rows_severity: fail
+```
+
+FAIL로 판정된 rule이 하나라도 있으면 해당 source는 Gold 진입 전에 실패 처리됩니다.
+WARN은 계속 진행합니다.
+
+#### `range` (#486)
+
+숫자 컬럼의 최소/최대 범위를 typed rule로 선언합니다. 자유형 Python/eval은
+허용하지 않습니다. `min`/`max`는 포함(inclusive) 경계이며 최소 하나는 있어야
+합니다. null 값은 범위 위반으로 계산하지 않습니다(missing/null 여부는
+`max_null_ratio`가 담당 — 역할 분리).
+
+```yaml
+quality:
+  range:
+    - column: price
+      min: 0
+      max: 1000000
+      severity: fail
+```
+
+| 필드 | 타입 | 필수 | 설명 |
+| :--- | :--- | :--- | :--- |
+| `column` | string | 예 | 대상 컬럼명 |
+| `min` | number | 아니오 | 허용 최소값(포함) |
+| `max` | number | 아니오 | 허용 최대값(포함) |
+| `severity` | string | 아니오 | `warn`(기본) \| `fail` |
+
+평가 결과의 `threshold`는 `{"min": ..., "max": ...}` 구조로 원래 경계를
+보존합니다. 컬럼 dtype 때문에 숫자 범위를 평가할 수 없으면 규칙을 생략하지 않고
+선언된 severity의 WARN/FAIL 결과와 안전한 `detail`을 기록합니다.
+
+#### `compare_columns` (#486)
+
+두 컬럼 간 비교를 제한된 operator만으로 선언합니다. 자유형 expression/eval은
+허용하지 않습니다. 두 컬럼 모두 null이 아닌 행만 평가하며, 비교 불가능한 행을
+자동으로 통과 처리하지 않습니다.
+
+```yaml
+quality:
+  compare_columns:
+    - left: sale_price
+      operator: gte
+      right: list_price
+      severity: warn
+```
+
+| 필드 | 타입 | 필수 | 설명 |
+| :--- | :--- | :--- | :--- |
+| `left` | string | 예 | 왼쪽 컬럼명 |
+| `operator` | string | 예 | `eq`\|`ne`\|`gt`\|`gte`\|`lt`\|`lte` 중 하나 |
+| `right` | string | 예 | 오른쪽 컬럼명 |
+| `severity` | string | 아니오 | `warn`(기본) \| `fail` |
+
+평가 결과의 `threshold`는 `{"operator": ..., "right_column": ...}` 구조로
+연산자와 오른쪽 컬럼을 보존합니다. dtype이 호환되지 않는 경우에도 선언된 severity의
+WARN/FAIL 결과를 남기며, WARN은 Build를 계속하고 FAIL은 Gold 진입을 막습니다.
+
+유효하지 않은 `operator`는 BuildSpec 로드 단계에서 즉시 거부됩니다.
+
+#### Schema 계약과의 관계
+
+`sources[].schema.required`/`dtypes`(#437)도 같은 `QualityCheckResult` 모델로
+구조화됩니다(`category: "schema"`, `rule: "required_column"` \| `"dtype"`). required
+컬럼이 없어 dtype을 검사할 수 없는 경우 dtype PASS를 만들지 않습니다 — "required
+FAIL + dtype PASS" 같은 모순을 피합니다. Schema 위반은 severity 설정과 무관하게
+항상 hard failure입니다(#189의 기존 게이트 그대로).
 
 ## 5. 검증 규칙
 

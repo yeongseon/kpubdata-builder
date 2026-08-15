@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from ..quality.models import QualityCheckResult, SchemaDriftFinding
 from .environment import BuildEnvironment
 from .provenance import SourceProvenance
 from .schema_summary import SchemaSummary
@@ -39,6 +40,13 @@ class BuildManifest:
         provenance: 소스별 상세 출처(fetch 시각/파라미터/레코드 수/체크섬) 목록.
         build_environment: 빌드를 생성한 실행 환경(Python/kpubdata/builder 버전).
         inputs_fingerprint: 입력 데이터 전체의 재현성 지문 ("sha256:..."). 입력이 없으면 None.
+        quality_results: source_key별 구조화된 QualityCheckResult 목록 (#486, additive).
+            PASS를 포함한 실제로 평가된 check만 담는다. legacy manifest는 이 필드가
+            없다 — reader는 부재를 "미평가"(0건)로 해석해야 하며 "전부 PASS"로
+            해석하면 안 된다.
+        schema_drift: source_key별 구조화된 SchemaDriftFinding 목록 (#486, additive).
+            drift 자체는 deterministic 감지 결과이며 PASS/WARN/FAIL 게이트에는
+            관여하지 않는다.
     """
 
     build_id: str
@@ -55,6 +63,8 @@ class BuildManifest:
     build_environment: BuildEnvironment | None = None
     inputs_fingerprint: str | None = None
     created_by: str | None = None
+    quality_results: dict[str, tuple[QualityCheckResult, ...]] = field(default_factory=dict)
+    schema_drift: dict[str, tuple[SchemaDriftFinding, ...]] = field(default_factory=dict)
 
 
 __all__ = ["MANIFEST_SCHEMA_VERSION", "BuildManifest"]

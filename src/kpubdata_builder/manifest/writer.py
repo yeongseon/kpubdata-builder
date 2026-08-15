@@ -50,6 +50,14 @@ def manifest_writer(manifest: BuildManifest, output_path: Path) -> None:
             key: asdict(summary) for key, summary in manifest.schema_summaries.items()
         },
         "provenance": [asdict(entry) for entry in manifest.provenance],
+        # additive (#486): source_key별 구조화된 quality/drift 결과. 빈 dict가
+        # 기본값이므로 legacy 소비자가 이 키를 몰라도 무해하다.
+        "quality_results": {
+            key: [asdict(r) for r in results] for key, results in manifest.quality_results.items()
+        },
+        "schema_drift": {
+            key: [asdict(f) for f in findings] for key, findings in manifest.schema_drift.items()
+        },
     }
     serialized = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
     try:

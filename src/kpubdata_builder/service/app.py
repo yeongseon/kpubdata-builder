@@ -30,6 +30,7 @@ from typing_extensions import assert_never
 
 from ..errors import SpecLoadError, ValidationError
 from ..pipeline import preview_build, run_build
+from ..quality import QualityCheckResult
 from ..spec import BuildSpec, JsonValue, parse_spec
 from ..spec.serializer import BUILDSPEC_SNAPSHOT_FILENAME, compute_spec_digest
 from ..spec.validator import validate_spec
@@ -38,6 +39,7 @@ from ..stages.bronze.build import SourceClient
 from ..store import BuildIndex
 from ..tabular import DEFAULT_PREVIEW_LIMIT
 from . import datasets as datasets_service
+from . import quality as quality_service
 from . import stages as stages_service
 from .auth import AuthError, Principal, authenticate
 from .jobs import AsyncBuildExecutor, generate_run_id
@@ -135,7 +137,9 @@ def _apply_ownership(
 # (test_service_contract가 강제), 응답에 실어 Studio 같은 소비자가 하위 호환을
 # 협상할 수 있게 한다 (#209).
 # 1.4.0 -> 1.5.0: Dataset Catalog·Detail·Stage Summary API 추가 (#488, additive).
-API_CONTRACT_VERSION = "1.5.0"
+# 1.5.0 -> 1.6.0: 구조화된 Quality/Schema Drift 결과, quality history/detail API 추가
+# (#486, additive — 기존 엔드포인트는 변경되지 않는다).
+API_CONTRACT_VERSION = "1.6.0"
 
 
 @dataclass(frozen=True)
@@ -164,6 +168,22 @@ class FileResponse:
     status_code: int
     file_path: Path
     filename: str
+
+
+def _quality_result_to_json(r: QualityCheckResult) -> dict[str, JsonValue]:
+    """QualityCheckResult를 wire JSON으로 변환한다 (#486)."""
+    return {
+        "source_key": r.source_key,
+        "category": r.category,
+        "rule": r.rule,
+        "column": r.column,
+        "status": r.status,
+        "actual": cast(JsonValue, r.actual),
+        "threshold": r.threshold,
+        "affected_rows": r.affected_rows,
+        "evaluated_rows": r.evaluated_rows,
+        "detail": r.detail,
+    }
 
 
 def _parse_spec_text(spec_yaml: str) -> BuildSpec:
@@ -299,6 +319,9 @@ class BuilderService:
                     "null_counts": dict(p.statistics.null_counts),
                     "duplicate_rate": p.statistics.duplicate_rate,
                 },
+                "quality_results": cast(
+                    JsonValue, [_quality_result_to_json(r) for r in p.quality_results]
+                ),
             }
             for p in result.previews
         ]
@@ -704,6 +727,57 @@ class BuilderService:
         ]
         return ServiceResponse(200, {"dataset_id": dataset_id, "runs": runs})
 
+    def get_dataset_quality_history(
+        self, dataset_id: str, *, limit: int = 30, principal: Principal | None = None
+    ) -> ServiceResponse:
+        """dataset_id의 접근 가능한 run들에 대한 quality PASS/WARN/FAIL 집계 이력 (#486).
+
+        dataset→run 조회는 #488의 ``_dataset_records_for``(ownership 필터링 포함)를
+        그대로 재사용한다 — 새 dataset grouping/index를 만들지 않는다. 존재/ownership
+        판정은 ``/datasets/{dataset_id}``, ``/datasets/{dataset_id}/runs``와 동일하다.
+        """
+        records = self._dataset_records_for(dataset_id, principal)
+        if not records:
+            return ServiceResponse(404, {"error": f"dataset not found: {dataset_id}"})
+        ordered = sorted(records, key=datasets_service.sort_key, reverse=True)[:limit]
+        runs: list[JsonValue] = []
+        for r in ordered:
+            manifest = datasets_service.read_manifest(self._output_root, r.run_id) or {}
+            runs.append(cast(JsonValue, quality_service.summarize_run_quality(r, manifest)))
+        return ServiceResponse(200, {"dataset_id": dataset_id, "runs": runs})
+
+    def get_build_quality(self, run_id: str) -> ServiceResponse:
+        """run의 구조화된 Quality 결과와 schema drift를 조회한다 (#486, #514).
+
+        manifest.json에 이미 저장된 source_key별 quality_results/schema_drift를
+        그대로 노출한다 — 별도 계산을 다시 하지 않는다(정본은 manifest).
+        `availability`/`evaluated_checks`는 빈 매핑이 "평가했지만 0건"인지
+        "애초에 계산된 적이 없음"(legacy/partial run)인지 구분한다(#514).
+        """
+        manifest = datasets_service.read_manifest(self._output_root, run_id)
+        if manifest is None:
+            return ServiceResponse(404, {"error": f"manifest not found: {run_id}"})
+        known_sources = stages_service.known_source_keys(manifest)
+        availability, evaluated_checks = quality_service.quality_availability(
+            manifest, known_sources
+        )
+        quality_results = manifest.get("quality_results")
+        schema_drift = manifest.get("schema_drift")
+        return ServiceResponse(
+            200,
+            {
+                "run_id": run_id,
+                "availability": availability,
+                "evaluated_checks": evaluated_checks,
+                "quality_results": cast(
+                    JsonValue, quality_results if isinstance(quality_results, dict) else {}
+                ),
+                "schema_drift": cast(
+                    JsonValue, schema_drift if isinstance(schema_drift, dict) else {}
+                ),
+            },
+        )
+
     def list_run_stages(self, run_id: str) -> ServiceResponse:
         """run에 알려진 모든 source의 Bronze/Silver/Gold 상태를 반환한다 (#488).
 
@@ -876,12 +950,18 @@ def dispatch(
     if method == "GET" and path.startswith("/datasets/"):
         # dataset_id는 BuildSpec.dataset_id 값 그대로일 수 있어 slash/space 등을
         # 포함할 수 있다 (#488). http.server는 percent-encoding을 자동으로 풀지
-        # 않으므로, "/runs" 접미사를 아직 인코딩된 원문 상태에서 먼저 떼어낸 뒤
-        # 남은 단일 세그먼트만 unquote한다 — dataset_id 안의 literal '/'는
-        # 클라이언트가 %2F로 인코딩해야 이 라우팅과 충돌하지 않는다.
+        # 않으므로, "/runs"·"/quality/history" 접미사를 아직 인코딩된 원문 상태에서
+        # 먼저 떼어낸 뒤 남은 단일 세그먼트만 unquote한다 — dataset_id 안의 literal
+        # '/'는 클라이언트가 %2F로 인코딩해야 이 라우팅과 충돌하지 않는다.
         raw_rest = path[len("/datasets/") :]
         is_runs_route = raw_rest.endswith("/runs")
-        raw_dataset_id = raw_rest[: -len("/runs")] if is_runs_route else raw_rest
+        is_quality_history_route = raw_rest.endswith("/quality/history")
+        if is_runs_route:
+            raw_dataset_id = raw_rest[: -len("/runs")]
+        elif is_quality_history_route:
+            raw_dataset_id = raw_rest[: -len("/quality/history")]
+        else:
+            raw_dataset_id = raw_rest
         if not raw_dataset_id:
             return ServiceResponse(400, {"error": "dataset_id must not be empty"})
         dataset_id = unquote(raw_dataset_id)
@@ -893,6 +973,12 @@ def dispatch(
             if isinstance(limit, ServiceResponse):
                 return limit
             return service.list_dataset_runs(dataset_id, limit=limit, principal=principal)
+
+        if is_quality_history_route:
+            limit = _parse_limit_query(query, default=30)
+            if isinstance(limit, ServiceResponse):
+                return limit
+            return service.get_dataset_quality_history(dataset_id, limit=limit, principal=principal)
 
         return service.get_dataset(dataset_id, principal=principal)
 
@@ -984,6 +1070,20 @@ def dispatch(
         if ownership_error is not None:
             return ownership_error
         return service.spec(run_id)
+
+    if method == "GET" and path.startswith("/builds/") and path.endswith("/quality"):
+        run_id = path[len("/builds/") : -len("/quality")]
+        try:
+            validate_path_segment(run_id, field_name="run_id")
+        except ValueError as exc:
+            return ServiceResponse(400, {"error": str(exc)})
+        existence_error = _check_run_exists(service, run_id)
+        if existence_error is not None:
+            return existence_error
+        ownership_error = _check_ownership(service, run_id, principal)
+        if ownership_error is not None:
+            return ownership_error
+        return service.get_build_quality(run_id)
 
     if method == "GET" and path.startswith("/builds/") and "/stages" in path:
         rest = path[len("/builds/") :]

@@ -19,14 +19,24 @@ import yaml
 from ..errors import SpecLoadError
 from .models import (
     BuildSpec,
+    CompareColumnsRule,
     ExportTarget,
     JsonValue,
     PiiPolicy,
     QualityPolicy,
+    RangeRule,
     SchemaContract,
     SourceRef,
     SplitSpec,
 )
+
+# quality.*_severity 값의 허용 어휘 (#486). 기존 threshold 위반은 "warn"이 기본이며,
+# 명시적으로 "fail"을 선언해야 Gold 진입 전 소스가 실패한다.
+_QUALITY_SEVERITIES = ("warn", "fail")
+
+# quality.compare_columns[].operator 허용 어휘 (#486). 자유형 expression/eval은 금지하고
+# 이 집합만 허용한다 — invalid operator는 파싱 단계에서 즉시 거부된다.
+_COMPARE_COLUMNS_OPERATORS = ("eq", "ne", "gt", "gte", "lt", "lte")
 
 
 def parse_spec(data: dict[str, object]) -> BuildSpec:
@@ -355,10 +365,82 @@ def _parse_pii(value: object) -> PiiPolicy | None:
     return PiiPolicy(mode=mode_obj, allow_columns=allow_columns)
 
 
-def _parse_quality(value: object) -> QualityPolicy | None:
-    """quality 매핑을 QualityPolicy로 변환한다 (없으면 None, #446).
+def _parse_severity(value: object, *, field_name: str) -> str:
+    """quality severity 값("warn"/"fail")을 검증한다 (#486)."""
+    if not isinstance(value, str) or value not in _QUALITY_SEVERITIES:
+        raise ValueError(f"{field_name} must be one of {_QUALITY_SEVERITIES}, got {value!r}")
+    return value
 
-    max_duplicate_rate/min_rows 는 스칼라, max_null_ratio 는 {컬럼명: 비율} 매핑.
+
+def _parse_severity_map(value: object, *, field_name: str) -> dict[str, str]:
+    """컬럼별 severity override 매핑을 검증한다 (#486)."""
+    if not isinstance(value, dict):
+        raise TypeError(f"{field_name} must be a mapping")
+    result: dict[str, str] = {}
+    for k, v in cast(dict[object, object], value).items():
+        if not isinstance(k, str):
+            raise TypeError(f"{field_name} keys must be strings")
+        result[k] = _parse_severity(v, field_name=f"{field_name}.{k}")
+    return result
+
+
+def _parse_optional_number(value: object, *, field_name: str) -> float | None:
+    if value is None:
+        return None
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise TypeError(f"{field_name} must be a number")
+    return float(value)
+
+
+def _parse_range_rules(value: object) -> tuple[RangeRule, ...]:
+    """quality.range 배열을 RangeRule 튜플로 변환한다 (#486)."""
+    if not isinstance(value, list):
+        raise TypeError("quality.range must be a list")
+    rules: list[RangeRule] = []
+    for index, item in enumerate(cast(list[object], value)):
+        prefix = f"quality.range[{index}]"
+        mapping = _ensure_mapping(item, field_name=prefix)
+        column = _require_string(mapping, "column", prefix=prefix)
+        min_value = _parse_optional_number(mapping.get("min"), field_name=f"{prefix}.min")
+        max_value = _parse_optional_number(mapping.get("max"), field_name=f"{prefix}.max")
+        severity = _parse_severity(mapping.get("severity", "warn"), field_name=f"{prefix}.severity")
+        rules.append(RangeRule(column=column, min=min_value, max=max_value, severity=severity))
+    return tuple(rules)
+
+
+def _parse_compare_columns_rules(value: object) -> tuple[CompareColumnsRule, ...]:
+    """quality.compare_columns 배열을 CompareColumnsRule 튜플로 변환한다 (#486).
+
+    자유형 expression/eval은 금지하고, operator는 ``_COMPARE_COLUMNS_OPERATORS``만
+    허용한다 — invalid operator는 여기서 즉시 거부된다.
+    """
+    if not isinstance(value, list):
+        raise TypeError("quality.compare_columns must be a list")
+    rules: list[CompareColumnsRule] = []
+    for index, item in enumerate(cast(list[object], value)):
+        prefix = f"quality.compare_columns[{index}]"
+        mapping = _ensure_mapping(item, field_name=prefix)
+        left = _require_string(mapping, "left", prefix=prefix)
+        right = _require_string(mapping, "right", prefix=prefix)
+        operator = _require_string(mapping, "operator", prefix=prefix)
+        if operator not in _COMPARE_COLUMNS_OPERATORS:
+            raise ValueError(
+                f"{prefix}.operator must be one of {_COMPARE_COLUMNS_OPERATORS}, got {operator!r}"
+            )
+        severity = _parse_severity(mapping.get("severity", "warn"), field_name=f"{prefix}.severity")
+        rules.append(
+            CompareColumnsRule(left=left, operator=operator, right=right, severity=severity)
+        )
+    return tuple(rules)
+
+
+def _parse_quality(value: object) -> QualityPolicy | None:
+    """quality 매핑을 QualityPolicy로 변환한다 (없으면 None, #446/#486).
+
+    max_duplicate_rate/min_rows 는 스칼라, max_null_ratio 는 {컬럼명: 비율} 매핑
+    — 기존 #446 syntax 그대로다. ``*_severity`` 필드(#486)는 선택이며 생략 시
+    "warn"이 기본이다. ``range``/``compare_columns``는 #486에서 추가된 typed
+    확장 규칙이다.
     """
     if value is None:
         return None
@@ -366,9 +448,16 @@ def _parse_quality(value: object) -> QualityPolicy | None:
     max_dup = mapping.get("max_duplicate_rate")
     if max_dup is not None and (not isinstance(max_dup, (int, float)) or isinstance(max_dup, bool)):
         raise TypeError("quality.max_duplicate_rate must be a number")
+    max_dup_severity = _parse_severity(
+        mapping.get("max_duplicate_rate_severity", "warn"),
+        field_name="quality.max_duplicate_rate_severity",
+    )
     min_rows = mapping.get("min_rows")
     if min_rows is not None and (not isinstance(min_rows, int) or isinstance(min_rows, bool)):
         raise TypeError("quality.min_rows must be an integer")
+    min_rows_severity = _parse_severity(
+        mapping.get("min_rows_severity", "warn"), field_name="quality.min_rows_severity"
+    )
     null_ratio_raw = mapping.get("max_null_ratio", {})
     if not isinstance(null_ratio_raw, dict):
         raise TypeError("quality.max_null_ratio must be a mapping")
@@ -377,10 +466,20 @@ def _parse_quality(value: object) -> QualityPolicy | None:
         if not isinstance(k, str) or not isinstance(v, (int, float)) or isinstance(v, bool):
             raise TypeError("quality.max_null_ratio entries must be string→number pairs")
         max_null_ratio[k] = float(v)
+    max_null_ratio_severity = _parse_severity_map(
+        mapping.get("max_null_ratio_severity", {}), field_name="quality.max_null_ratio_severity"
+    )
+    range_rules = _parse_range_rules(mapping.get("range", []))
+    compare_columns_rules = _parse_compare_columns_rules(mapping.get("compare_columns", []))
     return QualityPolicy(
         max_duplicate_rate=float(max_dup) if max_dup is not None else None,
+        max_duplicate_rate_severity=max_dup_severity,
         max_null_ratio=max_null_ratio,
+        max_null_ratio_severity=max_null_ratio_severity,
         min_rows=min_rows,
+        min_rows_severity=min_rows_severity,
+        range=range_rules,
+        compare_columns=compare_columns_rules,
     )
 
 

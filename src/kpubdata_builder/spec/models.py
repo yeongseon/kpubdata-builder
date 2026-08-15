@@ -108,21 +108,80 @@ class PiiPolicy:
 
 
 @dataclass(frozen=True)
-class QualityPolicy:
-    """데이터 품질 임계 정책 (#446, QG-3).
+class RangeRule:
+    """숫자 컬럼의 최소/최대 범위 규칙 (#486).
 
-    Silver 통계(row_count/null_counts/duplicate_rate)에 대한 임계. 초과 시
-    위반으로 보고한다(orchestrator 가 warn/fail 처리).
+    자유형 Python/eval 대신 typed rule로 표현한다. min/max는 포함(inclusive)
+    경계다. null 값은 range 위반으로 계산하지 않는다 — missing/null 여부는
+    ``max_null_ratio``가 별도로 담당한다(역할 분리).
+
+    속성:
+        column: 대상 컬럼명.
+        min: 허용 최소값(포함). None이면 하한을 검사하지 않는다.
+        max: 허용 최대값(포함). None이면 상한을 검사하지 않는다.
+        severity: 위반 시 심각도 — ``"warn"``(기본) | ``"fail"``.
+    """
+
+    column: str
+    min: float | None = None
+    max: float | None = None
+    severity: str = "warn"
+
+
+@dataclass(frozen=True)
+class CompareColumnsRule:
+    """두 컬럼 간 비교 규칙 (#486).
+
+    자유형 expression/eval을 금지하고, 제한된 operator 집합만 허용한다.
+    두 컬럼 모두 null이 아닌 행만 평가 대상이다(비교 불가능한 행을 자동
+    통과로 세지 않는다).
+
+    속성:
+        left: 왼쪽 컬럼명.
+        operator: ``eq``/``ne``/``gt``/``gte``/``lt``/``lte`` 중 하나.
+        right: 오른쪽 컬럼명.
+        severity: 위반 시 심각도 — ``"warn"``(기본) | ``"fail"``.
+    """
+
+    left: str
+    operator: str
+    right: str
+    severity: str = "warn"
+
+
+@dataclass(frozen=True)
+class QualityPolicy:
+    """데이터 품질 임계 정책 (#446, QG-3; range/compare_columns/severity는 #486).
+
+    Silver 통계(row_count/null_counts/duplicate_rate)와 테이블 자체(range/
+    compare_columns)에 대한 임계. 초과 시 위반으로 구조화된 QualityCheckResult로
+    보고하고(quality.evaluator), severity에 따라 WARN(계속 진행) 또는 FAIL(Gold
+    진입 전 소스 실패)로 게이트한다.
+
+    기존 3개 필드(max_duplicate_rate/max_null_ratio/min_rows)의 타입과 기본
+    severity(``"warn"``)는 #446 시절 그대로 유지한다 — 하위 호환. 명시적 FAIL이
+    필요하면 대응하는 ``*_severity`` 필드를 함께 선언한다.
 
     속성:
         max_duplicate_rate: 허용 최대 중복 행 비율 (0.0~1.0). 초과 시 위반.
+        max_duplicate_rate_severity: 위반 시 심각도. 기본 ``"warn"``.
         max_null_ratio: 컬럼별 허용 최대 null 비율 (``{컬럼명: 비율}``).
+        max_null_ratio_severity: 컬럼별 위반 심각도 override (``{컬럼명: severity}``).
+            선언되지 않은 컬럼은 기본 ``"warn"``.
         min_rows: 최소 행 수. 미만 시 위반.
+        min_rows_severity: 위반 시 심각도. 기본 ``"warn"``.
+        range: 컬럼별 최소/최대 범위 규칙 목록 (#486).
+        compare_columns: 컬럼 간 비교 규칙 목록 (#486).
     """
 
     max_duplicate_rate: float | None = None
+    max_duplicate_rate_severity: str = "warn"
     max_null_ratio: dict[str, float] = field(default_factory=dict)
+    max_null_ratio_severity: dict[str, str] = field(default_factory=dict)
     min_rows: int | None = None
+    min_rows_severity: str = "warn"
+    range: tuple[RangeRule, ...] = ()
+    compare_columns: tuple[CompareColumnsRule, ...] = ()
 
 
 @dataclass(frozen=True)

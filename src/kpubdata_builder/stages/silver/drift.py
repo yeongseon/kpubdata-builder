@@ -1,4 +1,4 @@
-"""스키마·통계 드리프트 감지 (#445, DRIFT-1).
+"""스키마·통계 드리프트 감지 (#445, DRIFT-1; dataset/source 범위 한정은 #486).
 
 스케줄 워크플로가 주기적으로 재빌드할 때 소스 API가 조용히 형식을 바꿔도
 감지된다. append-only 데이터셋에서는 오염이 누적되므로 직전 성공 run과
@@ -7,7 +7,9 @@
 주요 구성:
     - DriftFinding: 단일 드리프트 관찰 (컬럼 추가/삭제/dtype 변경/행 수 급변)
     - detect_drift: 순수 함수 — 현재/이전 SchemaInfo+TableStatistics → findings
-    - find_previous_silver: output_root 에서 직전 run의 silver 데이터를 찾는다
+    - find_previous_silver: 동일 dataset_id·source_key의 직전 "성공" run에서 silver
+      데이터를 찾는다 (#486) — 다른 dataset/source의 silver와 비교해 가짜 drift를
+      만들지 않는다.
 """
 
 from __future__ import annotations
@@ -16,6 +18,9 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+import yaml
+
+from ...spec.serializer import BUILDSPEC_SNAPSHOT_FILENAME
 from ...tabular import SchemaInfo, TableStatistics
 from ...tabular.types import ColumnInfo
 
@@ -84,30 +89,89 @@ def detect_drift(
     return findings
 
 
-def find_previous_silver(
-    output_root: Path, current_run_id: str
-) -> tuple[SchemaInfo, TableStatistics] | None:
-    """output_root 에서 직전 run의 silver schema/stats를 찾아 읽는다 (#445).
+def _run_dataset_id(run_dir: Path) -> str | None:
+    """run_dir의 buildspec.yaml snapshot에서 dataset_id만 가볍게 읽는다.
 
-    현재 run 디렉터리를 제외한 가장 최근 run의 silver/schema.json +
-    silver/stats.json을 읽는다. 파일이 없으면 None.
+    service/datasets.py의 read_snapshot_dataset_id와 동일한 의도지만, silver
+    stage는 service 계층에 의존할 수 없으므로(레이어링) 여기서 최소한으로
+    다시 구현한다. snapshot이 없거나 읽을 수 없으면 None — 추측하지 않는다.
     """
-    candidates = sorted(
-        (
-            d
-            for d in output_root.iterdir()
-            if d.is_dir() and d.name != current_run_id and (d / "silver" / "schema.json").exists()
-        ),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
+    snapshot_path = run_dir / BUILDSPEC_SNAPSHOT_FILENAME
+    if not snapshot_path.is_file():
+        return None
+    try:
+        doc = yaml.safe_load(snapshot_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+        return None
+    if not isinstance(doc, dict):
+        return None
+    dataset_id = doc.get("dataset_id")
+    return dataset_id if isinstance(dataset_id, str) and dataset_id else None
+
+
+def _run_succeeded(run_dir: Path) -> tuple[bool, str]:
+    """(성공 여부, finished_at 정렬키)를 manifest.json에서 읽는다.
+
+    manifest가 없거나 손상되었거나 errors가 있으면 실패로 취급한다 — 실패/부분
+    실패 run의 silver는 drift 비교 대상에서 제외한다(#486).
+    """
+    manifest_path = run_dir / "manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return False, ""
+    if not isinstance(manifest, dict) or manifest.get("errors"):
+        return False, ""
+    finished_at = manifest.get("finished_at")
+    return True, finished_at if isinstance(finished_at, str) else ""
+
+
+def find_previous_silver(
+    output_root: Path,
+    current_run_id: str,
+    *,
+    dataset_id: str,
+    source_key: str,
+) -> tuple[SchemaInfo, TableStatistics] | None:
+    """동일 dataset_id·source_key의 직전 "성공" run에서 silver schema/stats를 찾는다.
+
+    "직전 아무 run"과 비교하지 않는다(#486) — 다음 조건을 모두 만족하는 run 중
+    finished_at 기준 가장 최근 것을 선택한다:
+        - buildspec.yaml snapshot의 dataset_id가 정확히 일치
+        - manifest.json에 errors가 없음(성공 run)
+        - 해당 source_key의 silver/schema.json + silver/stats.json이 존재
+
+    조건을 만족하는 run이 없으면 None(비교 대상 없음 — drift "없음"이 아니라
+    "평가 불가"다. 호출자는 이 경우 drift 감지를 건너뛴다).
+    """
+    if not output_root.exists():
+        return None
+    source_segment = source_key.replace("/", "_")
+    candidates: list[tuple[str, str, Path]] = []
+    for run_dir in output_root.iterdir():
+        if not run_dir.is_dir() or run_dir.name == current_run_id:
+            continue
+        # 파일 존재 확인(stat)이 snapshot/manifest 읽기보다 저렴하므로 먼저
+        # 걸러서 run 수 × source 수만큼 반복되는 I/O를 줄인다.
+        silver_dir = run_dir / "silver" / source_segment
+        if not (silver_dir / "schema.json").is_file() or not (silver_dir / "stats.json").is_file():
+            continue
+        if _run_dataset_id(run_dir) != dataset_id:
+            continue
+        succeeded, sort_key = _run_succeeded(run_dir)
+        if not succeeded:
+            continue
+        candidates.append((sort_key, run_dir.name, silver_dir))
     if not candidates:
         return None
 
-    prev_dir = candidates[0]
+    # finished_at 내림차순, 동일 시각은 run_id 내림차순으로 결정적 타이브레이크
+    # (#488 sort_key semantics와 동일한 원칙).
+    candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    _, _, prev_silver_dir = candidates[0]
     try:
-        schema_data = json.loads((prev_dir / "silver" / "schema.json").read_text(encoding="utf-8"))
-        stats_data = json.loads((prev_dir / "silver" / "stats.json").read_text(encoding="utf-8"))
+        schema_data = json.loads((prev_silver_dir / "schema.json").read_text(encoding="utf-8"))
+        stats_data = json.loads((prev_silver_dir / "stats.json").read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return None
 
