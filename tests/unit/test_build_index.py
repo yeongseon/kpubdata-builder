@@ -377,6 +377,23 @@ class TestRebuildIndex:
         assert entry is not None
         assert entry.dataset_id is None
 
+    def test_rebuild_skips_symlinked_snapshot(self, tmp_path: Path) -> None:
+        run_dir = tmp_path / "run1"
+        run_dir.mkdir()
+        (run_dir / "manifest.json").write_text(
+            json.dumps({"started_at": "a", "finished_at": "b"}), encoding="utf-8"
+        )
+        outside = tmp_path / "outside.yaml"
+        outside.write_bytes(b"dataset_id: evil\n")
+        (run_dir / "buildspec.yaml").symlink_to(outside)
+
+        assert rebuild_index(tmp_path) == 1
+
+        entry = BuildIndex(tmp_path).get("run1")
+        assert entry is not None
+        assert entry.spec_digest is None
+        assert entry.dataset_id is None
+
     def test_rebuild_isolates_empty_corrupt_and_unreadable_snapshots(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
