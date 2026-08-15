@@ -19,10 +19,8 @@ import json
 import logging
 import os
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, cast, runtime_checkable
-from urllib.parse import parse_qs, unquote
 
 import yaml
 from kpubdata import Client
@@ -69,6 +67,8 @@ from .providers import (
     run_provider_test,
     test_result_body,
 )
+from .responses import FileResponse, ServiceResponse
+from .routes import ROUTE_ADAPTERS
 
 logger = logging.getLogger(__name__)
 
@@ -149,48 +149,6 @@ def _enforce_ownership() -> bool:
     return ownership_module.enforce_ownership()
 
 
-def _read_manifest_ownership(service: BuilderService, run_id: str) -> tuple[str | None, str | None]:
-    """manifest.json에서 (created_by, owner_id)를 읽는다 (#389, #505).
-
-    없거나 읽을 수 없으면 (None, None). ``owner_id``는 #505 이전 manifest에는
-    없는 additive 필드다 — legacy manifest는 자연히 (created_by, None)이 된다.
-    """
-    manifest_path = service._output_root / run_id / "manifest.json"
-    if not manifest_path.exists():
-        return None, None
-    try:
-        data = json.loads(manifest_path.read_text(encoding="utf-8"))
-        return cast(str | None, data.get("created_by")), cast(str | None, data.get("owner_id"))
-    except Exception:
-        return None, None
-
-
-def _check_ownership(
-    service: BuilderService, run_id: str, principal: Principal
-) -> ServiceResponse | None:
-    """소유권을 검사한다 (#389, #505). 통과 시 None, 거부 시 403 ServiceResponse.
-
-    게이팅(env/관리자)과 판정 모두 ``service.ownership.ownership_allows``
-    공용 predicate로 한다(#504 review) — 비교는 ``principal_owns``(#505:
-    canonical owner_id 우선, legacy created_by/label 폴백)를 따른다.
-    """
-    created_by, owner_id = _read_manifest_ownership(service, run_id)
-    if ownership_module.ownership_allows(
-        created_by=created_by, owner_id=owner_id, principal=principal
-    ):
-        return None
-    return ServiceResponse(403, {"error": "forbidden: not run owner"})
-
-
-def _check_run_exists(service: BuilderService, run_id: str) -> ServiceResponse | None:
-    """snapshot 파일을 읽지 않고 run workspace 존재 여부만 확인한다."""
-    run_dir = service._output_root / run_id
-    ensure_within(service._output_root, run_dir, label="run directory")
-    if run_dir.is_dir():
-        return None
-    return ServiceResponse(404, {"error": f"run not found: {run_id}"})
-
-
 # Build list entry type for API responses
 _BuildListEntry = dict[str, str | None]
 
@@ -238,34 +196,6 @@ def _strip_internal_fields(entries: list[_BuildListEntry]) -> list[_BuildListEnt
 # 1.5.0 -> 1.6.0: 구조화된 Quality/Schema Drift 결과, quality history/detail API 추가
 # (#486, additive — 기존 엔드포인트는 변경되지 않는다).
 API_CONTRACT_VERSION = "1.8.0"
-
-
-@dataclass(frozen=True)
-class ServiceResponse:
-    """서비스 연산 결과.
-
-    속성:
-        status_code: HTTP 상태 코드.
-        body: JSON 직렬화 가능한 응답 본문.
-    """
-
-    status_code: int
-    body: dict[str, JsonValue]
-
-
-@dataclass(frozen=True)
-class FileResponse:
-    """파일 서빙 응답 (#323).
-
-    속성:
-        status_code: HTTP 상태 코드.
-        file_path: 제공할 파일 경로.
-        filename: 다운로드 시 사용할 파일 이름 (Content-Disposition 헤더용).
-    """
-
-    status_code: int
-    file_path: Path
-    filename: str
 
 
 def _quality_result_to_json(r: QualityCheckResult) -> dict[str, JsonValue]:
@@ -1274,16 +1204,6 @@ class BuilderService:
         return spec
 
 
-def _spec_from_body(body: Mapping[str, JsonValue] | None) -> str | ServiceResponse:
-    """요청 body에서 spec YAML 문자열을 추출한다."""
-    if not body or "spec" not in body:
-        return ServiceResponse(400, {"error": "missing 'spec' in request body"})
-    spec_value = body["spec"]
-    if not isinstance(spec_value, str):
-        return ServiceResponse(400, {"error": "'spec' must be a YAML string"})
-    return spec_value
-
-
 def _query_request_from_body(body: Mapping[str, JsonValue] | None) -> QueryRequest:
     if body is None:
         raise ValueError("request body is required")
@@ -1317,21 +1237,6 @@ def _query_request_from_body(body: Mapping[str, JsonValue] | None) -> QueryReque
     )
 
 
-def _parse_limit_query(query: str, *, default: int = 50) -> int | ServiceResponse:
-    """``?limit=N`` 쿼리 파라미터를 파싱한다. 없으면 default, 형식이 잘못되면 400 (#488)."""
-    query_params = parse_qs(query)
-    if "limit" not in query_params:
-        return default
-    raw_limit = query_params["limit"][-1]
-    try:
-        value = int(raw_limit)
-    except ValueError:
-        return ServiceResponse(400, {"error": "'limit' must be a positive integer"})
-    if value < 1:
-        return ServiceResponse(400, {"error": "'limit' must be a positive integer"})
-    return value
-
-
 def dispatch(
     service: BuilderService,
     method: str,
@@ -1360,289 +1265,10 @@ def dispatch(
     if isinstance(principal, AuthError):
         return ServiceResponse(principal.status_code, {"error": principal.reason})
 
-    if method == "GET" and path == "/version":
-        return service.version()
-
-    if method == "GET" and path == "/catalog":
-        return service.catalog()
-
-    if method == "GET" and path == "/providers":
-        return service.providers(principal=principal)
-
-    if path.startswith("/providers/"):
-        rest = path[len("/providers/") :]
-        segments = rest.split("/")
-        if len(segments) != 2 or not segments[0]:
-            return ServiceResponse(404, {"error": f"not found: {method} {path}"})
-        provider = unquote(segments[0]).strip().lower()
-        operation = segments[1]
-        if not provider:
-            return ServiceResponse(400, {"error": "provider must not be empty"})
-        if method == "GET" and operation == "status":
-            return service.provider_status(provider, principal=principal)
-        if method == "POST" and operation == "test":
-            return service.provider_status(provider, principal=principal)
-        if method == "GET" and operation == "credential":
-            return service.provider_credential(provider, principal=principal)
-        if method == "PUT" and operation == "credential":
-            return service.put_provider_credential(provider, body, principal=principal)
-        if method == "DELETE" and operation == "credential":
-            return service.delete_provider_credential(provider, principal=principal)
-
-    if method == "POST" and path == "/query":
-        return service.query(body, principal=principal)
-
-    if method == "GET" and path == "/datasets":
-        limit = _parse_limit_query(query)
-        if isinstance(limit, ServiceResponse):
-            return limit
-        return service.list_datasets(limit=limit, principal=principal)
-
-    if method == "GET" and path.startswith("/datasets/"):
-        # dataset_id는 BuildSpec.dataset_id 값 그대로일 수 있어 slash/space 등을
-        # 포함할 수 있다 (#488). http.server는 percent-encoding을 자동으로 풀지
-        # 않으므로, "/runs"·"/quality/history" 접미사를 아직 인코딩된 원문 상태에서
-        # 먼저 떼어낸 뒤 남은 단일 세그먼트만 unquote한다 — dataset_id 안의 literal
-        # '/'는 클라이언트가 %2F로 인코딩해야 이 라우팅과 충돌하지 않는다.
-        raw_rest = path[len("/datasets/") :]
-        is_runs_route = raw_rest.endswith("/runs")
-        is_quality_history_route = raw_rest.endswith("/quality/history")
-        if is_runs_route:
-            raw_dataset_id = raw_rest[: -len("/runs")]
-        elif is_quality_history_route:
-            raw_dataset_id = raw_rest[: -len("/quality/history")]
-        else:
-            raw_dataset_id = raw_rest
-        if not raw_dataset_id:
-            return ServiceResponse(400, {"error": "dataset_id must not be empty"})
-        dataset_id = unquote(raw_dataset_id)
-        if not dataset_id:
-            return ServiceResponse(400, {"error": "dataset_id must not be empty"})
-
-        if is_runs_route:
-            limit = _parse_limit_query(query)
-            if isinstance(limit, ServiceResponse):
-                return limit
-            return service.list_dataset_runs(dataset_id, limit=limit, principal=principal)
-
-        if is_quality_history_route:
-            limit = _parse_limit_query(query, default=30)
-            if isinstance(limit, ServiceResponse):
-                return limit
-            return service.get_dataset_quality_history(dataset_id, limit=limit, principal=principal)
-
-        return service.get_dataset(dataset_id, principal=principal)
-
-    if method == "POST" and path == "/validate":
-        spec = _spec_from_body(body)
-        return spec if isinstance(spec, ServiceResponse) else service.validate(spec)
-
-    if method == "POST" and path == "/preview":
-        spec = _spec_from_body(body)
-        if isinstance(spec, ServiceResponse):
-            return spec
-        # limit이 명시되면 양의 정수여야 한다 — 잘못된 값을 조용히 기본값으로 떨어뜨리지 않는다.
-        if body is not None and "limit" in body:
-            limit_value = body["limit"]
-            # bool은 int의 하위 타입이지만 limit 의미가 없으므로 거부.
-            if not isinstance(limit_value, int) or isinstance(limit_value, bool) or limit_value < 1:
-                return ServiceResponse(400, {"error": "'limit' must be a positive integer"})
-            limit = limit_value
-        else:
-            limit = DEFAULT_PREVIEW_LIMIT
-        return service.preview(spec, limit=limit, principal=principal)
-
-    if method == "POST" and path == "/build":
-        spec = _spec_from_body(body)
-        if isinstance(spec, ServiceResponse):
-            return spec
-        run_id: str | None = None
-        if body is not None and "run_id" in body:
-            run_id_value = body["run_id"]
-            # run_id가 명시되면 비어있지 않은 문자열이어야 한다. 잘못된 타입을 조용히
-            # 자동 생성 run id로 떨어뜨리면 클라이언트가 의도한 run id와 실제 기록 위치가
-            # 달라지므로 400으로 거부한다 (#185).
-            if not isinstance(run_id_value, str) or not run_id_value.strip():
-                return ServiceResponse(400, {"error": "'run_id' must be a non-empty string"})
-            # 경로 안전하지 않은 run_id("../bad" 등)는 이후 BuildContext.create에서
-            # ValueError를 일으켜 HTTP 어댑터에서 500/연결 끊김이 되므로, 진입점에서
-            # 동일한 safe-segment 규칙으로 검증해 구조화된 400을 반환한다 (#200).
-            try:
-                validate_path_segment(run_id_value, field_name="run_id")
-            except ValueError as exc:
-                return ServiceResponse(400, {"error": str(exc)})
-            run_id = run_id_value
-        return service.build(
-            spec,
-            run_id=run_id,
-            created_by=principal.label,
-            owner_id=principal.owner_id,
-            principal=principal,
-        )
-
-    if method == "POST" and path == "/builds":
-        spec = _spec_from_body(body)
-        if isinstance(spec, ServiceResponse):
-            return spec
-        async_run_id: str | None = None
-        if body is not None and "run_id" in body:
-            run_id_value = body["run_id"]
-            if not isinstance(run_id_value, str) or not run_id_value.strip():
-                return ServiceResponse(400, {"error": "'run_id' must be a non-empty string"})
-            try:
-                validate_path_segment(run_id_value, field_name="run_id")
-            except ValueError as exc:
-                return ServiceResponse(400, {"error": str(exc)})
-            async_run_id = run_id_value
-        return service.submit_build(spec, run_id=async_run_id, created_by=principal.label)
-
-    if method == "GET" and path.startswith("/builds/") and "/" not in path[len("/builds/") :]:
-        run_id = path[len("/builds/") :]
-        return service.build_status(run_id)
-
-    if method == "GET" and path.startswith("/builds/") and path.endswith("/manifest"):
-        rest = path[len("/builds/") :]
-        parts = rest.split("/", 1)
-        run_id = parts[0]
-        if len(parts) == 2 and parts[1] == "manifest":
-            try:
-                validate_path_segment(run_id, field_name="run_id")
-            except ValueError as exc:
-                return ServiceResponse(400, {"error": str(exc)})
-            ownership_error = _check_ownership(service, run_id, principal)
-            if ownership_error is not None:
-                return ownership_error
-            return service.manifest(run_id)
-
-    if method == "GET" and path.startswith("/builds/") and path.endswith("/spec"):
-        run_id = path[len("/builds/") : -len("/spec")]
-        try:
-            validate_path_segment(run_id, field_name="run_id")
-        except ValueError as exc:
-            return ServiceResponse(400, {"error": str(exc)})
-        existence_error = _check_run_exists(service, run_id)
-        if existence_error is not None:
-            return existence_error
-        ownership_error = _check_ownership(service, run_id, principal)
-        if ownership_error is not None:
-            return ownership_error
-        return service.spec(run_id)
-
-    if method == "GET" and path.startswith("/builds/") and path.endswith("/quality"):
-        run_id = path[len("/builds/") : -len("/quality")]
-        try:
-            validate_path_segment(run_id, field_name="run_id")
-        except ValueError as exc:
-            return ServiceResponse(400, {"error": str(exc)})
-        existence_error = _check_run_exists(service, run_id)
-        if existence_error is not None:
-            return existence_error
-        ownership_error = _check_ownership(service, run_id, principal)
-        if ownership_error is not None:
-            return ownership_error
-        return service.get_build_quality(run_id)
-
-    if method == "GET" and path.startswith("/builds/") and "/stages" in path:
-        rest = path[len("/builds/") :]
-        segments = rest.split("/")
-        run_id = segments[0]
-        try:
-            validate_path_segment(run_id, field_name="run_id")
-        except ValueError as exc:
-            return ServiceResponse(400, {"error": str(exc)})
-
-        if len(segments) == 2 and segments[1] == "stages":
-            existence_error = _check_run_exists(service, run_id)
-            if existence_error is not None:
-                return existence_error
-            ownership_error = _check_ownership(service, run_id, principal)
-            if ownership_error is not None:
-                return ownership_error
-            return service.list_run_stages(run_id)
-
-        if len(segments) == 3 and segments[1] == "stages" and segments[2]:
-            stage = segments[2]
-            if stage not in stages_service.STAGE_NAMES:
-                return ServiceResponse(
-                    400, {"error": f"invalid stage: {stage!r}; must be one of bronze/silver/gold"}
-                )
-            query_params = parse_qs(query)
-            source_values = query_params.get("source")
-            if not source_values or not source_values[-1]:
-                return ServiceResponse(400, {"error": "'source' query parameter is required"})
-            source_key = source_values[-1]
-            # source는 sidecar 경로에 이어붙기 전 known source인지 확인해야 하지만
-            # (dispatch에서는 manifest를 읽지 않는다), 문자 구성만이라도 여기서
-            # 구조적으로 먼저 거부한다 — path traversal에 쓰일 수 없게 한다.
-            try:
-                validate_path_segment(source_key, field_name="source")
-            except ValueError as exc:
-                return ServiceResponse(400, {"error": str(exc)})
-
-            limit = stages_service.DEFAULT_STAGE_PREVIEW_LIMIT
-            if "limit" in query_params:
-                raw_limit = query_params["limit"][-1]
-                try:
-                    limit = int(raw_limit)
-                except ValueError:
-                    return ServiceResponse(400, {"error": "'limit' must be a positive integer"})
-                if limit < 1 or limit > stages_service.MAX_STAGE_PREVIEW_LIMIT:
-                    return ServiceResponse(
-                        400,
-                        {
-                            "error": (
-                                "'limit' must be a positive integer up to "
-                                f"{stages_service.MAX_STAGE_PREVIEW_LIMIT}"
-                            )
-                        },
-                    )
-
-            existence_error = _check_run_exists(service, run_id)
-            if existence_error is not None:
-                return existence_error
-            ownership_error = _check_ownership(service, run_id, principal)
-            if ownership_error is not None:
-                return ownership_error
-            return service.get_run_stage_detail(run_id, stage, source_key, limit=limit)
-
-    if method == "GET" and path.startswith("/artifacts/"):
-        rest = path[len("/artifacts/") :]
-        parts = rest.split("/", 1)
-        run_id = parts[0]
-        # run_id를 소유권 검사보다 먼저 검증 (#439). _read_manifest_ownership 이
-        # 검증 없이 경로를 조립하므로 "../" 등 unsafe 세그먼트가 _check_ownership
-        # 보다 먼저 도달해야 한다.
-        try:
-            validate_path_segment(run_id, field_name="run_id")
-        except ValueError as exc:
-            return ServiceResponse(400, {"error": str(exc)})
-        ownership_error = _check_ownership(service, run_id, principal)
-        if ownership_error is not None:
-            return ownership_error
-        if len(parts) == 2 and parts[1]:
-            return service.serve_artifact_file(run_id, parts[1])
-        return service.artifacts(run_id)
-
-    if method == "GET" and path == "/builds":
-        limit = 50
-        # 표준 REST 스타일에 맞게 쿼리 파라미터(?limit=N)를 우선 지원한다 (#252).
-        # 기존 소비자 호환을 위해 body의 limit도 계속 받아들인다.
-        query_params = parse_qs(query)
-        if "limit" in query_params:
-            raw_limit = query_params["limit"][-1]
-            try:
-                query_limit = int(raw_limit)
-            except ValueError:
-                return ServiceResponse(400, {"error": "'limit' must be a positive integer"})
-            if query_limit < 1:
-                return ServiceResponse(400, {"error": "'limit' must be a positive integer"})
-            limit = query_limit
-        elif body is not None and "limit" in body:
-            limit_value = body["limit"]
-            if not isinstance(limit_value, int) or isinstance(limit_value, bool) or limit_value < 1:
-                return ServiceResponse(400, {"error": "'limit' must be a positive integer"})
-            limit = limit_value
-        return service.list_builds(limit=limit, principal=principal)
+    for adapter in ROUTE_ADAPTERS:
+        response = adapter(service, method, path, body, query, principal)
+        if response is not None:
+            return response
 
     return ServiceResponse(404, {"error": f"not found: {method} {path}"})
 
