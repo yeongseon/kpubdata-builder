@@ -185,6 +185,53 @@ class QualityPolicy:
 
 
 @dataclass(frozen=True)
+class JoinSpec:
+    """두 source를 결합하는 equi-join 계약 (#506).
+
+    구조(참조 alias 존재, type/severity 어휘)는 spec.validator가 파싱 직후 검증한다.
+    join key의 실제 존재 여부와 dtype 호환성은 파싱 시점엔 알 수 없다(Silver 스키마가
+    나와야 확인 가능) — 그 부분은 spec.validator가 아니라 orchestrator의 빌드 파이프라인
+    검증 게이트(런타임)에서 확인한다. 완료조건 문서의 "validate 단계에서 확인"은 이
+    구조 검증과 파이프라인 게이트를 합쳐 부르는 표현으로 읽어야 한다.
+
+    속성:
+        left: 왼쪽 source의 alias (BuildSpec.sources[].alias 참조).
+        right: 오른쪽 source의 alias.
+        left_key: 왼쪽 테이블의 join key 컬럼명.
+        right_key: 오른쪽 테이블의 join key 컬럼명.
+        type: join 종류. "inner" | "left" (초기 범위, #506).
+        on_duplicate_key: 양쪽 key 모두 중복 값을 가져 many-to-many로 행이
+            폭증할 수 있을 때의 처리. "warn"(기본, manifest에 경고만 기록) |
+            "fail"(빌드 실패). QualityPolicy의 severity 관례를 따른다.
+    """
+
+    left: str
+    right: str
+    left_key: str
+    right_key: str
+    type: str = "inner"
+    on_duplicate_key: str = "warn"
+
+
+@dataclass(frozen=True)
+class CompositionSpec:
+    """여러 source를 하나의 Gold dataset으로 조립하는 계약 (#506).
+
+    초기 범위는 두 source 단일 equi-join으로 제한한다(3개 이상 join graph는
+    제외 범위) — 그래서 리스트가 아니라 단일 JoinSpec만 받는다.
+
+    속성:
+        name: 결합 결과 Gold dataset 이름. gold/{name}/ 출력 디렉터리 세그먼트로도
+            쓰이므로 다른 source의 output key(alias 또는 provider.dataset)와
+            겹치면 안 된다.
+        join: 결합에 사용할 단일 JoinSpec.
+    """
+
+    name: str
+    join: JoinSpec
+
+
+@dataclass(frozen=True)
 class BuildSpec:
     """데이터셋 산출물을 위한 선언적 빌드 명세.
 
@@ -202,6 +249,8 @@ class BuildSpec:
             ``publish=True`` 시 반드시 선언해야 한다 (#443). kpubdata 가 라이선스
             메타데이터를 제공하지 않으므로 사용자 명시 선언만이 출처이다.
         quality: 데이터 품질 임계 정책. None이면 검사를 생략한다 (하위 호환, #446).
+        composition: 두 source를 join해 하나의 Gold dataset으로 조립하는 계약.
+            None이면 기존과 동일하게 source별 독립 Gold만 생성한다 (하위 호환, #506).
 
     예시:
         >>> BuildSpec.from_yaml("specs/sample.yaml")
@@ -218,6 +267,7 @@ class BuildSpec:
     pii: PiiPolicy | None = None
     license: str | None = None
     quality: QualityPolicy | None = None
+    composition: CompositionSpec | None = None
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> BuildSpec:
@@ -247,7 +297,9 @@ class BuildSpec:
 
 __all__ = [
     "BuildSpec",
+    "CompositionSpec",
     "ExportTarget",
+    "JoinSpec",
     "JsonPrimitive",
     "JsonValue",
     "SourceRef",

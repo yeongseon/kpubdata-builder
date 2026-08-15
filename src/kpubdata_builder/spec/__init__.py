@@ -12,7 +12,16 @@ models와 loader의 공개 심볼을 re-export 한다. validate_spec은 exporter
 from __future__ import annotations
 
 from .loader import load_spec, parse_spec
-from .models import BuildSpec, ExportTarget, JsonPrimitive, JsonValue, SourceRef, SplitSpec
+from .models import (
+    BuildSpec,
+    CompositionSpec,
+    ExportTarget,
+    JoinSpec,
+    JsonPrimitive,
+    JsonValue,
+    SourceRef,
+    SplitSpec,
+)
 from .serializer import (
     BUILDSPEC_SNAPSHOT_FILENAME,
     canonical_spec_mapping,
@@ -26,7 +35,9 @@ from .template import load_template, render_template
 __all__ = [
     "BuildSpec",
     "BUILDSPEC_SNAPSHOT_FILENAME",
+    "CompositionSpec",
     "ExportTarget",
+    "JoinSpec",
     "JsonPrimitive",
     "JsonValue",
     "SourceRef",

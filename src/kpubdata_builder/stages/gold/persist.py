@@ -41,6 +41,11 @@ def _package_metadata(package: GoldPackage) -> dict[str, JsonValue]:
     return {
         "dataset_name": package.dataset_name,
         "source_silver": package.source_silver,
+        "source_refs": (
+            cast(list[JsonValue], list(package.source_refs))
+            if package.source_refs is not None
+            else None
+        ),
         "row_count": package.table.height,
         "columns": cast(list[JsonValue], list(package.table.columns)),
         "metadata": dict(package.metadata),

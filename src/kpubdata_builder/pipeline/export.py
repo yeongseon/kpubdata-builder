@@ -16,7 +16,7 @@ def export_gold_package(package: GoldPackage, *, output_dir: Path) -> tuple[Path
         records=tuple(_json_record(row) for row in package.table.to_dicts()),
         schema={name: str(dtype) for name, dtype in package.table.schema.items()},
         metadata=package.metadata,
-        provenance=(package.source_silver,),
+        provenance=package.source_refs if package.source_refs else (package.source_silver,),
         statistics={"row_count": package.table.height},
     )
     return tuple(

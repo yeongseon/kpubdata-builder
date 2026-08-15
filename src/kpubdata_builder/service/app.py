@@ -211,7 +211,10 @@ def _strip_internal_fields(entries: list[_BuildListEntry]) -> list[_BuildListEnt
 # MonitoringSummaryResponse.status(healthy/degraded)는 required subsystem
 # availability로부터 계산되는 deterministic aggregate다(latency threshold
 # 미사용).
-API_CONTRACT_VERSION = "1.11.0"
+# 1.11.0 -> 1.12.0: BuildSpec.composition(JoinSpec)과 POST /build 응답의
+# composition 키, manifest.composition(CompositionProvenance) 추가 (#506,
+# additive — 기존 필드/엔드포인트는 변경되지 않는다).
+API_CONTRACT_VERSION = "1.12.0"
 
 
 def _quality_result_to_json(r: QualityCheckResult) -> dict[str, JsonValue]:
@@ -746,13 +749,27 @@ class BuilderService:
             "manifest": str(result.manifest_path),
             "api_version": API_CONTRACT_VERSION,
         }
+        # composition(#506) 결과는 outcomes(소스별)와 별도로 노출한다 — bronze/silver/gold
+        # stage 개념이 없고 "combined result"로 명확히 구분되어야 하기 때문이다.
+        # BuildSpec.composition이 없으면 null이다.
+        if result.composition_outcome is not None:
+            body["composition"] = {
+                "name": result.composition_outcome.name,
+                "status": result.composition_outcome.status,
+                "error": _redact_secret_text(result.composition_outcome.error, secret_values),
+            }
+        else:
+            body["composition"] = None
         # 실패한 빌드는 첫 번째 실패 outcome의 error를 최상위 `error` 요약으로 노출해,
         # Studio 같은 소비자가 outcomes 배열을 파싱하지 않고도 사람이 읽을 수 있는
-        # 사유를 즉시 표면화할 수 있게 한다 (#226).
+        # 사유를 즉시 표면화할 수 있게 한다 (#226). composition만 실패하고 모든 source가
+        # 성공한 경우도 놓치지 않도록 composition_outcome도 함께 살핀다 (#506).
         if result.status != "ok":
             first_error = next(
                 (o.error for o in result.outcomes if o.status != "ok" and o.error), None
             )
+            if first_error is None and result.composition_outcome is not None:
+                first_error = result.composition_outcome.error
             body["error"] = _redact_secret_text(first_error, secret_values) or "build failed"
 
         # ADR 0003: 빌드 완료 후 인덱스 갱신 (best-effort, 실패해도 빌드 성공 유지)

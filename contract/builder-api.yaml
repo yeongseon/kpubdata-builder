@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: KPubData Builder Service API
-  version: "1.11.0"
+  version: "1.12.0"
   description: >-
     Builder 중심 서비스 계약. BuildSpec 검증, preview, build 실행, artifact 조회,
     계약 버전 조회를 제공한다. CLI와 HTTP service mode(#36)가 동일한 도메인 계약을
@@ -1660,6 +1660,13 @@ components:
           oneOf:
             - $ref: "#/components/schemas/QualityPolicy"
             - type: "null"
+        composition:
+          description: >-
+            두 source를 join해 하나의 결합 Gold dataset을 추가로 만드는 계약
+            (#506). None이면 기존과 동일하게 source별 독립 Gold만 생성한다.
+          oneOf:
+            - $ref: "#/components/schemas/CompositionSpec"
+            - type: "null"
 
     SourceRef:
       type: object
@@ -1829,6 +1836,53 @@ components:
           items:
             $ref: "#/components/schemas/QualityCompareColumnsRule"
           default: []
+
+    JoinSpec:
+      type: object
+      description: >-
+        두 source를 결합하는 equi-join 계약(#506). 초기 범위는 두 source
+        단일 join으로 제한한다 — 3개 이상 join graph, 자유형 SQL join
+        조건은 지원하지 않는다. left/right는 sources[].alias를 참조해야
+        하며, 참조되는 source는 alias를 반드시 선언해야 한다.
+      required: [left, right, left_key, right_key]
+      properties:
+        left:
+          type: string
+          description: 왼쪽 source의 alias (sources[].alias 참조)
+        right:
+          type: string
+          description: 오른쪽 source의 alias
+        left_key:
+          type: string
+          description: 왼쪽 테이블의 join key 컬럼명
+        right_key:
+          type: string
+          description: 오른쪽 테이블의 join key 컬럼명
+        type:
+          type: string
+          enum: [inner, left]
+          default: inner
+        on_duplicate_key:
+          type: string
+          enum: [warn, fail]
+          default: warn
+          description: >-
+            양쪽 join key가 모두 중복 값을 가져(many-to-many) 결과 행이
+            곱셈으로 폭증할 수 있을 때의 처리. warn은 경고만 남기고 결과를
+            만들고, fail은 빌드를 실패시킨다.
+
+    CompositionSpec:
+      type: object
+      description: 여러 source를 하나의 결합 Gold dataset으로 조립하는 계약(#506).
+      required: [name, join]
+      properties:
+        name:
+          type: string
+          description: >-
+            결합 결과 Gold dataset 이름. 다른 source의 output key(alias 또는
+            provider.dataset)와 겹치면 안 된다.
+        join:
+          $ref: "#/components/schemas/JoinSpec"
 
     SpecRequest:
       type: object
@@ -2406,6 +2460,11 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/BuildOutcome"
+        composition:
+          description: BuildSpec.composition이 없으면 null (#506).
+          oneOf:
+            - $ref: "#/components/schemas/CompositionOutcome"
+            - type: "null"
         manifest:
           type: string
           description: 기록된 manifest.json의 경로
@@ -2425,6 +2484,11 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/BuildOutcome"
+        composition:
+          description: BuildSpec.composition이 없으면 null (#506).
+          oneOf:
+            - $ref: "#/components/schemas/CompositionOutcome"
+            - type: "null"
         manifest:
           type: string
           description: partial 정책으로 남은 manifest.json의 경로
@@ -2432,7 +2496,10 @@ components:
           type: string
         error:
           type: string
-          description: 첫 번째 실패 outcome의 error에서 파생된 human-readable 요약 (#226)
+          description: >-
+            첫 번째 실패 outcome의 error에서 파생된 human-readable 요약
+            (#226). 모든 source가 성공하고 composition만 실패한 경우
+            composition.error에서 파생된다 (#506).
 
     ArtifactsResponse:
       type: object
@@ -2504,6 +2571,84 @@ components:
             type: array
             items:
               $ref: "#/components/schemas/SchemaDriftFinding"
+        composition:
+          description: >-
+            BuildSpec.composition으로 두 source를 join한 결과의 출처 추적
+            정보(#506, additive). composition이 없거나 실행되지 않았으면
+            null이다 — legacy manifest reader는 부재와 null을 모두
+            "composition 미사용 run"으로 해석해야 한다.
+          oneOf:
+            - $ref: "#/components/schemas/CompositionProvenance"
+            - type: "null"
+
+    CompositionProvenance:
+      type: object
+      description: composition(join) 실행 결과의 상세 출처 정보 (#506).
+      required:
+        - name
+        - left
+        - right
+        - join_type
+        - left_key
+        - right_key
+        - left_row_count
+        - left_distinct_key_count
+        - right_row_count
+        - right_distinct_key_count
+        - output_row_count
+        - duplicate_key_warning
+      properties:
+        name:
+          type: string
+        left:
+          type: string
+        right:
+          type: string
+        join_type:
+          type: string
+          enum: [inner, left]
+        left_key:
+          type: string
+        right_key:
+          type: string
+        left_row_count:
+          type: integer
+        left_distinct_key_count:
+          type: integer
+          description: 왼쪽 join key의 distinct 값 수 (null 제외)
+        right_row_count:
+          type: integer
+        right_distinct_key_count:
+          type: integer
+          description: 오른쪽 join key의 distinct 값 수 (null 제외)
+        output_row_count:
+          type: integer
+        duplicate_key_warning:
+          type: boolean
+          description: >-
+            양쪽 join key가 모두 중복 값을 가져(many-to-many) 행 폭증 위험이
+            감지됐는지 여부. 실제 처리(경고만/빌드 실패)는 JoinSpec의
+            on_duplicate_key가 결정한다 — 이 필드는 감지 여부만 기록한다.
+
+    CompositionOutcome:
+      type: object
+      description: >-
+        composition(join) 실행 결과 (#506). source별 BuildOutcome과 별도로
+        노출된다 — bronze/silver/gold stage 개념이 적용되지 않고, "combined
+        result"로 명확히 구분되어야 하기 때문이다.
+      required: [name, status, error]
+      properties:
+        name:
+          type: string
+        status:
+          type: string
+          enum: [ok, failed, skipped]
+          description: >-
+            ok(성공) / failed(join 자체 실행 실패: 키 부재·타입 불일치·명시적
+            fail 게이트) / skipped(참조한 source가 실패해 join을 시도조차
+            못함)
+        error:
+          type: [string, "null"]
 
     BuildSpecSnapshotResponse:
       type: object

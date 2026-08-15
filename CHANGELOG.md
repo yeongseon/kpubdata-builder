@@ -3,6 +3,7 @@
 ## v0.4 (Unreleased)
 
 ### 추가됨
+- **Multi-source Join/Composition (#506)**: `BuildSpec.composition`(`CompositionSpec`/`JoinSpec`)으로 두 source의 검증된 Silver를 equi-join해 결합 Gold dataset(`gold/{composition.name}/`) 생성. alias 필수/중복 검증, join key 존재/dtype 일치 런타임 게이트, duplicate-key many-to-many 폭증 warn/fail 게이트, manifest `composition`(`CompositionProvenance`, additive)과 `POST /build` 응답 `composition` 키로 결합 결과를 source별 결과와 구분해 노출. API 계약 1.11.0 → 1.12.0
 - **Built Dataset Catalog·Detail·Stage Summary API (#488)**: `GET /datasets`, `GET /datasets/{dataset_id}`, `GET /datasets/{dataset_id}/runs`로 `BuildSpec.dataset_id` 단위 grouping/latest run/run history 조회. `GET /builds/{run_id}/stages`, `GET /builds/{run_id}/stages/{stage}`로 source별 Bronze/Silver/Gold 상태와 안전한 summary/preview 조회
 - **인증 시스템 (B2-B5)**: Principal 추상화(#384), Google OIDC Bearer 검증(#385), 허용 목록 게이트(#386), API 계약 bearerAuth(#387)
 - **인가 (C1/C2)**: manifest·BuildIndex에 principal 기록(#388), ENFORCE_OWNERSHIP 플래그(#389)
