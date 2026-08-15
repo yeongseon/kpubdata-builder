@@ -138,6 +138,54 @@ class TestBuildSilverDataset:
             _ = build_silver_dataset(bronze, preview_limit=-1)
 
 
+class TestRowPreservingInvariant:
+    """Bronze→Silver가 행을 filter/dedup/reorder하지 않는다는 불변조건을 고정한다 (#497).
+
+    pipeline.preview의 Source↔Silver diff는 ``bronze.raw_records[i]``와
+    ``silver.table``의 i번째 행이 항상 같은 논리적 행이라는 이 불변조건에
+    의존한다(diff_available 판정의 실제 근거). normalize_table()이
+    records_to_dataframe() → cast_columns()만 호출하고 validate_table()은
+    테이블을 아예 건드리지 않으므로 오늘은 이 불변조건이 성립하지만, 향후 누군가
+    Silver에 dedup/filter/reorder를 추가하면 이 테스트가 깨져서 pipeline/preview.py
+    의 alignment 가정을 재검토하라는 신호를 준다.
+    """
+
+    def test_row_count_is_preserved(self) -> None:
+        records = tuple({"id": str(i), "amount": i * 100} for i in range(50))
+        bronze = _bronze(records)
+
+        dataset = build_silver_dataset(bronze, casts={"amount": "float"})
+
+        assert dataset.table.height == len(records)
+        assert dataset.statistics.row_count == len(records)
+
+    def test_row_order_is_preserved_across_normalize_and_validate(self) -> None:
+        # id를 원본 순서의 지문으로 써서, 캐스팅/검증을 거쳐도 순서가 바뀌지
+        # 않는지 확인한다 — 값이 바뀌어도(#497 diff의 목적) 행의 *위치*는 원본과
+        # 1:1로 대응해야 한다.
+        records = tuple({"id": str(i), "amount": str(i * 100)} for i in range(20))
+        bronze = _bronze(records)
+
+        dataset = build_silver_dataset(
+            bronze,
+            casts={"amount": "int"},
+            required_columns=("id", "amount"),
+            column_dtypes={"amount": "int"},
+        )
+
+        assert dataset.table["id"].to_list() == [r["id"] for r in records]
+        assert dataset.validation.ok is True
+
+    def test_row_order_is_preserved_without_declared_casts(self) -> None:
+        # casts가 전혀 없어도(가장 흔한 preview 경로) 순서 보존은 동일하게 성립한다.
+        records = tuple({"id": str(i), "label": chr(ord("a") + i)} for i in range(10))
+        bronze = _bronze(records)
+
+        dataset = build_silver_dataset(bronze)
+
+        assert dataset.table["id"].to_list() == [r["id"] for r in records]
+
+
 class TestPersistSilverDataset:
     def test_writes_parquet_and_json_sidecars(self, tmp_path: Path) -> None:
         bronze = _bronze(

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: KPubData Builder Service API
-  version: "1.9.0"
+  version: "1.10.0"
   description: >-
     Builder 중심 서비스 계약. BuildSpec 검증, preview, build 실행, artifact 조회,
     계약 버전 조회를 제공한다. CLI와 HTTP service mode(#36)가 동일한 도메인 계약을
@@ -19,6 +19,12 @@ info:
     추가한다(#504, additive). v1.8.0은 stable principal별 encrypted Provider
     credential CRUD와 Provider status/test API를 추가한다(#492, additive). v1.9.0은
     `/query` 응답에 child startup과 Polars engine 실행 시간을 추가한다(#523, additive).
+    v1.10.0은 `POST /preview`에 Source↔Silver diff와 sample_mode(first/random)
+    옵션을 추가한다(#497, additive — 기존 필드는 유지된다). `limit`의 상한(1000)을
+    새로 도입해 그 이상 값을 요청하면 400을 반환한다(behavioral tightening;
+    이전에는 상한이 없었다). `limit`이 행 수만 제한하므로 wide dataset에서
+    `diffs` 자체가 무제한 커질 수 있어, `diffs`도 별도 상한(1000)으로 자르고
+    `diff_truncated`로 명시한다 — `transform_summary`의 집계는 잘리지 않는다.
 servers:
   - url: http://localhost:8000
     description: 로컬 builder 개발 서버
@@ -442,6 +448,18 @@ paths:
                             affected_rows: null
                             evaluated_rows: null
                             detail: null
+                        source_sample:
+                          - station_name: 종로구
+                            pm10_value: 31
+                          - station_name: 중구
+                            pm10_value: 28
+                        sample_mode: first
+                        diff_available: true
+                        diffs: []
+                        transform_summary:
+                          changed_cells: 0
+                          changed_rows: 0
+                        diff_truncated: false
         "400":
           description: 잘못된 요청(spec 누락/검증 실패, limit 타입 오류 등)
           content:
@@ -1754,7 +1772,25 @@ components:
         limit:
           type: integer
           minimum: 1
+          maximum: 1000
           default: 5
+          description: >-
+            상한 1000은 #497에서 새로 도입됐다(behavioral tightening — v1.8.0
+            이전에는 상한이 없었다). 1000을 넘는 값은 400을 반환한다.
+        sample_mode:
+          type: string
+          enum: [first, random]
+          default: first
+          description: >-
+            "first"는 상위 N행, "random"은 seed 기반 결정적 무작위 N행이다(#497).
+            Source sample과 Silver sample은 항상 같은 행 인덱스를 공유한다 —
+            생략하면 기존 client와 동일하게 상위 N행을 반환한다.
+        seed:
+          type: integer
+          description: >-
+            sample_mode=random일 때 쓰는 결정적 시드(#497). 생략하면 고정
+            기본값을 써서 seed 없이도 재현 가능하다. sample_mode=first에서는
+            무시된다.
 
     BuildRequest:
       type: object
@@ -1959,6 +1995,12 @@ components:
         - total_rows
         - statistics
         - quality_results
+        - source_sample
+        - sample_mode
+        - diff_available
+        - diffs
+        - transform_summary
+        - diff_truncated
       properties:
         source_key:
           type: string
@@ -1999,6 +2041,88 @@ components:
             워크스페이스에 아무것도 쓰지 않으므로 포함하지 않는다.
           items:
             $ref: "#/components/schemas/QualityCheckResult"
+        source_sample:
+          type: array
+          description: >-
+            변환 전 Bronze 원본 sample(#497). diff_available=false여도 최선
+            노력으로 채워질 수 있다(조회 자체가 실패하면 빈 배열).
+          items:
+            type: object
+            additionalProperties:
+              $ref: "#/components/schemas/JsonValue"
+        sample_mode:
+          type: string
+          enum: [first, random]
+          description: 이 응답에 실제로 적용된 sampling 방식.
+        diff_available:
+          type: boolean
+          description: >-
+            source_sample[i]와 sample[i]가 동일 논리 행을 가리킨다고 보장할 수
+            있을 때만 true다(#497). 행 수 불일치, row reorder/filter 가능성,
+            조회 실패 등에서는 false이며 diffs/transform_summary는 빈 값이다.
+            잘못된 index 기반 비교보다 false가 우선이다.
+        diffs:
+          type: array
+          description: >-
+            diff_available=true일 때만 채워지는 셀 단위 변경 목록(#497). limit은
+            행 수만 제한하고 컬럼 수는 제한하지 않으므로, 실제 변경 셀 수가
+            많으면 최대 1000개(MAX_PREVIEW_DIFF_ITEMS)까지만 담긴다 —
+            diff_truncated로 잘렸는지 확인한다.
+          items:
+            $ref: "#/components/schemas/PreviewDiffItem"
+        transform_summary:
+          description: >-
+            diff_available=true일 때만 채워지는 변경 요약(#497). 비교 가능한
+            sample 범위 기준이며 전체 dataset 변화량이 아니다. diffs가
+            diff_truncated로 잘려도 changed_cells/changed_rows는 잘리지 않은
+            실제 합계를 유지한다.
+          oneOf:
+            - $ref: "#/components/schemas/PreviewTransformSummary"
+            - type: "null"
+        diff_truncated:
+          type: boolean
+          description: >-
+            diffs가 MAX_PREVIEW_DIFF_ITEMS(1000) 상한에 걸려 실제 변경 셀 전부를
+            담지 못했으면 true다(#497 sample/diff memory 상한). diffs를 전체
+            diff로 오인하지 않도록 명시한다. diff_available=false면 애초에
+            diff를 시도하지 않았으므로 항상 false다.
+
+    PreviewDiffItem:
+      type: object
+      description: >-
+        Source↔Silver 셀 단위 변경 하나(#497). diff_available=true인 source의
+        diffs에만 등장한다.
+      additionalProperties: false
+      required: [row, column, before, after, transform]
+      properties:
+        row:
+          type: integer
+          minimum: 0
+          description: source_sample/sample 배열 내 0-based 위치(전체 dataset의 절대 행 번호 아님).
+        column:
+          type: string
+        before:
+          $ref: "#/components/schemas/JsonValue"
+        after:
+          $ref: "#/components/schemas/JsonValue"
+        transform:
+          type: [string, "null"]
+          description: >-
+            컬럼에 선언된 캐스팅(schema.casts)이 있을 때만 "cast:{dtype}" 형태로
+            채운다. 알 수 없는 변환은 추측하지 않고 null.
+
+    PreviewTransformSummary:
+      type: object
+      description: 비교 가능한 sample 범위에서 계산한 변경 요약(#497).
+      additionalProperties: false
+      required: [changed_cells, changed_rows]
+      properties:
+        changed_cells:
+          type: integer
+          minimum: 0
+        changed_rows:
+          type: integer
+          minimum: 0
 
     QualityCheckResult:
       type: object
