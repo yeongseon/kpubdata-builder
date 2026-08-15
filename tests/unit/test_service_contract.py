@@ -145,6 +145,16 @@ def test_service_api_version_matches_contract() -> None:
     assert str(_load_contract()["info"]["version"]) == API_CONTRACT_VERSION
 
 
+def test_query_response_requires_documented_nonnegative_timings() -> None:
+    schema = _load_contract()["components"]["schemas"]["QueryResponse"]
+
+    assert {"execution_ms", "startup_ms", "engine_execution_ms"} <= set(schema["required"])
+    for field in ("execution_ms", "startup_ms", "engine_execution_ms"):
+        assert schema["properties"][field]["type"] == "integer"
+        assert schema["properties"][field]["minimum"] == 0
+        assert schema["properties"][field]["description"]
+
+
 def test_build_manifest_does_not_publish_internal_owner_id() -> None:
     """persisted owner_id는 HTTP BuildManifest의 공개 property가 아니다 (#505)."""
     manifest = _load_contract()["components"]["schemas"]["BuildManifest"]

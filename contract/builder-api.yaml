@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: KPubData Builder Service API
-  version: "1.8.0"
+  version: "1.9.0"
   description: >-
     Builder 중심 서비스 계약. BuildSpec 검증, preview, build 실행, artifact 조회,
     계약 버전 조회를 제공한다. CLI와 HTTP service mode(#36)가 동일한 도메인 계약을
@@ -17,7 +17,8 @@ info:
     `evaluated_checks`를 함께 반환해 "0건 평가"와 "애초에 계산된 적 없음"을
     구분한다(#514, additive). v1.7.0은 Silver/Gold read-only `/query`를
     추가한다(#504, additive). v1.8.0은 stable principal별 encrypted Provider
-    credential CRUD와 Provider status/test API를 추가한다(#492, additive).
+    credential CRUD와 Provider status/test API를 추가한다(#492, additive). v1.9.0은
+    `/query` 응답에 child startup과 Polars engine 실행 시간을 추가한다(#523, additive).
 servers:
   - url: http://localhost:8000
     description: 로컬 builder 개발 서버
@@ -836,7 +837,7 @@ components:
     QueryResponse:
       type: object
       additionalProperties: false
-      required: [columns, rows, truncated, execution_ms]
+      required: [columns, rows, truncated, execution_ms, startup_ms, engine_execution_ms]
       properties:
         columns:
           type: array
@@ -848,7 +849,24 @@ components:
             additionalProperties:
               $ref: "#/components/schemas/JsonValue"
         truncated: {type: boolean}
-        execution_ms: {type: integer, minimum: 0}
+        execution_ms:
+          type: integer
+          minimum: 0
+          description: >-
+            QueryEngine.execute 진입부터 child payload 수신·검증과 child join까지의
+            parent end-to-end monotonic wall time(ms). 기존 필드 의미를 유지한다.
+        startup_ms:
+          type: integer
+          minimum: 0
+          description: >-
+            Parent의 QueryEngine.execute 진입부터 spawned child가 Polars import와 bounded
+            SQL setup을 끝내고 scan_parquet를 시작하기 직전까지의 monotonic time(ms).
+        engine_execution_ms:
+          type: integer
+          minimum: 0
+          description: >-
+            Child에서 scan_parquet 직전부터 SQLContext 생성, execute, collect 완료
+            직후까지의 Polars engine monotonic time(ms).
 
     ValidationError:
       type: object

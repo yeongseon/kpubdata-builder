@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import multiprocessing
 import time
@@ -18,6 +19,8 @@ from typing import cast
 
 from ..spec import JsonValue
 from .models import QueryResult
+
+logger = logging.getLogger(__name__)
 
 
 class QueryExecutionError(RuntimeError):
@@ -49,14 +52,36 @@ def _json_value(value: object) -> JsonValue:
     return str(value)
 
 
-def _query_worker(connection: Connection, table_path: str, canonical_sql: str, limit: int) -> None:
+def _elapsed_ms(started_ns: int, ended_ns: int | None = None) -> int:
+    end = time.monotonic_ns() if ended_ns is None else ended_ns
+    return max(0, (end - started_ns) // 1_000_000)
+
+
+def _timing_from_payload(payload: dict[object, object], field: str) -> int:
+    value = payload.get(field)
+    if type(value) is not int or value < 0:
+        raise QueryExecutionError("query returned invalid timing data")
+    return value
+
+
+def _query_worker(
+    connection: Connection,
+    table_path: str,
+    canonical_sql: str,
+    limit: int,
+    parent_started_ns: int,
+) -> None:
     try:
         import polars as pl
 
+        bounded_sql = f"SELECT * FROM ({canonical_sql}) AS _kpubdata_result LIMIT {limit + 1}"
+        # Startup ends after spawn, Polars import, and query setup, immediately before scanning.
+        startup_ms = _elapsed_ms(parent_started_ns)
+        engine_started_ns = time.monotonic_ns()
         frame = pl.scan_parquet(table_path)
         context = pl.SQLContext({"dataset": frame}, eager=False, register_globals=False)
-        bounded_sql = f"SELECT * FROM ({canonical_sql}) AS _kpubdata_result LIMIT {limit + 1}"
         result = context.execute(bounded_sql).collect()
+        engine_execution_ms = _elapsed_ms(engine_started_ns)
         rows = [
             {str(key): _json_value(value) for key, value in row.items()}
             for row in result.to_dicts()
@@ -66,6 +91,8 @@ def _query_worker(connection: Connection, table_path: str, canonical_sql: str, l
             "columns": list(result.columns),
             "rows": rows[:limit],
             "truncated": len(rows) > limit,
+            "startup_ms": startup_ms,
+            "engine_execution_ms": engine_execution_ms,
         }
         if len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) > MAX_QUERY_RESPONSE_BYTES:
             connection.send({"ok": False})
@@ -85,18 +112,18 @@ class QueryEngine:
         self,
         *,
         timeout_seconds: float = 10.0,
-        worker: Callable[[Connection, str, str, int], None] = _query_worker,
+        worker: Callable[[Connection, str, str, int, int], None] = _query_worker,
     ) -> None:
         self._timeout_seconds = timeout_seconds
         self._worker = worker
 
     def execute(self, table_path: Path, canonical_sql: str, *, limit: int) -> QueryResult:
-        started = time.monotonic()
+        started_ns = time.monotonic_ns()
         context = multiprocessing.get_context("spawn")
         parent, child = context.Pipe(duplex=False)
         process = context.Process(
             target=self._worker,
-            args=(child, str(table_path), canonical_sql, limit),
+            args=(child, str(table_path), canonical_sql, limit, started_ns),
             daemon=True,
         )
         process_started = False
@@ -125,13 +152,31 @@ class QueryEngine:
                 or not isinstance(truncated, bool)
             ):
                 raise QueryExecutionError("query returned an invalid result")
-            elapsed_ms = max(0, int((time.monotonic() - started) * 1000))
-            return QueryResult(
+            startup_ms = _timing_from_payload(payload, "startup_ms")
+            engine_execution_ms = _timing_from_payload(payload, "engine_execution_ms")
+            execution_ms = _elapsed_ms(started_ns)
+            result = QueryResult(
                 columns=tuple(str(column) for column in columns),
                 rows=tuple(cast(dict[str, JsonValue], row) for row in rows),
                 truncated=truncated,
-                execution_ms=elapsed_ms,
+                execution_ms=execution_ms,
+                startup_ms=startup_ms,
+                engine_execution_ms=engine_execution_ms,
             )
+            logger.info(
+                "query timing",
+                extra={
+                    "event": "query_timing",
+                    "execution_ms": execution_ms,
+                    "startup_ms": startup_ms,
+                    "engine_execution_ms": engine_execution_ms,
+                    "ipc_serialization_ms": max(0, execution_ms - startup_ms - engine_execution_ms),
+                    "row_count": len(result.rows),
+                    "column_count": len(result.columns),
+                    "truncated": result.truncated,
+                },
+            )
+            return result
         finally:
             child.close()
             parent.close()

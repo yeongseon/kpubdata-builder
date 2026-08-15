@@ -21,8 +21,18 @@ az deployment group create \
   --parameters \
     imageName=ghcr.io/yeongseon/kpubdata-builder:latest \
     apiKey=$(az keyvault secret show --vault-name <kv> --name builder-api-key --query value -o tsv) \
-    allowedOrigins=https://studio.example.com
+    allowedOrigins=https://studio.example.com \
+    containerCpu=1.0 \
+    containerMemory=2Gi \
+    builderMaxWorkers=4 \
+    queryMaxConcurrency=1
 ```
+
+`main.bicep`의 보수적 기본값은 단일 replica에 `1.0` vCPU/`2Gi`, HTTP worker 4개,
+query child 1개다. 애플리케이션 자체 기본값(HTTP 10, query 2)보다 작게 명시하여 작은
+ACA 인스턴스의 process/thread 과다 경쟁을 피한다. 비동기 build pool은 현재 코드 기본값
+10개로 고정되어 있으며 이 Bicep parameter의 영향을 받지 않는다. 산정과 튜닝 절차는
+[`docs/deploy.md`](../docs/deploy.md#9-리소스-예산과-튜닝)를 따른다.
 
 ## 리소스
 

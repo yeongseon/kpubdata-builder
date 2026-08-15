@@ -6,6 +6,11 @@
 
 > 본 ADR은 ADR 0002에서 "시맨틱을 완비한 뒤 별도 후속에서 구현"으로 연기한 **비동기 job 실행 모델**의 설계를 다룬다. v0.4 범위 밖이며, 승인 후 구현 이슈로 분해된다.
 
+> **현재 구현 주의**: 제안 이후 process-local `AsyncBuildExecutor`(worker 10, queued job
+> 10)와 active registry가 일부 구현되었다. 이는 본 ADR을 승인됨으로 전환하지 않는다.
+> 취소, queue 영속성, crash recovery, partial manifest 규약은 여전히 미해결이며 운영 시
+> [배포 가이드](../deploy.md#8-동시성풀백프레셔)의 제한을 따른다.
+
 ## 결정 필요 사항 (이슈 #334)
 
 1. 상태 머신 확정(`queued → running → succeeded | failed`, `+ cancelled`).
@@ -20,6 +25,10 @@ ADR 0002는 v0.4에서 **동기 `POST /build`만** 유지하기로 결정했다.
 
 현재 실행 인프라:
 - `service/http.py`의 `BoundedThreadingHTTPServer`(#253)가 동시성 상한을 갖는다.
+- HTTP pool과 별도로 `service/jobs.py`의 in-process async build pool이 실행되며, bounded
+  queued-job 수를 넘는 제출은 `429`로 거절한다.
+- `/query`는 별도 semaphore로 동시 spawned child process 수를 제한한다. 이 permit은 build
+  worker나 HTTP worker를 예약하지 않는다.
 - `store/build_index.py`(ADR 0003)는 **완료된 빌드의 파생 인덱스**다. 빌드 진행 중에는 `manifest.json`이 없으므로 이 인덱스로 `queued`/`running`을 표현하지 않는다(ADR 0003 §2).
 - `run_id`는 현재 클라이언트 지정 가능(`validate_path_segment`로 경로 안전성 검증).
 
