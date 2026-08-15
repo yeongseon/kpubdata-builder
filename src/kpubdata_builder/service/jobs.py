@@ -64,6 +64,14 @@ class BuildJobSubmitResult:
     snapshot: BuildJobSnapshot | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class AsyncBuildJobCounts:
+    """``snapshot_counts()``가 단일 lock scope에서 집계한 active job 수 (#516)."""
+
+    queued: int
+    running: int
+
+
 class AsyncBuildJobRegistry:
     """프로세스 메모리에만 유지되는 active/terminal job 레지스트리."""
 
@@ -103,6 +111,27 @@ class AsyncBuildJobRegistry:
         with self._lock:
             return sum(1 for job in self._jobs.values() if job.status == "queued")
 
+    def snapshot_counts(self) -> AsyncBuildJobCounts:
+        """queued/running job 수를 단일 lock scope에서 일관되게 집계한다 (#516).
+
+        ``queued_count()`` 같은 개별 메서드를 서로 다른 시점에 호출해 조합하면
+        그 사이의 상태 전이(queued -> running)로 모순된 snapshot이 만들어질 수
+        있다 — monitoring은 반드시 이 메서드처럼 하나의 lock 안에서 계산한
+        값을 써야 한다. terminal(succeeded/failed/cancelled) job은 registry가
+        메모리에 계속 보존하지만 이 snapshot에는 포함하지 않는다 — Monitoring이
+        보여줘야 하는 건 현재 workload이지 terminal history가 아니다. mutable
+        ``_jobs`` dict 자체는 절대 외부에 노출하지 않는다.
+        """
+        with self._lock:
+            queued = 0
+            running = 0
+            for job in self._jobs.values():
+                if job.status == "queued":
+                    queued += 1
+                elif job.status == "running":
+                    running += 1
+        return AsyncBuildJobCounts(queued=queued, running=running)
+
     def _replace(
         self,
         run_id: str,
@@ -126,6 +155,20 @@ class AsyncBuildJobRegistry:
             return updated
 
 
+@dataclass(frozen=True, slots=True)
+class AsyncBuildStats:
+    """Monitoring API(#516)가 소비하는 async build 실행기 raw 집계.
+
+    ``queued``/``running``/``capacity`` raw 값만 담는다 — ``total``/``active``/
+    ``utilization`` 같은 파생값과 availability 판정은 ``service/monitoring.py``의
+    책임이다.
+    """
+
+    queued: int
+    running: int
+    capacity: int
+
+
 class AsyncBuildExecutor:
     """고정 크기 worker pool로 build job을 실행한다."""
 
@@ -133,8 +176,23 @@ class AsyncBuildExecutor:
         self._executor = ThreadPoolExecutor(
             max_workers=max_workers, thread_name_prefix="kpubdata-build"
         )
+        # ThreadPoolExecutor._max_workers 같은 private field를 외부(monitoring)가
+        # 직접 읽지 않도록 capacity를 생성 시점에 명시적으로 보존한다 (#516).
+        self._max_workers = max_workers
         self._max_queue_size = max_queue_size
         self.registry = AsyncBuildJobRegistry()
+
+    def stats(self) -> AsyncBuildStats:
+        """monitoring용 read-only aggregate snapshot (#516).
+
+        registry의 mutable internal job dict는 노출하지 않고, 단일 lock scope
+        에서 얻은 queued/running 집계(``registry.snapshot_counts()``)와 worker
+        pool capacity만 반환한다. 이 호출 자체는 job 상태를 변경하지 않는다.
+        """
+        counts = self.registry.snapshot_counts()
+        return AsyncBuildStats(
+            queued=counts.queued, running=counts.running, capacity=self._max_workers
+        )
 
     def submit(
         self,
@@ -193,7 +251,9 @@ def generate_run_id() -> str:
 
 __all__ = [
     "AsyncBuildExecutor",
+    "AsyncBuildJobCounts",
     "AsyncBuildJobRegistry",
+    "AsyncBuildStats",
     "BuildJobSubmitResult",
     "BuildJobResponse",
     "BuildJobSnapshot",

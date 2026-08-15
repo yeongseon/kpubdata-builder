@@ -26,6 +26,7 @@
 | Publish | 원격 게시 수행, 성공/실패 기록 | publish 요청, 결과 표시 |
 | Query | Silver/Gold table resolve, read-only 실행, limit/timeout | SQL 명시 실행 요청, result preview 표시 |
 | Provider credential | owner_id별 encrypted-at-rest 저장, server default fallback, 요청별 client 격리, status/test | credential 입력 UX, masked/configured/status 표시 |
+| Monitoring(#516) | latency/queue/worker/artifact 상태 측정, BuildIndex 기반 build 통계 집계, availability 판정 | Monitoring 대시보드 렌더링, 폴링 |
 
 ## 4. Studio가 해서는 안 되는 일
 
@@ -41,6 +42,8 @@ Studio는 다음을 구현하거나 소유하면 안 됩니다.
 - Polars 외 별도 canonical transform engine 도입
 - raw Provider credential을 browser storage나 Studio backend의 정본으로 보관
 - Builder의 owner_id 또는 credential resolution 우선순위를 재구현
+- Builder가 `unavailable`/`partial`로 보고한 Monitoring 값을 임의로 `healthy`/`0`으로
+  대체해 표시
 
 ## 5. 허용되는 Studio 역할
 

@@ -187,6 +187,62 @@ v0.4 Builder service는 동기식 실행 모델을 유지합니다.
 - 특정 신규 IdP 채택이나 email/password 로그인은 이 절의 범위가 아닙니다 — 향후 IdP
   결정(#515)과 무관하게 stable owner identity 계산 방식이 먼저 확정된 것입니다.
 
+### System Resource·Build Statistics API (#516)
+
+`GET /monitoring/summary`, `GET /monitoring/builds`는 Studio Monitoring 화면에
+필요한 시스템/집계 observability를 제공합니다. Run 단위 이벤트(#496)는 별도
+범위입니다.
+
+- **"모른다"와 "0"을 구분합니다.** 측정된 적 없는 값은 `0`/`healthy`로 위장하지 않고
+  `null`과 `available`/`partial`/`unavailable`(quality.py가 이미 정의한 어휘를
+  재사용)로 표현합니다.
+- **Aggregate status**(`MonitoringSummaryResponse.status`): required subsystem
+  (`api`/`queue`/`workers`/`artifact_store`)의 `availability`로부터 계산되는
+  deterministic 판정입니다. 넷 모두 `available`이면 `healthy`, 하나라도
+  `partial`/`unavailable`이면 `degraded`입니다. latency SLA threshold(예:
+  p95 100ms/500ms/1s)는 근거(ADR/config)가 없어 사용하지 않습니다 —
+  `sample_count=0`/`p95_latency_ms=null` 자체나 `queue`/`workers`의 실제 0건은
+  degraded 근거가 아닙니다(availability가 실제로 `unavailable`/`partial`일 때만
+  degraded). Provider 상태(#492)는 optional이라 이 판정에 포함되지 않습니다.
+- **Builder API 상태**: `dispatch()` 실행 시간을 최근 최대 1000개 요청의 bounded
+  ring buffer로 기록하고 nearest-rank(보간 없음) 방식으로 p95를 계산합니다.
+  `sample_count=0`이면 `p95_latency_ms=null`입니다. Healthy/Degraded 같은 latency
+  임계값 판정은 근거(ADR/config)가 없어 발명하지 않았습니다 — raw
+  `sample_count`/`p95_latency_ms`만 제공합니다.
+- **Queue/Worker**: async build 실행 모델은 `AsyncBuildExecutor`/
+  `AsyncBuildJobRegistry`(#511/#513)로 구현되어 있고 `BuilderService`가 항상
+  생성해 `POST /builds`(비동기) 제출에 사용합니다. `queue`/`workers`는 이
+  실행기의 read-only snapshot(`AsyncBuildExecutor.stats()`)을 그대로 반영하므로
+  정상 runtime에서는 항상 `availability: available`입니다. `waiting`은
+  status=`queued`, `running`은 status=`running`인 active job 수이고
+  `total = waiting + running`입니다 — registry가 계속 보존하는 terminal
+  (`succeeded`/`failed`/`cancelled`) job 이력은 섞지 않습니다. `workers.active`는
+  `running`과 같고(worker 하나가 job 하나를 실행), `workers.capacity`는 실행기
+  생성 시 보존한 `max_workers`이며 `ThreadPoolExecutor`의 private field를 직접
+  읽지 않습니다. `workers.utilization`은 `active / capacity`(0.0~1.0)입니다.
+  `availability: unavailable`은 (현재는 도달하지 않는) 진짜 async 미지원 구성을
+  위한 fallback으로만 남겨두며, 그때만 나머지 필드가 `null`입니다 — "0건"과
+  "확인 불가"를 구분합니다. `BoundedThreadingHTTPServer`의
+  `ThreadPoolExecutor`(#253)는 이것과 무관한 HTTP 연결 동시성 상한입니다.
+- **Artifact Store**: `output_root` 폴더가 존재한다는 사실만으로 `available`로
+  간주하지 않습니다 — BuildIndex 쿼리도 성공해야 `available`입니다. `last_write_at`은
+  BuildIndex에 기록된 가장 최근 성공(`ok`) 빌드의 `finished_at`에서만 얻으며, 성공
+  기록이 없으면 `available`이되 `null`입니다(0건과 확인 불가를 구분). 절대 파일시스템
+  경로는 노출하지 않습니다.
+- **Build 통계**(`/monitoring/builds`): timezone은 UTC, bucket 경계는
+  `[start, end)` 반열린, bucket 기준 timestamp는 `finished_at`(BuildIndex는 완료된
+  빌드만 기록, ADR 0003)입니다. 현재 `window=24h`/`bucket=hour`만 지원하며 다른
+  값은 400입니다. malformed timestamp(파싱 실패, NULL 포함)는 집계에서 제외되고
+  `excluded_count`에 반영되며 전체 `availability`는 `partial`이 됩니다(BuildIndex
+  쿼리 자체 실패는 `unavailable`, 정상 집계 결과 0건은 `available`).
+- **Provider 상태**는 요청마다 실제 네트워크 프로브를 유발하므로(#492) 이번 버전의
+  Monitoring 응답에는 포함되지 않습니다.
+- **Ownership**: 시스템 aggregate(`api`/`queue`/`workers`/`artifact_store`)는 개별
+  run의 dataset/owner/credential 정보를 포함하지 않아 필터링이 필요 없습니다.
+  `/monitoring/builds`의 버킷 집계와 recent runs는 `ENFORCE_OWNERSHIP`+oidc
+  principal일 때 `principal_owns()`로 필터링해 다른 사용자의 run이 섞이지
+  않습니다(#505와 동일 정책).
+
 ## 4. 인증과 CORS
 
 브라우저 클라이언트(Studio 등)와의 연동을 위해 CORS는 default-deny입니다.

@@ -18,8 +18,10 @@ import inspect
 import json
 import logging
 import os
+import time
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol, cast, runtime_checkable
 from urllib.parse import parse_qs, unquote
@@ -54,6 +56,7 @@ from ..stages.bronze.build import SourceClient
 from ..store import BuildIndex
 from ..tabular import DEFAULT_PREVIEW_LIMIT
 from . import datasets as datasets_service
+from . import monitoring as monitoring_service
 from . import ownership as ownership_module
 from . import quality as quality_service
 from . import stages as stages_service
@@ -246,7 +249,11 @@ def _strip_internal_fields(entries: list[_BuildListEntry]) -> list[_BuildListEnt
 # 1.8.0 -> 1.9.0: POST /preview에 Source↔Silver diff와 sample_mode(first/random)
 # 옵션 추가 (#497, additive — 기존 필드는 유지된다). limit 상한(1000) 신규 도입은
 # behavioral tightening(이전엔 상한 없음) — 그 이상 값은 400.
-API_CONTRACT_VERSION = "1.9.0"
+# 1.9.0 -> 1.10.0: GET /monitoring/summary, GET /monitoring/builds 추가 (#516,
+# additive — 기존 엔드포인트는 변경되지 않는다). Async build queue/worker는 이
+# 저장소에 아직 구현되어 있지 않아(ADR 0008 Proposed) availability=unavailable로
+# 명시적으로 보고한다.
+API_CONTRACT_VERSION = "1.10.0"
 
 
 @dataclass(frozen=True)
@@ -319,6 +326,9 @@ class BuilderService:
         self._output_root = output_root
         self._client_factory = client_factory
         self._build_index = BuildIndex(output_root)  # #309, ADR 0003
+        # Monitoring API용 bounded latency recorder (#516). dispatch()가 매 요청
+        # 처리 시간을 기록한다 — 인스턴스별로 분리해 테스트 간 상태가 섞이지 않는다.
+        self._latency_recorder = monitoring_service.LatencyRecorder()
         self._query_service = query_service or QueryService()
         repository = credential_repository or _credential_repository_from_env(output_root)
         self._credential_resolver = CredentialResolver(repository)
@@ -1218,6 +1228,107 @@ class BuilderService:
             },
         )
 
+    def monitoring_summary(self) -> ServiceResponse:
+        """Builder API/Queue/Worker/Artifact Store 시스템 상태 요약 (#516).
+
+        시스템 aggregate만 담으며 개별 run의 dataset/owner/credential 정보는
+        포함하지 않는다 — ownership 필터링이 필요 없다. Provider status(#492)는
+        요청마다 실제 네트워크 프로브를 유발하므로 이번 PR에서는 포함하지 않는다.
+        """
+        api = monitoring_service.api_status(self._latency_recorder)
+        queue = monitoring_service.queue_status(self._async_builds)
+        workers = monitoring_service.worker_status(self._async_builds)
+        artifact_store = monitoring_service.artifact_store_status(
+            self._output_root, self._build_index
+        )
+        status = monitoring_service.aggregate_status(
+            api=api, queue=queue, workers=workers, artifact_store=artifact_store
+        )
+        generated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        return ServiceResponse(
+            200,
+            {
+                "generated_at": generated_at,
+                "status": status,
+                "api": {
+                    "availability": api.availability,
+                    "sample_count": api.sample_count,
+                    "p95_latency_ms": api.p95_latency_ms,
+                },
+                "queue": {
+                    "availability": queue.availability,
+                    "waiting": queue.waiting,
+                    "running": queue.running,
+                    "total": queue.total,
+                },
+                "workers": {
+                    "availability": workers.availability,
+                    "active": workers.active,
+                    "capacity": workers.capacity,
+                    "utilization": workers.utilization,
+                },
+                "artifact_store": {
+                    "availability": artifact_store.availability,
+                    "last_write_at": artifact_store.last_write_at,
+                },
+            },
+        )
+
+    def monitoring_builds(
+        self, *, window: str, bucket: str, principal: Principal | None = None
+    ) -> ServiceResponse:
+        """window/bucket별 build 통계와 recent runs를 반환한다 (#516).
+
+        ENFORCE_OWNERSHIP+oidc principal일 때는 본인이 접근 가능한 run만
+        집계·노출한다(#505) — 다른 principal의 run metadata가 새는 side
+        channel이 되지 않는다.
+        """
+        validated_window = monitoring_service.validate_window(window)
+        if validated_window is None:
+            return ServiceResponse(400, {"error": f"unsupported window: {window!r} (only '24h')"})
+        validated_bucket = monitoring_service.validate_bucket(bucket)
+        if validated_bucket is None:
+            return ServiceResponse(400, {"error": f"unsupported bucket: {bucket!r} (only 'hour')"})
+
+        stats = monitoring_service.build_statistics(
+            self._build_index,
+            window=validated_window,
+            bucket=validated_bucket,
+            principal=principal,
+            enforce_ownership=_enforce_ownership(),
+        )
+        buckets: list[JsonValue] = [
+            {
+                "bucket_start": b.bucket_start,
+                "bucket_end": b.bucket_end,
+                "total": b.total,
+                "ok": b.ok,
+                "failed": b.failed,
+                "cancelled": b.cancelled,
+            }
+            for b in stats.buckets
+        ]
+        recent_runs: list[JsonValue] = [
+            {
+                "run_id": r.run_id,
+                "status": r.status,
+                "started_at": r.started_at,
+                "finished_at": r.finished_at,
+            }
+            for r in stats.recent_runs
+        ]
+        return ServiceResponse(
+            200,
+            {
+                "window": stats.window,
+                "bucket": stats.bucket,
+                "availability": stats.availability,
+                "excluded_count": stats.excluded_count,
+                "buckets": buckets,
+                "recent_runs": recent_runs,
+            },
+        )
+
     def list_run_stages(self, run_id: str) -> ServiceResponse:
         """run에 알려진 모든 source의 Bronze/Silver/Gold 상태를 반환한다 (#488).
 
@@ -1381,6 +1492,33 @@ def _parse_limit_query(query: str, *, default: int = 50) -> int | ServiceRespons
 
 
 def dispatch(
+    service: BuilderService,
+    method: str,
+    path: str,
+    body: Mapping[str, JsonValue] | None,
+    query: str = "",
+    *,
+    api_key: str | None = None,
+    bearer_token: str | None = None,
+) -> ServiceResponse | FileResponse:
+    """``_dispatch_impl``을 호출하고 처리 시간을 Monitoring latency 표본으로
+    기록한다 (#516).
+
+    타이밍은 라우팅+인증+비즈니스 로직 전체를 감싼다(HTTP 소켓 I/O는 제외 —
+    그건 http.py 계층). metric 기록 실패가 요청 실패로 전파되지 않도록
+    ``LatencyRecorder.record``가 이미 내부적으로 예외를 흡수한다.
+    """
+    started = time.perf_counter()
+    try:
+        return _dispatch_impl(
+            service, method, path, body, query, api_key=api_key, bearer_token=bearer_token
+        )
+    finally:
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        service._latency_recorder.record(elapsed_ms)
+
+
+def _dispatch_impl(
     service: BuilderService,
     method: str,
     path: str,
@@ -1718,6 +1856,15 @@ def dispatch(
                 return ServiceResponse(400, {"error": "'limit' must be a positive integer"})
             limit = limit_value
         return service.list_builds(limit=limit, principal=principal)
+
+    if method == "GET" and path == "/monitoring/summary":
+        return service.monitoring_summary()
+
+    if method == "GET" and path == "/monitoring/builds":
+        query_params = parse_qs(query)
+        window = query_params.get("window", ["24h"])[-1]
+        bucket = query_params.get("bucket", ["hour"])[-1]
+        return service.monitoring_builds(window=window, bucket=bucket, principal=principal)
 
     return ServiceResponse(404, {"error": f"not found: {method} {path}"})
 

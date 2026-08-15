@@ -60,6 +60,8 @@ _DISPATCH_ROUTES: dict[tuple[str, str], str] = {
     ("/builds/{run_id}/stages", "GET"): "listBuildStages",
     ("/builds/{run_id}/stages/{stage}", "GET"): "getBuildStageDetail",
     ("/builds/{run_id}/quality", "GET"): "getBuildQuality",
+    ("/monitoring/summary", "GET"): "getMonitoringSummary",
+    ("/monitoring/builds", "GET"): "getMonitoringBuilds",
 }
 
 # (path, method) 형태의 계약 필수 오퍼레이션. BuilderService.dispatch가 실제로
@@ -89,6 +91,8 @@ _REQUIRED_OPERATIONS = [
     ("/builds/{run_id}/stages", "get"),
     ("/builds/{run_id}/stages/{stage}", "get"),
     ("/builds/{run_id}/quality", "get"),
+    ("/monitoring/summary", "get"),
+    ("/monitoring/builds", "get"),
 ]
 
 
@@ -355,6 +359,8 @@ _IMPLEMENTED_OPERATIONS = {
     "listBuildStages",
     "getBuildStageDetail",
     "getBuildQuality",
+    "getMonitoringSummary",
+    "getMonitoringBuilds",
 }
 
 
@@ -572,6 +578,8 @@ _OPERATION_STATUS_CODES: dict[str, set[int]] = {
     "listBuildStages": {200, 400, 403, 404},
     "getBuildStageDetail": {200, 400, 403, 404},
     "getBuildQuality": {200, 400, 403, 404},
+    "getMonitoringSummary": {200},
+    "getMonitoringBuilds": {200, 400},
 }
 
 
@@ -1115,3 +1123,43 @@ class TestResponseConformance:
         resp = dispatch(_conform_service(tmp_path), "GET", "/builds/nope/quality", None)
         assert resp.status_code == 404
         _assert_conforms(resp, "/builds/{run_id}/quality", "GET")
+
+    def test_monitoring_summary_200(self, tmp_path: Path) -> None:
+        resp = dispatch(_conform_service(tmp_path), "GET", "/monitoring/summary", None)
+        assert resp.status_code == 200
+        _assert_conforms(resp, "/monitoring/summary", "GET")
+
+    def test_monitoring_summary_200_after_build(self, tmp_path: Path) -> None:
+        # 요청 처리 후 latency 표본이 기록되어도 계약을 벗어나지 않는지 확인.
+        service = _conform_service(tmp_path)
+        dispatch(service, "POST", "/build", {"spec": _CONFORM_SPEC_YAML, "run_id": "conform-mon"})
+        resp = dispatch(service, "GET", "/monitoring/summary", None)
+        assert resp.status_code == 200
+        _assert_conforms(resp, "/monitoring/summary", "GET")
+        assert resp.body["api"]["sample_count"] >= 1  # type: ignore[index]
+
+    def test_monitoring_builds_200_empty(self, tmp_path: Path) -> None:
+        resp = dispatch(_conform_service(tmp_path), "GET", "/monitoring/builds", None, query="")
+        assert resp.status_code == 200
+        _assert_conforms(resp, "/monitoring/builds", "GET")
+
+    def test_monitoring_builds_200_after_build(self, tmp_path: Path) -> None:
+        service = _conform_service(tmp_path)
+        dispatch(service, "POST", "/build", {"spec": _CONFORM_SPEC_YAML, "run_id": "conform-mon-b"})
+        resp = dispatch(service, "GET", "/monitoring/builds", None, query="window=24h&bucket=hour")
+        assert resp.status_code == 200
+        _assert_conforms(resp, "/monitoring/builds", "GET")
+
+    def test_monitoring_builds_400_bad_window(self, tmp_path: Path) -> None:
+        resp = dispatch(
+            _conform_service(tmp_path), "GET", "/monitoring/builds", None, query="window=7d"
+        )
+        assert resp.status_code == 400
+        _assert_conforms(resp, "/monitoring/builds", "GET")
+
+    def test_monitoring_builds_400_bad_bucket(self, tmp_path: Path) -> None:
+        resp = dispatch(
+            _conform_service(tmp_path), "GET", "/monitoring/builds", None, query="bucket=day"
+        )
+        assert resp.status_code == 400
+        _assert_conforms(resp, "/monitoring/builds", "GET")
