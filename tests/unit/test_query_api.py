@@ -15,8 +15,9 @@ from kpubdata_builder.query.engine import QueryExecutionError
 from kpubdata_builder.query.models import QueryResult
 from kpubdata_builder.query.resolver import ResolvedQueryContext
 from kpubdata_builder.query.service import QueryService
-from kpubdata_builder.service.app import _OWNERSHIP_ENV, BuilderService
+from kpubdata_builder.service.app import BuilderService
 from kpubdata_builder.service.auth import Principal
+from kpubdata_builder.service.ownership import _OWNERSHIP_ENV
 from kpubdata_builder.spec import JsonValue
 from kpubdata_builder.stages._stage_reader import silver_source_dir
 

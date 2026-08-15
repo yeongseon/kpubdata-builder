@@ -16,8 +16,8 @@ import yaml
 
 import kpubdata_builder.service.app as app_module
 from kpubdata_builder.service import BuilderService, dispatch
-from kpubdata_builder.service.app import _OWNERSHIP_ENV
 from kpubdata_builder.service.auth import Principal
+from kpubdata_builder.service.ownership import _OWNERSHIP_ENV
 from kpubdata_builder.spec import JsonValue, parse_spec
 from kpubdata_builder.spec.serializer import write_buildspec_snapshot
 
@@ -233,6 +233,25 @@ class TestDatasetQualityHistoryAggregation:
         (entry,) = cast(list[dict[str, object]], resp.body["runs"])
         # naive sum of evaluated_rows would be 250; correct validated_rows is 150.
         assert entry["validated_rows"] == 150
+
+    def test_validated_rows_ignores_boolean_row_count_values(self, tmp_path: Path) -> None:
+        """손상된 manifest의 bool row_count 값은 1/0으로 합산되지 않는다(#486)."""
+        _write_fixture_run(
+            tmp_path,
+            "r1",
+            dataset_id="d.a",
+            row_counts={"air": 100},
+        )
+        run_dir = tmp_path / "r1"
+        manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+        manifest["row_counts"]["fcst"] = True
+        (run_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+        resp = dispatch(_service(tmp_path), "GET", "/datasets/d.a/quality/history", None)
+
+        (entry,) = cast(list[dict[str, object]], resp.body["runs"])
+        # bool True must not add 1 to the total.
+        assert entry["validated_rows"] == 100
 
     def test_quality_fail_build_preserves_validated_rows(self, tmp_path: Path) -> None:
         service = _service(tmp_path)

@@ -76,21 +76,30 @@ class Principal:
         return f"{self.kind}:{self.identifier}" if self.identifier else self.kind
 
 
-def compute_owner_id(kind: str, material: str) -> str:
+def compute_owner_id(kind: str, *material: str) -> str:
     """canonical하고 stable한 persistent owner identity를 계산한다 (#505).
 
-    ``kind`` 을 해시 *입력*에 포함시켜(단순 prefix가 아니라) principal 종류가
-    다르면 동일 ``material`` 이라도 절대 같은 owner_id가 나오지 않게 한다
-    (domain separation). ``\\0`` 구분자는 가변 길이 필드를 이어붙일 때 발생할 수
-    있는 concatenation collision을 막는다 — 예: issuer="ab", subject="c" 와
-    issuer="a", subject="bc" 는 구분자 없이 이어붙이면 같은 문자열이 되지만,
-    ``\\0`` 을 넣으면 서로 다른 바이트열이 된다.
+    해시 입력은 모든 필드(kind와 material 각 부분)를 8바이트 big-endian 길이
+    프리픽스로 프레이밍해 이어 붙인다 — 구분자 기반 결합(``"\\0"`` 등)은 필드
+    값에 구분자가 포함되면 충돌할 수 있어(예: issuer="a", sub="b\\0c" vs
+    issuer="a\\0b", sub="c") #505의 concatenation collision 방지 보장을 깨뜨릴
+    수 있으므로 쓰지 않는다. 길이 프리픽스는 필드 경계를 결정적으로 고정해
+    모호성이 없다.
+
+    ``kind`` 을 해시 입력에 포함시켜(principal 종류가 다르면 동일 material이라도
+    절대 같은 owner_id가 나오지 않게 한다 — domain separation).
 
     반환값은 SHA-256 hex digest 기반이라 원본 claim(sub/email 등)을 복원할 수
     없다 — owner ID를 로그/저장소에 남겨도 raw claim이 노출되지 않는다.
     """
-    digest = hashlib.sha256(f"{kind}\0{material}".encode()).hexdigest()
+    framed = b"".join(_frame_owner_id_field(value) for value in (kind, *material))
+    digest = hashlib.sha256(framed).hexdigest()
     return f"{kind}:{digest}"
+
+
+def _frame_owner_id_field(value: str) -> bytes:
+    raw = value.encode("utf-8")
+    return len(raw).to_bytes(8, "big") + raw
 
 
 def principal_owns(*, created_by: str | None, owner_id: str | None, principal: Principal) -> bool:
@@ -318,10 +327,11 @@ def _verify_bearer_token(token: str) -> Principal | AuthError:
         # (issuer, "") owner_id로 수렴해 ownership이 섞일 수 있다 (#505).
         return AuthError(reason="missing subject claim")
     issuer = str(payload.get("iss", ""))
-    # owner_id는 트렁케이션 없는 전체 issuer+subject를 해시한다(#505 권장:
-    # sha256(issuer + "\0" + subject)) — 아래 identifier(로그/표시용, sub 앞
-    # 8자)와 달리 충돌 방지가 필요한 persistent ownership 판정에 쓰인다.
-    owner_id = compute_owner_id("oidc", f"{issuer}\0{sub}")
+    # owner_id는 트렁케이션 없는 전체 issuer+subject를 해시한다(#505) — issuer와
+    # sub를 별도 필드로 전달해 구분자 없이도 충돌이 불가능하다(length-prefix
+    # framing). 아래 identifier(로그/표시용, sub 앞 8자)와 달리 충돌 방지가
+    # 필요한 persistent ownership 판정에 쓰인다.
+    owner_id = compute_owner_id("oidc", issuer, sub)
     # 로그 추적용 식별자로 sub 앞 8자만(전체 sub 노출 최소화).
     return Principal(kind="oidc", identifier=sub[:8], owner_id=owner_id)
 

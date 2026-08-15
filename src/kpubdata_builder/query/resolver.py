@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from pathlib import Path
 
 from ..service import datasets as datasets_service
 from ..service import stages as stages_service
-from ..service.auth import Principal, principal_owns
+from ..service.auth import Principal
+from ..service.ownership import ownership_allows
 from ..stages._path_safety import ensure_within, validate_path_segment
 from ..stages._stage_reader import gold_source_dir, silver_source_dir
 from .models import QueryRequest
@@ -32,14 +32,10 @@ class ResolvedQueryContext:
 
 
 def _ownership_allowed(manifest: dict[str, object], principal: Principal) -> bool:
-    """#504 query ownership 게이트 (#505: canonical owner_id 우선, legacy 폴백)."""
-    if os.environ.get("ENFORCE_OWNERSHIP", "").lower() not in ("true", "1"):
-        return True
-    if principal.kind in ("dev", "service"):
-        return True
+    """#504 query ownership 게이트 — ``ownership_allows``(#505 canonical) 공용 predicate."""
     created_by = manifest.get("created_by")
     owner_id = manifest.get("owner_id")
-    return principal_owns(
+    return ownership_allows(
         created_by=created_by if isinstance(created_by, str) else None,
         owner_id=owner_id if isinstance(owner_id, str) else None,
         principal=principal,
@@ -90,7 +86,12 @@ def resolve_query_context(
     except ValueError as exc:
         raise QueryContextError(str(exc)) from exc
     table_path = source_dir / "table.parquet"
-    ensure_within(run_dir, table_path, label="query table")
+    # path-safety 실패는 경로 정보를 노출하지 않고 artifact unavailable로
+    # fail-closed 처리한다(예: symlink가 workspace 밖을 가리키는 경우).
+    try:
+        ensure_within(run_dir, table_path, label="query table")
+    except ValueError as exc:
+        raise QueryArtifactUnavailableError("requested stage artifact is unavailable") from exc
     if table_path.is_symlink() or not table_path.is_file():
         raise QueryArtifactUnavailableError("requested stage artifact is unavailable")
     return ResolvedQueryContext(

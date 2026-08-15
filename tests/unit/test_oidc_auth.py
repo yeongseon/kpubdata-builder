@@ -520,6 +520,14 @@ class TestStableOwnerId:
         oidc_id = compute_owner_id("oidc", "local")
         assert len({dev_id, service_id, oidc_id}) == 3
 
+    def test_owner_id_field_boundary_is_unambiguous(self) -> None:
+        """필드에 "\\0"이 포함돼도 결합이 모호해지지 않는다 (#505 review).
+
+        구분자 기반 결합이라면 (issuer="a", sub="b\\0c")와 (issuer="a\\0b",
+        sub="c")가 같은 material로 수렴해 owner_id가 같아진다 — length-prefix
+        framing은 필드 경계를 고정하므로 충돌하지 않는다."""
+        assert compute_owner_id("oidc", "a", "b\0c") != compute_owner_id("oidc", "a\0b", "c")
+
 
 class TestPrincipalOwns:
     """principal_owns() — 모든 ownership consumer가 공유하는 단일 canonical 판정 (#505)."""
