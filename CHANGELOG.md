@@ -30,6 +30,9 @@
 - ValidationError에 structured_problems 추가
 - README 인증 서술 fail-closed 정책에 맞게 수정 (#423)
 
+### 수정됨
+- `stages/_path_safety.ensure_within`이 Windows에서 여러 source를 병렬(ThreadPoolExecutor)로 빌드할 때 간헐적으로 traversal 오탐하던 버그 수정 — `root`/`target` 중 한쪽만 `Path.resolve()`의 `\\?\` 확장 프리픽스를 얻는 비대칭이 원인 (#506 조사 중 발견, composition과 무관한 기존 버그)
+
 ### 제거됨
 - .omc/state/sessions 추적 해제 (#380)
 - PLAN.md를 .github/로 이동 (#425)
