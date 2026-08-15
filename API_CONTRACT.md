@@ -45,6 +45,19 @@ v0.4 Builder service는 동기식 실행 모델을 유지합니다.
 2. 구현 버그이면 service 코드와 conformance test를 수정합니다.
 3. Studio 영향이 있으면 Studio 클라이언트/문서 PR을 별도로 엽니다.
 
+### BuildSpec과 preview 계약 해석
+
+- HTTP 요청의 `spec` 필드는 현재와 같이 YAML 문자열입니다. OpenAPI의 `BuildSpec`
+  컴포넌트는 그 YAML이 표현하는 canonical 도메인 구조를 타입 생성기가 읽을 수 있게
+  정의합니다.
+- `metadata`, `sources[].params`, `exports[].options` 값은 표준 JSON 호환 범위입니다.
+- source preview는 성공과 실패 모두 `source_key`, `status`, `error`, `schema`,
+  `sample`, `total_rows`, `statistics`를 반환합니다. source 실패는 HTTP 200 안에서
+  `status: failed`, 비어 있는 schema/sample, 0 기반 statistics, 문자열 `error`로
+  표현합니다.
+- 제거된 `transforms`, top-level `normalization_mode`,
+  `sources[].normalization_mode`는 계약 필드가 아니며 파서가 명시적으로 거부합니다.
+
 ## 4. 인증과 CORS
 
 브라우저 클라이언트(Studio 등)와의 연동을 위해 CORS는 default-deny입니다.

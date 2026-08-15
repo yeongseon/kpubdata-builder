@@ -18,9 +18,11 @@ validator(``_openapi.py``)로 검증한다 — #319의 정적 스키마 검사�
 from __future__ import annotations
 
 from collections.abc import Iterable
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
 import yaml
 
 from kpubdata_builder.service import BuilderService, ServiceResponse, dispatch
@@ -111,6 +113,126 @@ def test_service_api_version_matches_contract() -> None:
     from kpubdata_builder.service import API_CONTRACT_VERSION
 
     assert str(_load_contract()["info"]["version"]) == API_CONTRACT_VERSION
+
+
+def _complete_build_spec_payload() -> dict[str, Any]:
+    return {
+        "dataset_id": "dataset.contract",
+        "title": "Contract fixture",
+        "description": "all currently supported BuildSpec fields",
+        "metadata": {
+            "public": True,
+            "tags": ["contract", 485],
+            "coverage": {"year": 2026, "note": None},
+        },
+        "publish": False,
+        "sources": [
+            {
+                "provider": "datago",
+                "dataset": "air_quality",
+                "params": {"page": 1, "filters": ["seoul", None]},
+                "alias": "air",
+                "schema": {
+                    "required": ["id"],
+                    "dtypes": {"id": "string"},
+                    "casts": {"value": "float64"},
+                },
+            }
+        ],
+        "exports": [
+            {
+                "kind": "jsonl",
+                "output_path": "out/data.jsonl",
+                "options": {"pretty": False, "indent": 2},
+            }
+        ],
+        "splits": {"mode": "ratio", "ratios": {"train": 0.8, "test": 0.2}, "seed": 7},
+        "pii": {"mode": "warn", "allow_columns": ["contact_hint"]},
+        "license": "CC-BY-4.0",
+        "quality": {
+            "max_duplicate_rate": 0.01,
+            "max_null_ratio": {"value": 0.05},
+            "min_rows": 100,
+        },
+    }
+
+
+def test_build_spec_schema_matches_current_domain_models() -> None:
+    """BuildSpec 선택 필드와 JSON-compatible 값 범위를 OpenAPI에 고정한다 (#485)."""
+    contract = _load_contract()
+    schemas = contract["components"]["schemas"]
+    build_spec = schemas["BuildSpec"]
+
+    assert {
+        "publish",
+        "splits",
+        "pii",
+        "license",
+        "quality",
+    } <= set(build_spec["properties"])
+    assert "schema" in schemas["SourceRef"]["properties"]
+    assert {"SchemaContract", "SplitSpec", "PiiPolicy", "QualityPolicy"} <= set(schemas)
+
+    payload = _complete_build_spec_payload()
+    assert validate(payload, build_spec, contract) == []
+
+
+def test_removed_build_spec_fields_are_not_declared() -> None:
+    """파서가 거부하는 stale 필드를 OpenAPI의 명명된 계약에서 제거한다 (#485)."""
+    schemas = _load_contract()["components"]["schemas"]
+
+    assert "transforms" not in schemas["BuildSpec"]["properties"]
+    assert [entry["not"]["required"] for entry in schemas["BuildSpec"]["allOf"]] == [
+        ["transforms"],
+        ["normalization_mode"],
+    ]
+    assert "normalization_mode" not in schemas["SourceRef"]["properties"]
+    assert schemas["SourceRef"]["not"]["required"] == ["normalization_mode"]
+
+
+@pytest.mark.parametrize("stale_field", ["transforms", "normalization_mode"])
+def test_build_spec_contract_rejects_top_level_stale_fields(stale_field: str) -> None:
+    """명명된 stale 필드가 실제 payload validation에서 거부되어야 한다 (#485)."""
+    contract = _load_contract()
+    payload = _complete_build_spec_payload()
+    payload[stale_field] = "removed"
+
+    assert validate(payload, contract["components"]["schemas"]["BuildSpec"], contract)
+
+
+def test_build_spec_contract_rejects_source_normalization_mode() -> None:
+    """SourceRef의 제거된 normalization_mode도 실제 payload에서 거부한다 (#485)."""
+    contract = _load_contract()
+    payload = _complete_build_spec_payload()
+    sources = cast(list[dict[str, Any]], payload["sources"])
+    sources[0]["normalization_mode"] = "canonical"
+
+    assert validate(payload, contract["components"]["schemas"]["BuildSpec"], contract)
+
+
+@pytest.mark.parametrize("empty_field", ["sources", "exports"])
+def test_build_spec_contract_rejects_empty_required_collections(empty_field: str) -> None:
+    """sources/exports는 존재만 해서는 안 되고 한 개 이상의 항목이 필요하다 (#485)."""
+    contract = _load_contract()
+    payload = deepcopy(_complete_build_spec_payload())
+    payload[empty_field] = []
+
+    assert validate(payload, contract["components"]["schemas"]["BuildSpec"], contract)
+
+
+def test_source_preview_schema_covers_success_and_failure_shape() -> None:
+    """preview가 항상 반환하는 error/statistics 필드와 status enum을 고정한다 (#485)."""
+    schemas = _load_contract()["components"]["schemas"]
+    preview = schemas["SourcePreview"]
+
+    assert {"error", "statistics"} <= set(preview["required"])
+    assert preview["properties"]["status"]["enum"] == ["ok", "failed"]
+    assert preview["properties"]["statistics"]["$ref"].endswith("/TableStatistics")
+    assert set(schemas["TableStatistics"]["required"]) == {
+        "row_count",
+        "null_counts",
+        "duplicate_rate",
+    }
 
 
 # 계약이 기술하는 모든 오퍼레이션은 BuilderService에 실제로 구현돼 있어야 한다.
@@ -534,6 +656,26 @@ class TestResponseConformance:
             _conform_service(tmp_path), "POST", "/preview", {"spec": _CONFORM_SPEC_YAML, "limit": 2}
         )
         assert resp.status_code == 200
+        _assert_conforms(resp, "/preview", "POST")
+
+    def test_preview_200_source_failure(self, tmp_path: Path) -> None:
+        resp = dispatch(
+            _conform_service(tmp_path),
+            "POST",
+            "/preview",
+            {"spec": _FAILING_SPEC_YAML, "limit": 2},
+        )
+        assert resp.status_code == 200
+        previews = cast(list[dict[str, JsonValue]], resp.body["previews"])
+        assert previews[0]["status"] == "failed"
+        assert previews[0]["error"]
+        assert previews[0]["schema"] == []
+        assert previews[0]["sample"] == []
+        assert previews[0]["statistics"] == {
+            "row_count": 0,
+            "null_counts": {},
+            "duplicate_rate": 0.0,
+        }
         _assert_conforms(resp, "/preview", "POST")
 
     def test_preview_400_bad_limit(self, tmp_path: Path) -> None:

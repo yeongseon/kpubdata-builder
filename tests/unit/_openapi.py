@@ -22,7 +22,8 @@
     - ``oneOf`` (적어도 한 분기가 통과하면 유효 — conformance 게이트는 실제 드리프트를
       잡는 것이 목적이므로, 여러 분기에 동시에 맞더라도 거짓 양성을 피하기 위해 관대하게
       해석한다)
-    - ``minimum`` (정수/숫자 하한)
+    - ``not``, ``allOf``
+    - ``minimum`` (정수/숫자 하한), ``minItems`` (배열 최소 길이)
 
 알 수 없는 키워드는 무시한다(전방 호환). 추가 선택 필드는 기본 허용하므로, 응답에
 새 선택 필드가 더해지는 *부가적* 변화는 통과시키고, 필수 필드 누락·타입 변경 같은
@@ -109,6 +110,16 @@ def validate(value: Json, schema: Schema, contract: Schema, path: str = "$") -> 
             errors.append(f"{path}: value matched no oneOf branch")
         return errors
 
+    all_of = schema.get("allOf")
+    if isinstance(all_of, list):
+        for branch in all_of:
+            if isinstance(branch, dict):
+                errors.extend(validate(value, branch, contract, path))
+
+    not_schema = schema.get("not")
+    if isinstance(not_schema, dict) and not validate(value, not_schema, contract, path):
+        errors.append(f"{path}: value matched forbidden 'not' schema")
+
     if "enum" in schema and value not in schema["enum"]:
         errors.append(f"{path}: {value!r} not in enum {schema['enum']!r}")
 
@@ -118,9 +129,14 @@ def validate(value: Json, schema: Schema, contract: Schema, path: str = "$") -> 
         # 타입 자체가 다르면 하위 구조를 더 검사해 봐야 의미가 없다.
         return errors
 
-    if "object" in type_names and isinstance(value, dict):
+    object_keywords = {"required", "properties", "additionalProperties"}
+    if isinstance(value, dict) and (
+        "object" in type_names or any(keyword in schema for keyword in object_keywords)
+    ):
         errors.extend(_validate_object(value, schema, contract, path))
     elif "array" in type_names and isinstance(value, list):
+        if "minItems" in schema and len(value) < schema["minItems"]:
+            errors.append(f"{path}: array length {len(value)} < minItems {schema['minItems']}")
         item_schema = schema.get("items")
         if isinstance(item_schema, dict):
             for index, item in enumerate(value):

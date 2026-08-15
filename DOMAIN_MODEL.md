@@ -10,17 +10,24 @@ classDiagram
         +String description
         +Tuple~SourceRef~ sources
         +Tuple~ExportTarget~ exports
-        +Tuple~str~ transforms
-        +Dict~str_str~ metadata
+        +Dict~str_JsonValue~ metadata
         +bool publish
         +SplitSpec splits 0..1
+        +PiiPolicy pii 0..1
+        +String license 0..1
+        +QualityPolicy quality 0..1
     }
     class SourceRef {
         +String provider
         +String dataset
         +Dict params
         +String alias
-        +String normalization_mode
+        +SchemaContract schema 0..1
+    }
+    class SchemaContract {
+        +Tuple~str~ required
+        +Dict~str_str~ dtypes
+        +Dict~str_str~ casts
     }
     class SplitSpec {
         +String mode
@@ -59,6 +66,7 @@ classDiagram
     BuildSpec "1" *-- "1..*" SourceRef : defines
     BuildSpec "1" *-- "1..*" ExportTarget : defines
     BuildSpec "1" o-- "0..1" SplitSpec : defines
+    SourceRef "1" o-- "0..1" SchemaContract : validates
     SourceRef ..> ArtifactDataset : populates
     ArtifactDataset --> ExportTarget : formatted by
     BuildManifest "1" -- "1" BuildSpec : records result
@@ -102,7 +110,7 @@ stateDiagram-v2
     - `dataset`: dataset 식별자
     - `params`: list 호출에 전달할 파라미터 (JSON 호환 값)
     - `alias`: 조립 단계에서 사용할 사용자 정의 소스 이름
-    - `normalization_mode`: 정규화 모드 (`canonical` 기본값, `raw` 지원)
+    - `schema`: Silver 정규화·검증 계약 (`required`, `dtypes`, `casts`)
 
 ```mermaid
 flowchart LR
@@ -141,7 +149,7 @@ flowchart LR
     - `key`: key 모드에서 분할 기준이 되는 컬럼 이름
     - `seed`: ratio 모드의 결정적 셔플 시드 (기본값: `0`)
 
-> 계획(planned)/미구현: `SplitSpec`은 현재 파싱되어 BuildSpec에 보존되지만, 실제 분할 로직은 아직 구현되지 않았습니다.
+`SplitSpec`은 Gold 패키지의 명명된 분할 생성에 사용됩니다.
 
 ### 5. BuildManifest (빌드 명세서)
 - **무엇인가요?** 빌드가 끝난 후, 언제 어떤 데이터가 얼마나 생성되었는지 기록한 요약 파일입니다. 실패한 빌드도 manifest를 남겨 감사 추적이 가능합니다.
@@ -180,16 +188,16 @@ erDiagram
         String dataset_id PK
         String title
         String description
-        Tuple transforms
         Dict metadata
         bool publish
+        String license
     }
     SOURCEREF {
         String provider
         String dataset
         Dict params
         String alias
-        String normalization_mode
+        SchemaContract schema
     }
     SPLITSPEC {
         String mode
@@ -232,13 +240,13 @@ erDiagram
 > 위 다이어그램의 텍스트 버전은 아래와 같습니다.
 
 ```text
-[BuildSpec] (레시피)
+[BuildSpec] (레시피, JSON-compatible metadata와 선택적 license/quality/pii 포함)
     |
-    +-- [SourceRef] (1..N) (데이터 출처, normalization_mode 포함)
+    +-- [SourceRef] (1..N) (데이터 출처, 선택적 SchemaContract 포함)
     |
     +-- [ExportTarget] (1..N) (출력 형식)
     |
-    +-- [SplitSpec] (0..1) (데이터셋 분할 정의, 계획/미구현)
+    +-- [SplitSpec] (0..1) (Gold 데이터셋 분할 정의)
     |
     v
 [ArtifactDataset] (조립된 데이터 뭉치)
@@ -265,7 +273,11 @@ sources:
       nx: 55
       ny: 127
     alias: forecast
-    normalization_mode: canonical
+    schema:
+      required: [base_date, nx, ny]
+      casts:
+        nx: int64
+        ny: int64
 
 # 어떤 형식으로 저장할까요?
 exports:
@@ -277,8 +289,9 @@ exports:
 # 부가 정보
 metadata:
   author: "Sisyphus-Junior"
-  license: "CC-BY-4.0"
   version: "1.0.0"
+  tags: [weather, forecast]
+license: "CC-BY-4.0"
 ```
 
 ## Python 코드 사용 예시
@@ -295,7 +308,6 @@ spec = BuildSpec(
         SourceRef(
             provider="datago",
             dataset="test_ds",
-            normalization_mode="canonical",
         ),
     ),
     exports=(

@@ -45,8 +45,11 @@ exports:
 | 필드 | 타입 | 설명 |
 | :--- | :--- | :--- |
 | `publish` | boolean | 빌드 후 게시까지 수행할지 여부 (기본값: `false`) |
-| `metadata` | object | 산출물에 실을 임의 메타데이터 (문자열 키/값 쌍) |
+| `metadata` | object | 산출물에 실을 임의 메타데이터 (JSON 호환 값) |
 | `splits` | object | 데이터셋 분할 정의 |
+| `pii` | object | PII 검출 정책 |
+| `license` | string | 데이터셋 라이선스 또는 이용허락 범위 |
+| `quality` | object | Silver 통계 기반 품질 임계 정책 |
 
 ## 4. 필드 상세
 
@@ -81,6 +84,14 @@ sources:
       nx: 55
       ny: 127
     alias: forecast
+    schema:
+      required: [base_date, nx, ny]
+      dtypes:
+        nx: int64
+        ny: int64
+      casts:
+        nx: int64
+        ny: int64
 ```
 
 | 필드 | 타입 | 필수 | 설명 |
@@ -89,6 +100,17 @@ sources:
 | `dataset` | string | 예 | provider 내부 dataset 이름 |
 | `params` | object | 아니오 | source 호출 파라미터 (JSON 호환 값) |
 | `alias` | string | 아니오 | 조립 단계에서 사용할 사용자 정의 소스 이름 |
+| `schema` | object | 아니오 | Silver 정규화 및 required-column/dtype 검증 계약 |
+
+`schema`는 다음 선택 필드를 지원합니다.
+
+| 필드 | 타입 | 설명 |
+| :--- | :--- | :--- |
+| `required` | array<string> | 반드시 존재해야 하는 컬럼 목록 |
+| `dtypes` | object<string, string> | 컬럼별 기대 dtype |
+| `casts` | object<string, string> | 정규화 단계에서 적용할 컬럼별 dtype 캐스팅 |
+
+제거된 `normalization_mode`는 허용하지 않습니다. 정규화는 `schema.casts`로 선언합니다.
 
 ### 4.5 `exports` (배열)
 
@@ -135,18 +157,27 @@ publish: true
 
 > 계획(planned)/미구현: 현재 `publish: true`로 설정해도 게시 로직이 실행되지 않습니다. 게시 기능은 향후 릴리스에서 활성화될 예정입니다.
 
-### 4.8 `metadata` (optional)
+### 4.7 `metadata` (optional)
 
 ```yaml
 metadata:
   author: "Sisyphus-Junior"
-  license: "CC-BY-4.0"
   version: "1.0.0"
+  tags: [weather, forecast]
+  coverage:
+    years: [2024, 2025]
 ```
 
-산출물에 실을 임의 메타데이터입니다. 키와 값 모두 문자열이어야 합니다.
+임의 메타데이터입니다. 키는 문자열이고 값은 null, 문자열, 숫자,
+불리언, 배열, 객체로 구성된 표준 JSON 호환 값이어야 합니다. NaN과 Infinity 및 순환
+참조는 허용하지 않습니다.
 
-### 4.9 `splits` (optional)
+현재 구현에서 산출물에 반영되는 항목은 제한적입니다. `version`은 dataset card의
+버전 표기로, `license`는 최상위 `license` 필드 미지정 시 레거시 폴백으로 사용됩니다.
+그 외 임의 메타데이터는 검증·스펙 저장 목적으로만 보관되며 산출물, exporter,
+manifest로 전달되지 않습니다.
+
+### 4.8 `splits` (optional)
 
 ```yaml
 splits:
@@ -167,7 +198,52 @@ splits:
 | `key` | string | 아니오 | key 모드에서 분할 기준이 되는 컬럼 이름 |
 | `seed` | integer | 아니오 | ratio 모드의 결정적 셔플 시드 (기본값: `0`) |
 
-> 계획(planned)/미구현: `splits`는 현재 파싱되어 BuildSpec에 보존되지만, 실제 분할 로직은 아직 구현되지 않았습니다.
+`ratio` 모드는 비율의 합이 1.0이어야 하며, `key` 모드는 비어 있지 않은 `key`가
+필요합니다. 이 선언은 Gold 패키지의 분할 생성에 사용됩니다.
+
+### 4.9 `pii` (optional)
+
+```yaml
+pii:
+  mode: warn
+  allow_columns: [contact_hint]
+```
+
+| 필드 | 타입 | 설명 |
+| :--- | :--- | :--- |
+| `mode` | string | `block`(기본), `warn`, `allow` 중 하나 |
+| `allow_columns` | array<string> | PII 스캔에서 제외할 컬럼 목록 |
+
+`publish: true`와 `pii.mode: allow`의 조합은 허용하지 않습니다.
+
+### 4.10 `license` (optional)
+
+```yaml
+license: CC-BY-4.0
+```
+
+SPDX 식별자 또는 자유 텍스트 라이선스 선언입니다. `publish: true`이면 반드시
+지정해야 합니다.
+
+### 4.11 `quality` (optional)
+
+```yaml
+quality:
+  max_duplicate_rate: 0.01
+  max_null_ratio:
+    temperature: 0.05
+  min_rows: 100
+```
+
+| 필드 | 타입 | 설명 |
+| :--- | :--- | :--- |
+| `max_duplicate_rate` | number | 허용할 최대 중복 행 비율 |
+| `max_null_ratio` | object<string, number> | 컬럼별 허용 최대 null 비율 |
+| `min_rows` | integer | 요구하는 최소 행 수 |
+
+현재 품질 정책은 Silver의 기존 `row_count`, `null_counts`, `duplicate_rate` 통계를
+사용합니다. 확장 rule과 구조화된 PASS/WARN/FAIL 결과는 #486 범위이며 이 계약에
+선반영하지 않습니다.
 
 ## 5. 검증 규칙
 

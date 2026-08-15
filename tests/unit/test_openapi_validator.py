@@ -75,6 +75,38 @@ def test_minimum_rejects_below_bound() -> None:
     assert validate(0, schema, {})
 
 
+def test_not_rejects_object_matching_required_property_schema() -> None:
+    schema: dict[str, Any] = {
+        "type": "object",
+        "not": {"required": ["removed"]},
+    }
+    assert validate({}, schema, {}) == []
+    assert validate({"removed": True}, schema, {})
+
+
+def test_allof_applies_each_forbidden_property_schema() -> None:
+    schema: dict[str, Any] = {
+        "type": "object",
+        "allOf": [
+            {"not": {"required": ["first"]}},
+            {"not": {"required": ["second"]}},
+        ],
+    }
+    assert validate({}, schema, {}) == []
+    assert validate({"first": True}, schema, {})
+    assert validate({"second": True}, schema, {})
+
+
+def test_min_items_rejects_short_array() -> None:
+    schema: dict[str, Any] = {
+        "type": "array",
+        "minItems": 1,
+        "items": {"type": "integer"},
+    }
+    assert validate([1], schema, {}) == []
+    assert validate([], schema, {})
+
+
 # --- 구조적 키워드: $ref / oneOf / additionalProperties / items -----------------
 
 

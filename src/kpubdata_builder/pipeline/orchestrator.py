@@ -55,6 +55,14 @@ logger = logging.getLogger(__name__)
 _MAX_PARALLEL_SOURCES = 4
 
 
+def _dataset_card_license(spec: BuildSpec) -> str:
+    """canonical license를 우선하고 문자열인 legacy metadata 값을 보조로 사용한다."""
+    if spec.license is not None:
+        return spec.license
+    legacy_license = spec.metadata.get("license")
+    return legacy_license if isinstance(legacy_license, str) else ""
+
+
 @dataclass(frozen=True)
 class SourceBuildOutcome:
     """단일 소스에 대한 파이프라인 실행 결과.
@@ -299,7 +307,7 @@ def _run_source_pipeline(
                 (column.name, column.dtype, column.nullable) for column in silver.schema.columns
             ),
             sample_rows=silver.preview.rows,
-            license=str(context.spec.metadata.get("license", "")),
+            license=_dataset_card_license(context.spec),
             version=str(context.spec.metadata.get("version", "")),
         )
         card_path = gold_paths.gold_dir / "README.md"
