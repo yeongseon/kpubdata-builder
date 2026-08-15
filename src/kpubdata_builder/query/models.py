@@ -26,6 +26,8 @@ class QueryResult:
     rows: tuple[dict[str, JsonValue], ...]
     truncated: bool
     execution_ms: int
+    startup_ms: int
+    engine_execution_ms: int
 
 
 __all__ = ["QueryRequest", "QueryResult", "QueryStage"]

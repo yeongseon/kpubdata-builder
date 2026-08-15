@@ -197,10 +197,11 @@ def _strip_internal_fields(entries: list[_BuildListEntry]) -> list[_BuildListEnt
 # 1.4.0 -> 1.5.0: Dataset Catalog·Detail·Stage Summary API 추가 (#488, additive).
 # 1.5.0 -> 1.6.0: 구조화된 Quality/Schema Drift 결과, quality history/detail API 추가
 # (#486, additive — 기존 엔드포인트는 변경되지 않는다).
-# 1.8.0 -> 1.9.0: POST /preview에 Source↔Silver diff와 sample_mode(first/random)
+# 1.8.0 -> 1.9.0: query startup/engine timing fields 추가 (#523, additive).
+# 1.9.0 -> 1.10.0: POST /preview에 Source↔Silver diff와 sample_mode(first/random)
 # 옵션 추가 (#497, additive — 기존 필드는 유지된다). limit 상한(1000) 신규 도입은
 # behavioral tightening(이전엔 상한 없음) — 그 이상 값은 400.
-API_CONTRACT_VERSION = "1.9.0"
+API_CONTRACT_VERSION = "1.10.0"
 
 
 def _quality_result_to_json(r: QualityCheckResult) -> dict[str, JsonValue]:
@@ -472,6 +473,8 @@ class BuilderService:
                 "rows": list(result.rows),
                 "truncated": result.truncated,
                 "execution_ms": result.execution_ms,
+                "startup_ms": result.startup_ms,
+                "engine_execution_ms": result.engine_execution_ms,
             },
         )
 

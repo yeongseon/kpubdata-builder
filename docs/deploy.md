@@ -65,9 +65,86 @@ Builder HTTP 서비스를 로컬 개발 이상으로 운영하기 위한 배포�
 - `Dockerfile` `HEALTHCHECK` — urllib로 `/healthz` 폴링 (#372).
 - `SIGTERM` — 우아운 종료(진행 중 요청 drain, #374). ACA/K8s 롤링 업데이트 대응.
 
+## 8. 동시성·풀·백프레셔
+
+단일 Builder process 안에는 역할이 다른 실행 제한이 세 개 있다. 숫자가 같더라도 하나의
+공유 pool이 아니며 서로 대신하지 않는다.
+
+| 계층 | 구현 | 기본값 | 포화 시 동작 |
+| :--- | :--- | :--- | :--- |
+| HTTP 요청 | 별도 `ThreadPoolExecutor` (`kpubdata-http`) | service 기본 10, ACA template 4 | executor의 무제한 내부 queue에서 대기. 명시적 `429`가 아니므로 앞단 ingress timeout/connection limit가 필요 |
+| 비동기 build | 별도 in-process `ThreadPoolExecutor` (`kpubdata-build`) | CLI가 HTTP와 같은 worker 설정 사용(service 기본 10, ACA 4), queued job 10 | queued 상태가 10건이면 제출을 `429`로 거절. 실행 중 job은 queue 수에 포함하지 않음 |
+| query | `BoundedSemaphore` + 요청마다 `spawn` child process | service 기본 2, ACA template 1 | permit을 기다리지 않고 즉시 `429 query_busy`; 성공·실패 후 permit 반환 |
+
+`POST /build`는 동기식이므로 전체 pipeline이 끝날 때까지 HTTP worker 하나를 점유한다.
+`POST /query`도 child process의 결과 또는 timeout을 기다리는 동안 HTTP worker 하나를
+점유한다. 반면 비동기 `POST /builds`의 HTTP worker 점유는 queue 제출까지로 짧고, 실제
+build는 별도 build pool에서 실행된다. 따라서 query semaphore가 남아 있어도 모든 HTTP
+worker가 동기 build/query에 묶이면 새 요청은 HTTP executor queue에서 기다린다.
+
+HTTP executor queue에는 길이 제한이 없다. 외부 ingress에서 요청 수, body 크기, idle/request
+timeout을 제한하고, 장시간 동기 호출의 클라이언트 timeout을 서버 query timeout보다 길게
+잡는다. 비동기 build queue의 검사는 process-local이므로 단일 replica 전제와 결합되며,
+재시작하면 대기/실행 상태를 복구하지 못한다.
+
+ADR 0008은 여전히 **제안됨(Proposed)** 상태다. 현재 비동기 build pool과 active registry는
+그 ADR의 일부 방향만 선행 구현한 것이며, 취소, persistent queue, crash recovery, partial
+manifest 정책까지 승인·완료됐다는 뜻이 아니다.
+
+## 9. 리소스 예산과 튜닝
+
+최소 메모리 예산은 다음 항목을 실측해 합산한다.
+
+```text
+memory >= base process
+        + HTTP_workers * per_HTTP_thread
+        + active_build_workers * per_build_working_set
+        + query_concurrency * (per_Polars_child + 최대 8 MiB IPC payload)
+        + filesystem/cache headroom
+```
+
+CPU 수요는 대략 `active_build_workers * build_CPU` +
+`query_concurrency * Polars_child_CPU` + HTTP overhead다. Polars child 하나도 내부적으로 여러
+thread를 사용할 수 있으므로 `query_concurrency`를 vCPU 수처럼 간주하면 안 된다. 작은 ACA
+인스턴스는 `infra/main.bicep` 기본값인 1 vCPU/2 GiB, HTTP worker 4, async build worker 4,
+query concurrency 1에서 시작한다. HTTP와 build는 같은 설정값을 받지만 서로 다른 pool이라
+동시에 각각 4개까지 실행될 수 있다. 따라서 CPU/memory 중심 build를 많이 제출하는 환경에서는
+이 기본 ACA 크기만으로 안전하다고 가정하지 말고 working set과 throttling을 관찰해야 한다.
+
+query timing은 다음 경계를 사용한다.
+
+- `execution_ms`: parent의 `QueryEngine.execute` 진입부터 payload 수신·검증과 child join까지.
+- `startup_ms`: 같은 parent 시작점부터 spawned child의 Polars import와 bounded SQL setup 완료,
+  `scan_parquet` 직전까지.
+- `engine_execution_ms`: child의 `scan_parquet` 직전부터 SQL context/execute/collect 완료까지.
+- 구조화 로그의 `ipc_serialization_ms`: 위 두 child 구간을 end-to-end에서 뺀 nonnegative
+  remainder. row 변환, JSON 크기 확인, Pipe 직렬화/전송, scheduling, join과 ms 반올림을
+  포함하므로 세 필드가 정확히 합산된다고 가정하지 않는다.
+
+고정 성능 threshold를 CI에 두지 않는다. 실제 배포와 같은 CPU/memory에서 동일 parquet와
+canonical SQL을 준비하고, cold query(새 child)와 warm filesystem-cache query를 각각 30회
+실행한다. 첫 실행을 별도로 보존하고 세 timing의 p50/p95, RSS, CPU throttling, `429` 비율을
+함께 기록한 뒤 concurrency를 한 단계씩 올린다. 데이터, image digest, ACA SKU, 반복 횟수를
+결과와 함께 남겨야 비교 가능하다.
+
+## 10. Process 격리 선택
+
+query는 의도적으로 `spawn`을 사용한다. thread가 이미 실행 중인 service process를 `fork`하면
+다른 thread가 잡은 lock, logging/runtime 상태, Polars native thread-pool 상태를 child가
+불완전하게 상속할 수 있다. startup이 짧아 보인다는 이유로 `fork`로 바꾸는 것은 안전한
+대체가 아니다.
+
+장기적으로 pre-spawn query worker pool을 두면 import startup과 process 생성 비용을 줄일 수
+있지만, worker별 메모리가 상시 필요하고 손상된 native state/사용자 query 간 상태 격리,
+timeout 시 worker 교체, queue 공정성, 배포 drain을 새로 설계해야 한다. 현재 per-query child는
+startup 비용 대신 강한 취소·수명 격리를 선택한다. 비동기 build pool을 별도 process/service로
+분리하면 HTTP process 장애와 GIL/메모리 경쟁을 줄이지만 외부 queue, 상태 영속성, credential
+전달 신뢰경계와 운영 복잡도가 증가한다. 이 tradeoff는 ADR 0008 승인 과정에서 결정한다.
+
 ## 관련
 
 - [ADR 0006](./adrs/0006-service-auth-and-deployment.md) — 인증·배포(fail-closed, Docker)
 - ADR 0009(PR #398) — 사용자 인증(Google OIDC, 제안됨)
 - ADR 0010(PR #399) — 상태 백엔드 분리(제안됨)
+- [ADR 0008](./adrs/0008-async-build-job-model.md) — 비동기 build job 모델(제안됨)
 - [API_CONTRACT.md](./API_CONTRACT.md) — `/healthz`, 401/403/503 응답

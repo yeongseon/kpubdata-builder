@@ -206,6 +206,7 @@ ADR 0006). 설정은 환경변수로 주입합니다 — `docker-entrypoint.sh`�
 | `KPUBDATA_BUILDER_HOST` | 바인딩 호스트 | `0.0.0.0` | 선택 |
 | `KPUBDATA_BUILDER_DEV_MODE` | `true`/`1`이면 API 키 없이 기동 (로컬 개발 전용) | 미설정 | 선택 |
 | `KPUBDATA_BUILDER_MAX_WORKERS` | 동시 요청 스레드 상한 | `10` | 선택 |
+| `KPUBDATA_QUERY_MAX_CONCURRENCY` | 동시 query child process 상한 | `2` | 선택 |
 | `KPUBDATA_BUILDER_ALLOWED_ORIGINS` | CORS 허용 오리진 (콤마 구분, default-deny) | 미설정 | 선택 |
 | `KPUBDATA_BUILDER_CREDENTIAL_MASTER_KEY` | 사용자별 Provider credential AES-GCM master key (URL-safe base64 32 bytes) | 미설정 | credential CRUD 사용 시 필수 |
 | `KPUBDATA_BUILDER_PROVIDER_TEST_TIMEOUT` | Provider connection test 전송 timeout(초) | `10` | 선택 |
@@ -220,6 +221,9 @@ ADR 0006). 설정은 환경변수로 주입합니다 — `docker-entrypoint.sh`�
 > 거부합니다. `service/app.py`의 "키 미설정 = 인증 생략" 동작은 로컬 개발 편의 전용이며
 > 컨테이너로 누출되지 않습니다. 로컬에서 인증 없이 띄우려면 `KPUBDATA_BUILDER_DEV_MODE=1`을
 > 명시하세요.
+
+HTTP, 비동기 build, query의 서로 다른 동시성 상한과 리소스 산정 방법은
+[배포 가이드의 동시성·백프레셔 절](./docs/deploy.md#8-동시성풀백프레셔)을 참고하세요.
 
 ```bash
 # 이미지 빌드
@@ -270,7 +274,7 @@ curl -X POST http://localhost:8000/validate \
 
 인증 실패 시 `401 Unauthorized` 응답이 반환됩니다.
 
-자세한 내용은 [ADR 0006 — 서비스 인증 & 배포(Docker) 스토리](./docs/adrs/0006-service-auth-and-deployment.md)와 [API_CONTRACT.md](./API_CONTRACT.md)를 참고하세요.
+자세한 내용은 [ADR 0006 — 서비스 인증 & 배포(Docker) 스토리](./docs/adrs/0006-service-auth-and-deployment.md)와 [API_CONTRACT.md](./API_CONTRACT.md)를 참고하세요. Studio용 named request/response example은 [OpenAPI 예제 추출 가이드](./docs/guides/openapi-examples.md)에 따라 JSON으로 추출할 수 있습니다.
 
 ---
 
