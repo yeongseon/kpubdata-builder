@@ -234,9 +234,7 @@ class TestDatasetQualityHistoryAggregation:
         # naive sum of evaluated_rows would be 250; correct validated_rows is 150.
         assert entry["validated_rows"] == 150
 
-    def test_validated_rows_ignores_boolean_row_count_values(
-        self, tmp_path: Path
-    ) -> None:
+    def test_validated_rows_ignores_boolean_row_count_values(self, tmp_path: Path) -> None:
         """손상된 manifest의 bool row_count 값은 1/0으로 합산되지 않는다(#486)."""
         _write_fixture_run(
             tmp_path,
