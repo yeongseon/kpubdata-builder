@@ -41,6 +41,7 @@ def manifest_writer(manifest: BuildManifest, output_path: Path) -> None:
         ),
         "inputs": list(manifest.inputs),
         "inputs_fingerprint": manifest.inputs_fingerprint,
+        "created_by": manifest.created_by,
         "outputs": list(manifest.outputs),
         "warnings": list(manifest.warnings),
         "errors": list(manifest.errors),

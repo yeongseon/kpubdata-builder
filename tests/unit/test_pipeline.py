@@ -9,10 +9,11 @@ from typing import cast
 
 import polars as pl
 import pytest
+import yaml
 
 import kpubdata_builder.pipeline.orchestrator as orchestrator
 from kpubdata_builder.pipeline import BuildContext, BuildResult, run_build
-from kpubdata_builder.spec import BuildSpec, ExportTarget, JsonValue, SourceRef
+from kpubdata_builder.spec import BuildSpec, ExportTarget, JsonValue, SourceRef, parse_spec
 
 
 class _FakeResult:
@@ -101,6 +102,7 @@ def test_run_build_executes_full_pipeline_and_writes_workspace(tmp_path: Path) -
 
     # run workspace 디렉터리 구조
     run_dir = tmp_path / "run1"
+    assert (run_dir / "buildspec.yaml").is_file()
     assert (run_dir / "bronze").is_dir()
     assert (run_dir / "silver").is_dir()
     assert (run_dir / "gold").is_dir()
@@ -215,6 +217,65 @@ def test_run_build_dataset_card_uses_canonical_license_with_legacy_fallback(
     assert f"## License\n\n{expected}\n" in text
     if unexpected is not None:
         assert unexpected not in text
+
+
+def test_run_build_snapshot_round_trip_preserves_legacy_license_fallback(
+    tmp_path: Path,
+) -> None:
+    """serializer는 legacy metadata.license를 top-level로 승격하지 않는다 (#487).
+
+    snapshot에는 metadata가 그대로 보존되므로, snapshot을 다시 parse해서 재실행해도
+    ``_dataset_card_license``의 legacy fallback으로 동일한 license가 나와야 한다 —
+    canonical spec의 license 표현과 dataset card 렌더링이 재현 가능함을 검증한다.
+    """
+    spec = BuildSpec(
+        dataset_id="apt_trade",
+        title="Apartment Trades",
+        description="seoul apartment trades",
+        sources=(SourceRef(provider="datago", dataset="apt_trade"),),
+        exports=(ExportTarget(kind="jsonl", output_path="data.jsonl"),),
+        metadata={"license": "KOGL Type 1"},
+    )
+    client = _FakeClient({"datago.apt_trade": [{"id": "1"}]})
+
+    first = run_build(spec, client=client, output_root=tmp_path, run_id="run1")
+    assert first.status == "ok"
+
+    snapshot_text = (tmp_path / "run1" / "buildspec.yaml").read_text(encoding="utf-8")
+    reparsed = parse_spec(cast(dict[str, object], yaml.safe_load(snapshot_text)))
+    assert reparsed.license is None
+    assert reparsed.metadata["license"] == "KOGL Type 1"
+
+    second = run_build(reparsed, client=client, output_root=tmp_path, run_id="run2")
+    assert second.status == "ok"
+    readme = tmp_path / "run2" / "gold" / "datago.apt_trade" / "README.md"
+    assert "## License\n\nKOGL Type 1\n" in readme.read_text(encoding="utf-8")
+
+
+def test_run_build_dataset_card_ignores_non_string_metadata_version(tmp_path: Path) -> None:
+    """metadata.version이 null/숫자/list/dict이면 문자열화하지 않고 unversioned로 렌더링한다 (#487).
+
+    metadata가 JsonValue로 넓어지면서 ``str(None) == "None"``이 그대로 카드에 노출되던
+    회귀를 막는다.
+    """
+    spec = BuildSpec(
+        dataset_id="apt_trade",
+        title="Apartment Trades",
+        description="seoul apartment trades",
+        sources=(SourceRef(provider="datago", dataset="apt_trade"),),
+        exports=(ExportTarget(kind="jsonl", output_path="data.jsonl"),),
+        metadata={"version": None},
+    )
+    client = _FakeClient({"datago.apt_trade": [{"id": "1"}]})
+
+    result = run_build(spec, client=client, output_root=tmp_path, run_id="run1")
+
+    assert result.status == "ok"
+    text = (tmp_path / "run1" / "gold" / "datago.apt_trade" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    assert "## Version\n\nunversioned" in text
+    assert "None" not in text
 
 
 def test_run_build_does_not_forward_arbitrary_metadata_to_exporters(
@@ -575,3 +636,13 @@ def test_run_build_validates_spec_before_running(tmp_path: Path) -> None:
 
     # fail-fast: manifest나 워크스페이스가 생성되지 않는다.
     assert not (tmp_path / "run1").exists()
+
+
+def test_run_build_keeps_snapshot_when_source_pipeline_fails(tmp_path: Path) -> None:
+    spec = _spec(SourceRef(provider="datago", dataset="missing"))
+
+    result = run_build(spec, client=_FakeClient({}), output_root=tmp_path, run_id="failed-run")
+
+    assert result.status == "failed"
+    assert (tmp_path / "failed-run" / "buildspec.yaml").is_file()
+    assert result.spec_digest.startswith("sha256:")

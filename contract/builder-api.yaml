@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: KPubData Builder Service API
-  version: "1.3.0"
+  version: "1.4.0"
   description: >-
     Builder 중심 서비스 계약. BuildSpec 검증, preview, build 실행, artifact 조회,
     계약 버전 조회를 제공한다. CLI와 HTTP service mode(#36)가 동일한 도메인 계약을
@@ -208,6 +208,46 @@ paths:
                 $ref: "#/components/schemas/Error"
         "500":
           description: manifest 파일을 읽거나 JSON으로 해석할 수 없음
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /builds/{run_id}/spec:
+    get:
+      operationId: getBuildSpecSnapshot
+      summary: 실행에 사용한 canonical BuildSpec snapshot 조회
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: redaction된 canonical buildspec.yaml 본문과 SHA-256 digest
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BuildSpecSnapshotResponse"
+        "400":
+          description: 경로 안전하지 않은 run_id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: 해당 run의 소유자가 아님
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: 해당 run이 없거나 legacy run에 snapshot이 없음
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: snapshot 파일을 읽거나 UTF-8로 해석할 수 없음
           content:
             application/json:
               schema:
@@ -744,6 +784,23 @@ components:
           type: [string, "null"]
         created_by:
           type: [string, "null"]
+
+    BuildSpecSnapshotResponse:
+      type: object
+      required: [run_id, spec, spec_digest]
+      additionalProperties: false
+      properties:
+        run_id:
+          type: string
+        spec:
+          type: string
+          description: credential 값이 redaction된 canonical YAML
+        spec_digest:
+          type: string
+          pattern: '^sha256:[0-9a-f]{64}$'
+          description: >-
+            실제 저장된 redaction 후 canonical buildspec.yaml bytes의 SHA-256.
+            credential 값만 다른 spec은 같은 digest가 될 수 있다.
 
     BuildSummary:
       type: object

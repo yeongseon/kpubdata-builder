@@ -37,6 +37,7 @@ v0.4 Builder service는 동기식 실행 모델을 유지합니다.
 | BuildSpec 검증 실패 | 문제 목록을 포함한 입력 오류로 처리 |
 | preview source 실패 | HTTP 요청 자체는 성공할 수 있으며, source별 `status`/`error`로 실패를 표현 |
 | build source 실패 | upstream/source 의존 실패로 처리하고 가능한 경우 manifest를 남김 |
+| run별 BuildSpec 조회 | `GET /builds/{run_id}/spec`으로 redaction된 canonical YAML과 그 bytes의 digest를 반환 |
 | 인증 실패 | `401`은 재인증 대상, `403`은 권한 요청 대상, `503`은 JWKS 일시 장애 대상 |
 
 정책과 구현이 다르면 구현 각주를 늘리지 말고 다음 순서로 정리합니다.
@@ -57,6 +58,14 @@ v0.4 Builder service는 동기식 실행 모델을 유지합니다.
   표현합니다.
 - 제거된 `transforms`, top-level `normalization_mode`,
   `sources[].normalization_mode`는 계약 필드가 아니며 파서가 명시적으로 거부합니다.
+- 검증을 통과해 실행을 시작한 spec은 pipeline 진입 전에
+  `{output_root}/{run_id}/buildspec.yaml`에 원자 저장됩니다. legacy run처럼 snapshot이
+  없는 경우 API는 manifest에서 추측·복원하지 않고 unavailable `404`를 반환합니다.
+- snapshot redaction은 범용 매핑의 명시적인 credential 키에만 적용됩니다. inline secret은
+  `<redacted>`로 대체되므로 해당 snapshot만으로 credential이 필요한 실행을 그대로 재실행할
+  수는 없으며, credential은 환경/서비스 설정에서 다시 공급해야 합니다.
+- `spec_digest`는 원본 객체가 아니라 **실제로 저장된 redaction 후 canonical snapshot bytes**의
+  SHA-256입니다. credential 값만 다른 두 spec은 의도적으로 같은 snapshot/digest가 될 수 있습니다.
 
 ## 4. 인증과 CORS
 
