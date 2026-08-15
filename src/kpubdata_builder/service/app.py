@@ -35,7 +35,7 @@ from ..credentials import (
     SQLiteCredentialRepository,
 )
 from ..errors import SpecLoadError, ValidationError
-from ..pipeline import preview_build, run_build
+from ..pipeline import DEFAULT_PREVIEW_SEED, SampleMode, preview_build, run_build
 from ..quality import QualityCheckResult
 from ..query.engine import QueryExecutionError, QueryTimeoutError
 from ..query.models import QueryRequest, QueryStage
@@ -75,6 +75,12 @@ logger = logging.getLogger(__name__)
 _CREDENTIAL_MASTER_KEY_ENV = "KPUBDATA_BUILDER_CREDENTIAL_MASTER_KEY"
 _PROVIDER_TEST_TIMEOUT_ENV = "KPUBDATA_BUILDER_PROVIDER_TEST_TIMEOUT"
 _DEFAULT_PROVIDER_TEST_TIMEOUT = 10.0
+
+# /preview의 limit 방어적 상한 (#497). 기존에는 상한이 없었다 — Preview는 전체
+# dataset을 메모리에 올린 뒤 slice하므로 limit 자체가 fetch량을 줄이지는 않지만,
+# 응답에 실리는 sample/diff 크기는 이 값으로 명확히 bound한다. 값은 stage
+# preview의 기존 상한(MAX_STAGE_PREVIEW_LIMIT, service/stages.py)과 맞췄다.
+MAX_PREVIEW_LIMIT = 1000
 
 
 @runtime_checkable
@@ -237,7 +243,10 @@ def _strip_internal_fields(entries: list[_BuildListEntry]) -> list[_BuildListEnt
 # 1.4.0 -> 1.5.0: Dataset Catalog·Detail·Stage Summary API 추가 (#488, additive).
 # 1.5.0 -> 1.6.0: 구조화된 Quality/Schema Drift 결과, quality history/detail API 추가
 # (#486, additive — 기존 엔드포인트는 변경되지 않는다).
-API_CONTRACT_VERSION = "1.8.0"
+# 1.8.0 -> 1.9.0: POST /preview에 Source↔Silver diff와 sample_mode(first/random)
+# 옵션 추가 (#497, additive — 기존 필드는 유지된다). limit 상한(1000) 신규 도입은
+# behavioral tightening(이전엔 상한 없음) — 그 이상 값은 400.
+API_CONTRACT_VERSION = "1.9.0"
 
 
 @dataclass(frozen=True)
@@ -617,11 +626,19 @@ class BuilderService:
         spec_yaml: str,
         *,
         limit: int = DEFAULT_PREVIEW_LIMIT,
+        sample_mode: str = "first",
+        seed: int = DEFAULT_PREVIEW_SEED,
         principal: Principal | None = None,
     ) -> ServiceResponse:
-        """각 소스의 스키마와 샘플 행을 산출한다 (파일 미기록)."""
-        if limit < 1:
-            return ServiceResponse(400, {"error": "'limit' must be a positive integer"})
+        """각 소스의 스키마와 샘플 행, Source↔Silver diff를 산출한다 (파일 미기록, #497)."""
+        if limit < 1 or limit > MAX_PREVIEW_LIMIT:
+            return ServiceResponse(
+                400, {"error": f"'limit' must be a positive integer up to {MAX_PREVIEW_LIMIT}"}
+            )
+        if sample_mode not in ("first", "random"):
+            return ServiceResponse(400, {"error": "'sample_mode' must be 'first' or 'random'"})
+        if not isinstance(seed, int) or isinstance(seed, bool):
+            return ServiceResponse(400, {"error": "'seed' must be an integer"})
         spec_or_error = self._load_validated(spec_yaml)
         if isinstance(spec_or_error, ServiceResponse):
             return spec_or_error
@@ -643,7 +660,13 @@ class BuilderService:
         except Exception:
             return ServiceResponse(502, {"error": "provider client unavailable"})
         try:
-            result = preview_build(spec_or_error, client=client, limit=limit)
+            result = preview_build(
+                spec_or_error,
+                client=client,
+                limit=limit,
+                sample_mode=cast(SampleMode, sample_mode),
+                seed=seed,
+            )
         finally:
             _close_request_client(client)
         previews: list[JsonValue] = [
@@ -670,6 +693,31 @@ class BuilderService:
                 "quality_results": cast(
                     JsonValue, [_quality_result_to_json(r) for r in p.quality_results]
                 ),
+                "source_sample": list(p.source_sample),
+                "sample_mode": p.sample_mode,
+                "diff_available": p.diff_available,
+                "diffs": cast(
+                    JsonValue,
+                    [
+                        {
+                            "row": d.row,
+                            "column": d.column,
+                            "before": d.before,
+                            "after": d.after,
+                            "transform": d.transform,
+                        }
+                        for d in p.diffs
+                    ],
+                ),
+                "transform_summary": (
+                    {
+                        "changed_cells": p.transform_summary.changed_cells,
+                        "changed_rows": p.transform_summary.changed_rows,
+                    }
+                    if p.transform_summary is not None
+                    else None
+                ),
+                "diff_truncated": p.diff_truncated,
             }
             for p in result.previews
         ]
@@ -1441,16 +1489,43 @@ def dispatch(
         spec = _spec_from_body(body)
         if isinstance(spec, ServiceResponse):
             return spec
-        # limit이 명시되면 양의 정수여야 한다 — 잘못된 값을 조용히 기본값으로 떨어뜨리지 않는다.
+        # limit이 명시되면 양의 정수(상한 이내)여야 한다 — 잘못된 값을 조용히
+        # 기본값으로 떨어뜨리지 않는다.
         if body is not None and "limit" in body:
             limit_value = body["limit"]
             # bool은 int의 하위 타입이지만 limit 의미가 없으므로 거부.
-            if not isinstance(limit_value, int) or isinstance(limit_value, bool) or limit_value < 1:
-                return ServiceResponse(400, {"error": "'limit' must be a positive integer"})
+            if (
+                not isinstance(limit_value, int)
+                or isinstance(limit_value, bool)
+                or limit_value < 1
+                or limit_value > MAX_PREVIEW_LIMIT
+            ):
+                return ServiceResponse(
+                    400,
+                    {"error": f"'limit' must be a positive integer up to {MAX_PREVIEW_LIMIT}"},
+                )
             limit = limit_value
         else:
             limit = DEFAULT_PREVIEW_LIMIT
-        return service.preview(spec, limit=limit, principal=principal)
+        # sample_mode/seed도 같은 원칙: 잘못된 값을 조용히 기본값으로 떨어뜨리지 않는다 (#497).
+        sample_mode = "first"
+        if body is not None and "sample_mode" in body:
+            sample_mode_value = body["sample_mode"]
+            if not isinstance(sample_mode_value, str) or sample_mode_value not in (
+                "first",
+                "random",
+            ):
+                return ServiceResponse(400, {"error": "'sample_mode' must be 'first' or 'random'"})
+            sample_mode = sample_mode_value
+        seed = DEFAULT_PREVIEW_SEED
+        if body is not None and "seed" in body:
+            seed_value = body["seed"]
+            if not isinstance(seed_value, int) or isinstance(seed_value, bool):
+                return ServiceResponse(400, {"error": "'seed' must be an integer"})
+            seed = seed_value
+        return service.preview(
+            spec, limit=limit, sample_mode=sample_mode, seed=seed, principal=principal
+        )
 
     if method == "POST" and path == "/build":
         spec = _spec_from_body(body)

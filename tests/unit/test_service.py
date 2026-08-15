@@ -8,6 +8,7 @@ import threading
 import urllib.error
 import urllib.request
 from collections.abc import Iterable
+from datetime import date, datetime, timedelta, timezone
 from http.server import HTTPServer
 from pathlib import Path
 from typing import cast
@@ -183,6 +184,64 @@ class TestPreview:
         assert resp.status_code == 200
         assert client.close_calls == 1
 
+    def test_returns_source_sample_and_diff_fields(self, tmp_path: Path) -> None:
+        # #497: 기존 필드(sample/total_rows/statistics)와 함께 신규 필드가 실린다.
+        resp = _service(tmp_path).preview(VALID_SPEC_YAML, limit=2)
+        assert resp.status_code == 200
+        preview = resp.body["previews"][0]
+        assert preview["sample_mode"] == "first"
+        assert preview["diff_available"] is True
+        assert isinstance(preview["source_sample"], list)
+        assert isinstance(preview["diffs"], list)
+        assert preview["transform_summary"] == {"changed_cells": 0, "changed_rows": 0}
+        assert preview["diff_truncated"] is False
+
+    def test_random_sample_mode_is_reproducible_through_service(self, tmp_path: Path) -> None:
+        client = _FakeClient({"datago.air_quality": [{"id": str(i)} for i in range(50)]})
+        service = BuilderService(output_root=tmp_path, client_factory=lambda: client)
+
+        first = service.preview(VALID_SPEC_YAML, limit=5, sample_mode="random", seed=3)
+        second = service.preview(VALID_SPEC_YAML, limit=5, sample_mode="random", seed=3)
+
+        assert first.status_code == second.status_code == 200
+        assert (
+            first.body["previews"][0]["source_sample"]
+            == second.body["previews"][0]["source_sample"]
+        )
+        assert first.body["previews"][0]["sample_mode"] == "random"
+
+    def test_wide_dataset_diffs_are_truncated_over_the_wire(self, tmp_path: Path) -> None:
+        # #497 sample/diff memory 상한: limit(행 수)만으로는 wide dataset의 diff
+        # item 개수를 막지 못하므로, 실제 서비스 응답에서도 diffs가 상한을 지키고
+        # diff_truncated=true를 실어 클라이언트가 전체 diff로 오인하지 않게 한다.
+        from kpubdata_builder.pipeline import MAX_PREVIEW_DIFF_ITEMS
+
+        column_count = MAX_PREVIEW_DIFF_ITEMS + 50
+        columns = [f"c{i}" for i in range(column_count)]
+        spec_yaml = (
+            "dataset_id: dataset.wide\n"
+            "title: Wide Dataset\n"
+            "description: many columns\n"
+            "sources:\n"
+            "  - provider: datago\n"
+            "    dataset: air_quality\n"
+            "    schema:\n"
+            "      casts:\n" + "".join(f"        {c}: int\n" for c in columns) + "exports:\n"
+            "  - kind: jsonl\n"
+            "    output_path: out/data.jsonl\n"
+        )
+        client = _FakeClient({"datago.air_quality": [dict.fromkeys(columns, "1")]})
+        service = BuilderService(output_root=tmp_path, client_factory=lambda: client)
+
+        resp = service.preview(spec_yaml, limit=1)
+
+        assert resp.status_code == 200
+        preview = resp.body["previews"][0]
+        assert preview["diff_available"] is True
+        assert len(preview["diffs"]) == MAX_PREVIEW_DIFF_ITEMS
+        assert preview["diff_truncated"] is True
+        assert preview["transform_summary"]["changed_cells"] == column_count
+
 
 class TestPreviewLimitGuard:
     def test_preview_direct_call_rejects_zero_limit(self, tmp_path: Path) -> None:
@@ -194,6 +253,40 @@ class TestPreviewLimitGuard:
     def test_preview_direct_call_rejects_negative_limit(self, tmp_path: Path) -> None:
         resp = _service(tmp_path).preview(VALID_SPEC_YAML, limit=-5)
         assert resp.status_code == 400
+
+    def test_preview_direct_call_rejects_limit_above_max(self, tmp_path: Path) -> None:
+        # #497: limit 상한(1000) 신규 도입 — 이전엔 상한이 없었다(behavioral tightening).
+        from kpubdata_builder.service.app import MAX_PREVIEW_LIMIT
+
+        resp = _service(tmp_path).preview(VALID_SPEC_YAML, limit=MAX_PREVIEW_LIMIT + 1)
+        assert resp.status_code == 400
+        assert "limit" in str(resp.body.get("error", ""))
+
+    def test_preview_direct_call_accepts_limit_at_max(self, tmp_path: Path) -> None:
+        from kpubdata_builder.service.app import MAX_PREVIEW_LIMIT
+
+        resp = _service(tmp_path).preview(VALID_SPEC_YAML, limit=MAX_PREVIEW_LIMIT)
+        assert resp.status_code == 200
+
+    def test_preview_direct_call_rejects_invalid_sample_mode(self, tmp_path: Path) -> None:
+        resp = _service(tmp_path).preview(VALID_SPEC_YAML, sample_mode="shuffle")
+        assert resp.status_code == 400
+        assert "sample_mode" in str(resp.body.get("error", ""))
+
+    def test_preview_direct_call_rejects_non_int_seed(self, tmp_path: Path) -> None:
+        resp = _service(tmp_path).preview(
+            VALID_SPEC_YAML, sample_mode="random", seed=cast(int, "7")
+        )
+        assert resp.status_code == 400
+        assert "seed" in str(resp.body.get("error", ""))
+
+    def test_preview_direct_call_rejects_bool_seed(self, tmp_path: Path) -> None:
+        # bool은 int의 하위 타입이지만 seed 의미가 없으므로 거부한다.
+        resp = _service(tmp_path).preview(
+            VALID_SPEC_YAML, sample_mode="random", seed=cast(int, True)
+        )
+        assert resp.status_code == 400
+        assert "seed" in str(resp.body.get("error", ""))
 
 
 class TestBuild:
@@ -360,6 +453,97 @@ class TestDispatch:
         )
         assert resp.status_code == 400
 
+    def test_preview_rejects_limit_above_max(self, tmp_path: Path) -> None:
+        # #497: 신규 상한(1000) 도입 — 이전 client가 그 이상을 보내던 관행은 깨진다
+        # (behavioral tightening, 이전엔 상한이 없었다).
+        from kpubdata_builder.service.app import MAX_PREVIEW_LIMIT
+
+        resp = dispatch(
+            _service(tmp_path),
+            "POST",
+            "/preview",
+            {"spec": VALID_SPEC_YAML, "limit": MAX_PREVIEW_LIMIT + 1},
+        )
+        assert resp.status_code == 400
+        assert "limit" in str(resp.body.get("error", ""))
+
+    def test_preview_accepts_limit_at_max(self, tmp_path: Path) -> None:
+        from kpubdata_builder.service.app import MAX_PREVIEW_LIMIT
+
+        resp = dispatch(
+            _service(tmp_path),
+            "POST",
+            "/preview",
+            {"spec": VALID_SPEC_YAML, "limit": MAX_PREVIEW_LIMIT},
+        )
+        assert resp.status_code == 200
+
+    def test_preview_rejects_invalid_sample_mode(self, tmp_path: Path) -> None:
+        resp = dispatch(
+            _service(tmp_path),
+            "POST",
+            "/preview",
+            {"spec": VALID_SPEC_YAML, "sample_mode": "shuffle"},
+        )
+        assert resp.status_code == 400
+        assert "sample_mode" in str(resp.body.get("error", ""))
+
+    def test_preview_rejects_non_string_sample_mode(self, tmp_path: Path) -> None:
+        resp = dispatch(
+            _service(tmp_path),
+            "POST",
+            "/preview",
+            {"spec": VALID_SPEC_YAML, "sample_mode": 1},
+        )
+        assert resp.status_code == 400
+        assert "sample_mode" in str(resp.body.get("error", ""))
+
+    def test_preview_rejects_non_int_seed(self, tmp_path: Path) -> None:
+        resp = dispatch(
+            _service(tmp_path),
+            "POST",
+            "/preview",
+            {"spec": VALID_SPEC_YAML, "sample_mode": "random", "seed": "7"},
+        )
+        assert resp.status_code == 400
+        assert "seed" in str(resp.body.get("error", ""))
+
+    def test_preview_rejects_bool_seed(self, tmp_path: Path) -> None:
+        # bool은 int의 하위 타입이지만 seed로는 거부한다.
+        resp = dispatch(
+            _service(tmp_path),
+            "POST",
+            "/preview",
+            {"spec": VALID_SPEC_YAML, "sample_mode": "random", "seed": True},
+        )
+        assert resp.status_code == 400
+        assert "seed" in str(resp.body.get("error", ""))
+
+    def test_preview_dispatch_passes_sample_mode_and_seed_through(self, tmp_path: Path) -> None:
+        client = _FakeClient({"datago.air_quality": [{"id": str(i)} for i in range(20)]})
+        service = BuilderService(output_root=tmp_path, client_factory=lambda: client)
+
+        resp = dispatch(
+            service,
+            "POST",
+            "/preview",
+            {"spec": VALID_SPEC_YAML, "limit": 3, "sample_mode": "random", "seed": 5},
+        )
+
+        assert resp.status_code == 200
+        assert resp.body["previews"][0]["sample_mode"] == "random"
+        assert len(resp.body["previews"][0]["source_sample"]) == 3
+
+    def test_preview_dispatch_defaults_sample_mode_to_first_when_omitted(
+        self, tmp_path: Path
+    ) -> None:
+        # 기존 client가 sample_mode/seed 없이 호출해도 기존과 동일하게 동작한다.
+        resp = dispatch(
+            _service(tmp_path), "POST", "/preview", {"spec": VALID_SPEC_YAML, "limit": 1}
+        )
+        assert resp.status_code == 200
+        assert resp.body["previews"][0]["sample_mode"] == "first"
+
     def test_build_rejects_non_string_run_id(self, tmp_path: Path) -> None:
         # run_id가 문자열이 아니면 조용히 자동 생성 id로 떨어뜨리지 않고 400 (#185).
         resp = dispatch(
@@ -509,6 +693,139 @@ def http_server_with_auth(
         server.shutdown()
         server.server_close()
         thread.join(timeout=1.0)
+
+
+class TestPreviewWireSerialization:
+    """POST /preview 실제 wire JSON 직렬화를 검증한다 (#497, 계약 섹션 6).
+
+    ``BuilderService.preview()``가 반환하는 dict는 date/datetime 등 파이썬
+    객체를 그대로 담고 있을 수 있어(#440부터의 기존 ``sample`` 필드와 동일한
+    패턴), 실제 HTTP 응답 바이트까지 확인해야 ``service/http.py``의
+    ``json.dumps(default=str)`` 경로가 ``source_sample``/``diffs``에도 올바르게
+    적용되는지 알 수 있다. 별도 serializer를 새로 만들지 않고 기존 경로를
+    그대로 재사용한다.
+    """
+
+    def _post_preview(
+        self, service: BuilderService, spec_yaml: str, **body_extra: object
+    ) -> dict[str, object]:
+        server = HTTPServer(("127.0.0.1", 0), make_handler(service))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base_url = f"http://{server.server_address[0]}:{server.server_address[1]}"
+        try:
+            req = urllib.request.Request(
+                f"{base_url}/preview",
+                data=json.dumps({"spec": spec_yaml, **body_extra}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=2.0) as response:
+                return cast(dict[str, object], json.loads(response.read()))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=1.0)
+
+    def test_null_int_float_bool_string_date_and_datetime_survive_the_wire(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("KPUBDATA_BUILDER_DEV_MODE", "true")
+        # casts를 선언하지 않고 raw record에 이미 파이썬 타입 값을 실어, kpubdata
+        # provider가 이미 typed 값을 돌려주는 흔한 경우를 흉내낸다 — records_to_dataframe가
+        # 이 타입들을 그대로 추론해 실어 나른다.
+        row: dict[str, JsonValue] = {
+            "id": "1",
+            "n": None,
+            "count": 3,
+            "ratio": 1.5,
+            "active": True,
+            "label": "seoul",
+            "d": date(2025, 1, 1),  # type: ignore[dict-item]
+            "ts": datetime(2025, 1, 1, 12, 30, 0),  # type: ignore[dict-item]
+        }
+        client = _FakeClient({"datago.air_quality": [row]})
+        service = BuilderService(output_root=tmp_path, client_factory=lambda: client)
+
+        body = self._post_preview(service, VALID_SPEC_YAML, limit=1)
+
+        preview = cast(dict[str, object], cast(list[object], body["previews"])[0])
+        source_row = cast(dict[str, object], cast(list[object], preview["source_sample"])[0])
+        assert source_row["n"] is None
+        assert source_row["count"] == 3
+        assert source_row["ratio"] == 1.5
+        assert source_row["active"] is True
+        assert source_row["label"] == "seoul"
+        # date/naive datetime은 http.py의 json.dumps(default=str)을 거쳐 str()
+        # 형식(공백 구분)의 문자열이 된다 — 기존 sample 필드와 동일 규칙(#497은 이를
+        # 재사용할 뿐 새 규칙을 만들지 않는다).
+        assert source_row["d"] == "2025-01-01"
+        assert source_row["ts"] == "2025-01-01 12:30:00"
+
+        transformed_row = cast(dict[str, object], cast(list[object], preview["sample"])[0])
+        assert transformed_row["d"] == "2025-01-01"
+        assert transformed_row["ts"] == "2025-01-01 12:30:00"
+
+    def test_timezone_aware_datetime_survives_the_wire(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # test_silver.py::test_serializes_timezone_aware_datetime_values_as_iso_strings와
+        # 같은 패턴(직접 aware datetime 값을 실어 polars가 UTC로 정규화하게 한다).
+        monkeypatch.setenv("KPUBDATA_BUILDER_DEV_MODE", "true")
+        kst = timezone(timedelta(hours=9))
+        row: dict[str, JsonValue] = {
+            "id": "1",
+            "tz": datetime(2025, 1, 1, 21, 30, 0, tzinfo=kst),  # type: ignore[dict-item]
+        }
+        client = _FakeClient({"datago.air_quality": [row]})
+        service = BuilderService(output_root=tmp_path, client_factory=lambda: client)
+
+        body = self._post_preview(service, VALID_SPEC_YAML, limit=1)
+
+        preview = cast(dict[str, object], cast(list[object], body["previews"])[0])
+        source_row = cast(dict[str, object], cast(list[object], preview["source_sample"])[0])
+        transformed_row = cast(dict[str, object], cast(list[object], preview["sample"])[0])
+        # source_sample은 bronze raw record를 그대로 노출하므로 원래 KST offset을
+        # 유지하고, Silver(transformed)는 polars가 UTC로 정규화한다 — KST 21:30과
+        # UTC 12:30은 같은 instant이므로 diff는 없지만(값 자체는 동일), 두 표현이
+        # 서로 다른 offset의 str() 문자열로 각자 정확히 직렬화되는지 확인한다.
+        assert source_row["tz"] == "2025-01-01 21:30:00+09:00"
+        assert transformed_row["tz"] == "2025-01-01 12:30:00+00:00"
+
+    def test_diff_before_after_carry_wire_correct_types(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # declared cast로 실제 diff item이 만들어질 때도 before(str)/after(int)가
+        # 각자의 실제 JSON 타입으로 wire에 실린다(#497 diff item 예시와 동일한 형태).
+        monkeypatch.setenv("KPUBDATA_BUILDER_DEV_MODE", "true")
+        spec_yaml = (
+            """
+dataset_id: dataset.sample
+title: Sample Dataset
+description: Sample description
+sources:
+  - provider: datago
+    dataset: air_quality
+    schema:
+      casts:
+        v: int
+exports:
+  - kind: jsonl
+    output_path: out/data.jsonl
+""".strip()
+            + "\n"
+        )
+        client = _FakeClient({"datago.air_quality": [{"id": "1", "v": "128000"}]})
+        service = BuilderService(output_root=tmp_path, client_factory=lambda: client)
+
+        body = self._post_preview(service, spec_yaml, limit=1)
+
+        preview = cast(dict[str, object], cast(list[object], body["previews"])[0])
+        diffs = cast(list[dict[str, object]], preview["diffs"])
+        assert len(diffs) == 1
+        assert diffs[0]["before"] == "128000"
+        assert diffs[0]["after"] == 128000
+        assert diffs[0]["transform"] == "cast:int"
 
 
 class TestHttpAdapter:
