@@ -9,18 +9,34 @@ Bronze → Silver → Gold → (Export) → Manifest 흐름을 묶는 orchestrat
     - BuildResult / SourceBuildOutcome: 실행 결과 모델
     - preview_build: 파일 미기록 미리보기 진입점
     - PreviewResult / SourcePreview: 미리보기 결과 모델
+    - PreviewDiffItem / PreviewTransformSummary / SampleMode: Source↔Silver diff·sampling
+      결과 모델 (#497)
 """
 
 from __future__ import annotations
 
 from .context import BuildContext
 from .orchestrator import BuildResult, SourceBuildOutcome, run_build
-from .preview import PreviewResult, SourcePreview, preview_build
+from .preview import (
+    DEFAULT_PREVIEW_SEED,
+    MAX_PREVIEW_DIFF_ITEMS,
+    PreviewDiffItem,
+    PreviewResult,
+    PreviewTransformSummary,
+    SampleMode,
+    SourcePreview,
+    preview_build,
+)
 
 __all__ = [
+    "DEFAULT_PREVIEW_SEED",
+    "MAX_PREVIEW_DIFF_ITEMS",
     "BuildContext",
     "BuildResult",
+    "PreviewDiffItem",
     "PreviewResult",
+    "PreviewTransformSummary",
+    "SampleMode",
     "SourceBuildOutcome",
     "SourcePreview",
     "preview_build",

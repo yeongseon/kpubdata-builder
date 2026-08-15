@@ -290,6 +290,44 @@ def test_source_preview_schema_covers_success_and_failure_shape() -> None:
     }
 
 
+def test_source_preview_schema_covers_diff_and_sampling_shape() -> None:
+    """#497: source_sample/sample_mode/diff_available/diffs/transform_summary가
+    항상 반환되는 필수 필드로 계약에 고정돼 있는지, PreviewDiffItem이 잘못된
+    index 비교를 만들지 않는다는 계약(transform nullable)을 지키는지 확인한다."""
+    schemas = _load_contract()["components"]["schemas"]
+    preview = schemas["SourcePreview"]
+
+    assert {
+        "source_sample",
+        "sample_mode",
+        "diff_available",
+        "diffs",
+        "transform_summary",
+        "diff_truncated",
+    } <= set(preview["required"])
+    assert preview["properties"]["sample_mode"]["enum"] == ["first", "random"]
+    assert preview["properties"]["diff_available"]["type"] == "boolean"
+    assert preview["properties"]["diffs"]["items"]["$ref"].endswith("/PreviewDiffItem")
+    assert preview["properties"]["diff_truncated"]["type"] == "boolean"
+
+    diff_item = schemas["PreviewDiffItem"]
+    assert set(diff_item["required"]) == {"row", "column", "before", "after", "transform"}
+    assert diff_item["properties"]["transform"]["type"] == ["string", "null"]
+
+    summary = schemas["PreviewTransformSummary"]
+    assert set(summary["required"]) == {"changed_cells", "changed_rows"}
+
+
+def test_preview_request_schema_declares_bounded_limit_and_sample_mode() -> None:
+    """#497: limit 상한(1000, behavioral tightening)과 sample_mode/seed가 계약에 반영됐는지."""
+    preview_request = _load_contract()["components"]["schemas"]["PreviewRequest"]
+
+    assert preview_request["properties"]["limit"]["maximum"] == 1000
+    assert preview_request["properties"]["sample_mode"]["enum"] == ["first", "random"]
+    assert preview_request["properties"]["sample_mode"]["default"] == "first"
+    assert preview_request["properties"]["seed"]["type"] == "integer"
+
+
 # 계약이 기술하는 모든 오퍼레이션은 BuilderService에 실제로 구현돼 있어야 한다.
 # 구현 경로 이름은 계약과 1:1로 일치한다(#226: aspirational 비동기/publish 라우트 제거).
 _IMPLEMENTED_OPERATIONS = {
@@ -793,6 +831,70 @@ class TestResponseConformance:
             _conform_service(tmp_path), "POST", "/preview", {"spec": _CONFORM_SPEC_YAML, "limit": 0}
         )
         assert resp.status_code == 400
+        _assert_conforms(resp, "/preview", "POST")
+
+    def test_preview_400_limit_above_max(self, tmp_path: Path) -> None:
+        # #497: limit 상한(1000) 신규 도입 — behavioral tightening.
+        resp = dispatch(
+            _conform_service(tmp_path),
+            "POST",
+            "/preview",
+            {"spec": _CONFORM_SPEC_YAML, "limit": 1001},
+        )
+        assert resp.status_code == 400
+        _assert_conforms(resp, "/preview", "POST")
+
+    def test_preview_200_random_sample_mode_with_diff(self, tmp_path: Path) -> None:
+        # #497: sample_mode=random + diff가 실제 발생하는 응답도 계약을 만족하는지.
+        resp = dispatch(
+            _conform_service(tmp_path),
+            "POST",
+            "/preview",
+            {"spec": _CONFORM_SPEC_YAML, "limit": 2, "sample_mode": "random", "seed": 1},
+        )
+        assert resp.status_code == 200
+        previews = cast(list[dict[str, JsonValue]], resp.body["previews"])
+        assert previews[0]["sample_mode"] == "random"
+        assert previews[0]["diff_available"] is True
+        _assert_conforms(resp, "/preview", "POST")
+
+    def test_preview_400_bad_sample_mode(self, tmp_path: Path) -> None:
+        resp = dispatch(
+            _conform_service(tmp_path),
+            "POST",
+            "/preview",
+            {"spec": _CONFORM_SPEC_YAML, "sample_mode": "shuffle"},
+        )
+        assert resp.status_code == 400
+        _assert_conforms(resp, "/preview", "POST")
+
+    def test_preview_200_wide_dataset_diff_truncated(self, tmp_path: Path) -> None:
+        # #497 sample/diff memory 상한: diffs가 실제로 잘려도(diff_truncated=true)
+        # 응답이 여전히 계약을 만족하는지 wire-level로 확인한다.
+        from kpubdata_builder.pipeline import MAX_PREVIEW_DIFF_ITEMS
+
+        columns = [f"c{i}" for i in range(MAX_PREVIEW_DIFF_ITEMS + 10)]
+        wide_spec_yaml = (
+            "dataset_id: dataset.wide\n"
+            "title: Wide Conform\n"
+            "description: wide dataset conformance fixture\n"
+            "sources:\n"
+            "  - provider: datago\n"
+            "    dataset: air_quality\n"
+            "    schema:\n"
+            "      casts:\n" + "".join(f"        {c}: int\n" for c in columns) + "exports:\n"
+            "  - kind: jsonl\n"
+            "    output_path: out/data.jsonl\n"
+        )
+        client = _FakeClient({"datago.air_quality": [dict.fromkeys(columns, "1")]})
+        service = BuilderService(output_root=tmp_path, client_factory=lambda: client)
+
+        resp = dispatch(service, "POST", "/preview", {"spec": wide_spec_yaml, "limit": 1})
+
+        assert resp.status_code == 200
+        previews = cast(list[dict[str, JsonValue]], resp.body["previews"])
+        assert len(cast(list[object], previews[0]["diffs"])) == MAX_PREVIEW_DIFF_ITEMS
+        assert previews[0]["diff_truncated"] is True
         _assert_conforms(resp, "/preview", "POST")
 
     def test_build_200_success(self, tmp_path: Path) -> None:
