@@ -469,6 +469,8 @@ class TestRebuildIndex:
 
         (tmp_path / "bad").mkdir()
         (tmp_path / "bad" / "manifest.json").write_text("invalid json")
+        (tmp_path / "binary").mkdir()
+        (tmp_path / "binary" / "manifest.json").write_bytes(b"\xff\xfe\x00binary")
 
         count = rebuild_index(tmp_path)
         assert count == 1

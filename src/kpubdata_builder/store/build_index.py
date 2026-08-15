@@ -359,7 +359,7 @@ def rebuild_index(output_root: Path) -> int:
 
             try:
                 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
+            except (json.JSONDecodeError, UnicodeDecodeError, OSError):
                 continue
 
             status = "failed" if manifest.get("errors") else "ok"
