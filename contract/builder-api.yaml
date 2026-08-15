@@ -65,6 +65,24 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/CatalogResponse"
+              examples:
+                PublicDataCatalog:
+                  summary: 인증 필요 여부를 포함한 공공데이터 카탈로그
+                  value:
+                    providers:
+                      - name: datago
+                        datasets:
+                          - name: air_quality
+                            title: 대기오염정보
+                            requires_service_key: true
+                          - name: village_fcst
+                            title: 단기예보
+                            requires_service_key: true
+                      - name: ecos
+                        datasets:
+                          - name: key_statistic_list
+                            title: 주요 경제지표
+                            requires_service_key: false
         "401":
           $ref: "#/components/responses/Unauthorized"
         "502":
@@ -101,6 +119,32 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ProviderTestResponse"
+              examples:
+                Connected:
+                  summary: 저장된 credential로 연결 성공
+                  value:
+                    provider: datago
+                    status: connected
+                    configured: true
+                    latency_ms: 84
+                    checked_at: "2026-08-15T09:30:00+00:00"
+                NotConfigured:
+                  summary: credential이 아직 설정되지 않음
+                  value:
+                    provider: datago
+                    status: not_configured
+                    configured: false
+                    latency_ms: 0
+                    checked_at: "2026-08-15T09:30:00+00:00"
+                ProviderTimeout:
+                  summary: Provider 연결 제한 시간 초과
+                  value:
+                    provider: datago
+                    status: failed
+                    configured: true
+                    latency_ms: 10003
+                    checked_at: "2026-08-15T09:30:10+00:00"
+                    error_category: timeout
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -123,6 +167,25 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ProviderTestResponse"
+              examples:
+                Connected:
+                  summary: lightweight 연결 시험 성공
+                  value:
+                    provider: datago
+                    status: connected
+                    configured: true
+                    latency_ms: 91
+                    checked_at: "2026-08-15T09:30:00+00:00"
+                AuthenticationFailed:
+                  summary: Provider가 credential을 거부함
+                  value:
+                    provider: datago
+                    status: failed
+                    configured: true
+                    latency_ms: 72
+                    checked_at: "2026-08-15T09:30:00+00:00"
+                    error_category: auth
+                    response_code: 401
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -145,6 +208,19 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ProviderCredentialGetResponse"
+              examples:
+                Configured:
+                  summary: credential 원문을 노출하지 않는 저장 상태
+                  value:
+                    configured: true
+                    masked: "********"
+                    updated_at: "2026-08-15T09:25:00+00:00"
+                NotConfigured:
+                  summary: 저장된 credential 없음
+                  value:
+                    configured: false
+                    masked: null
+                    updated_at: null
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -166,6 +242,11 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/ProviderCredentialPutRequest"
+            examples:
+              ReplaceCredential:
+                summary: 문서용 placeholder credential 저장
+                value:
+                  credential: replace-with-your-provider-key
       responses:
         "200":
           description: 저장된 credential 메타데이터. 원문은 echo하지 않는다.
@@ -173,6 +254,14 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ProviderCredentialMetadata"
+              examples:
+                Stored:
+                  summary: 원문을 echo하지 않는 저장 결과
+                  value:
+                    provider: datago
+                    configured: true
+                    masked: "********"
+                    updated_at: "2026-08-15T09:25:00+00:00"
         "400":
           description: credential 누락, 빈 값, 또는 허용되지 않은 필드
         "401":
@@ -197,6 +286,14 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ProviderCredentialMetadata"
+              examples:
+                Deleted:
+                  summary: idempotent 삭제 결과
+                  value:
+                    provider: datago
+                    configured: false
+                    masked: null
+                    updated_at: null
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -218,6 +315,23 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/SpecRequest"
+            examples:
+              SeoulAirQuality:
+                summary: 서울 대기질 BuildSpec 검증
+                value:
+                  spec: |
+                    dataset_id: seoul-air-quality
+                    title: 서울 대기질 관측
+                    description: 서울 지역 측정소별 대기오염 관측 데이터
+                    sources:
+                      - provider: datago
+                        dataset: air_quality
+                        alias: air
+                        params:
+                          sidoName: 서울
+                    exports:
+                      - kind: jsonl
+                        output_path: artifacts/air-quality.jsonl
       responses:
         "200":
           description: 검증 통과
@@ -225,12 +339,31 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ValidateResponse"
+              examples:
+                ValidSpec:
+                  summary: BuildSpec 검증 통과
+                  value:
+                    status: valid
+                    dataset_id: seoul-air-quality
+                    api_version: "1.8.0"
         "400":
           description: spec 파싱 실패 또는 검증 실패
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ValidationError"
+              examples:
+                MissingSources:
+                  summary: 필수 sources가 없는 BuildSpec
+                  value:
+                    status: invalid
+                    problems:
+                      - sources must contain at least one source
+                MalformedYaml:
+                  summary: YAML 파싱 실패
+                  value:
+                    status: error
+                    error: could not parse BuildSpec YAML
         "401":
           $ref: "#/components/responses/Unauthorized"
 
@@ -244,6 +377,22 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/PreviewRequest"
+            examples:
+              AirQualityPreview:
+                summary: 최대 2행의 대기질 preview 요청
+                value:
+                  spec: |
+                    dataset_id: seoul-air-quality
+                    title: 서울 대기질 관측
+                    description: 서울 지역 측정소별 대기오염 관측 데이터
+                    sources:
+                      - provider: datago
+                        dataset: air_quality
+                        alias: air
+                    exports:
+                      - kind: jsonl
+                        output_path: artifacts/air-quality.jsonl
+                  limit: 2
       responses:
         "200":
           description: preview 결과
@@ -251,6 +400,47 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/PreviewResponse"
+              examples:
+                AirQualityPreview:
+                  summary: 정규화된 스키마, 표본, 통계와 품질 결과
+                  value:
+                    dataset_id: seoul-air-quality
+                    previews:
+                      - source_key: air
+                        status: ok
+                        error: null
+                        schema:
+                          - name: station_name
+                            dtype: String
+                            nullable: false
+                            unique_count: 2
+                          - name: pm10_value
+                            dtype: Int64
+                            nullable: true
+                            unique_count: 2
+                        sample:
+                          - station_name: 종로구
+                            pm10_value: 31
+                          - station_name: 중구
+                            pm10_value: 28
+                        total_rows: 25
+                        statistics:
+                          row_count: 25
+                          null_counts:
+                            station_name: 0
+                            pm10_value: 1
+                          duplicate_rate: 0.0
+                        quality_results:
+                          - source_key: air
+                            category: row_count
+                            rule: min_rows
+                            column: null
+                            status: pass
+                            actual: 25
+                            threshold: 1
+                            affected_rows: null
+                            evaluated_rows: null
+                            detail: null
         "400":
           description: 잘못된 요청(spec 누락/검증 실패, limit 타입 오류 등)
           content:
@@ -259,6 +449,11 @@ paths:
                 oneOf:
                   - $ref: "#/components/schemas/Error"
                   - $ref: "#/components/schemas/ValidationError"
+              examples:
+                InvalidLimit:
+                  summary: 양수가 아닌 preview limit
+                  value:
+                    error: "'limit' must be a positive integer"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "502":
@@ -274,6 +469,22 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/BuildRequest"
+            examples:
+              BuildAirQuality:
+                summary: 명시적인 안전한 run_id로 동기 build 실행
+                value:
+                  spec: |
+                    dataset_id: seoul-air-quality
+                    title: 서울 대기질 관측
+                    description: 서울 지역 측정소별 대기오염 관측 데이터
+                    sources:
+                      - provider: datago
+                        dataset: air_quality
+                        alias: air
+                    exports:
+                      - kind: jsonl
+                        output_path: artifacts/air-quality.jsonl
+                  run_id: air-quality-20260815
       responses:
         "200":
           description: 모든 소스 성공
@@ -281,6 +492,19 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/BuildSuccessResponse"
+              examples:
+                BuildCompleted:
+                  summary: Bronze, Silver, Gold를 완료한 동기 build
+                  value:
+                    status: ok
+                    run_id: air-quality-20260815
+                    outcomes:
+                      - source_key: air
+                        status: ok
+                        stages_completed: [bronze, silver, gold]
+                        error: null
+                    manifest: build/air-quality-20260815/manifest.json
+                    api_version: "1.8.0"
         "400":
           description: 잘못된 요청(spec 누락/검증 실패, run_id 타입/경로 안전성 오류 등)
           content:
@@ -289,6 +513,11 @@ paths:
                 oneOf:
                   - $ref: "#/components/schemas/Error"
                   - $ref: "#/components/schemas/ValidationError"
+              examples:
+                UnsafeRunId:
+                  summary: 경로 구분자를 포함한 run_id
+                  value:
+                    error: run_id must be a path-safe single segment
         "401":
           $ref: "#/components/responses/Unauthorized"
         "502":
@@ -299,6 +528,20 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/BuildFailureResponse"
+              examples:
+                ProviderFetchFailed:
+                  summary: upstream fetch 실패 후 partial manifest를 남긴 build
+                  value:
+                    status: failed
+                    run_id: air-quality-20260815
+                    outcomes:
+                      - source_key: air
+                        status: failed
+                        stages_completed: []
+                        error: provider request failed
+                    manifest: build/air-quality-20260815/manifest.json
+                    api_version: "1.8.0"
+                    error: provider request failed
 
   /artifacts/{run_id}:
     get:
@@ -313,6 +556,16 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ArtifactsResponse"
+              examples:
+                BuildArtifacts:
+                  summary: run 디렉터리 기준 상대 경로 목록
+                  value:
+                    run_id: air-quality-20260815
+                    files:
+                      - buildspec.yaml
+                      - manifest.json
+                      - artifacts/air-quality.jsonl
+                      - silver/air/table.parquet
         "400":
           description: 경로 안전하지 않은 run_id
           content:
@@ -327,6 +580,11 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+              examples:
+                RunNotFound:
+                  summary: 존재하지 않는 run
+                  value:
+                    error: "run not found: missing-run"
 
   /builds/{run_id}/manifest:
     get:
@@ -341,6 +599,26 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/BuildManifest"
+              examples:
+                CompletedManifest:
+                  summary: secret과 내부 owner_id가 없는 완료 manifest
+                  value:
+                    build_id: air-quality-20260815
+                    started_at: "2026-08-15T09:30:00+00:00"
+                    finished_at: "2026-08-15T09:30:07+00:00"
+                    schema_version: "1.0"
+                    inputs: [air]
+                    outputs: [artifacts/air-quality.jsonl]
+                    warnings: []
+                    errors: []
+                    row_counts:
+                      air: 25
+                    inputs_fingerprint: "sha256:example-fingerprint"
+                    created_by: "oidc:example-user"
+                    quality_results:
+                      air: []
+                    schema_drift:
+                      air: []
         "400":
           description: 경로 안전하지 않은 run_id
           content:
@@ -355,6 +633,11 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+              examples:
+                ManifestNotFound:
+                  summary: manifest가 없는 run
+                  value:
+                    error: "manifest not found: missing-run"
         "500":
           description: manifest 파일을 읽거나 JSON으로 해석할 수 없음
           content:
@@ -375,6 +658,23 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/BuildSpecSnapshotResponse"
+              examples:
+                CanonicalSnapshot:
+                  summary: canonical YAML과 redaction 후 digest
+                  value:
+                    run_id: air-quality-20260815
+                    spec: |
+                      dataset_id: seoul-air-quality
+                      title: 서울 대기질 관측
+                      description: 서울 지역 측정소별 대기오염 관측 데이터
+                      sources:
+                        - provider: datago
+                          dataset: air_quality
+                          alias: air
+                      exports:
+                        - kind: jsonl
+                          output_path: artifacts/air-quality.jsonl
+                    spec_digest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         "400":
           description: 경로 안전하지 않은 run_id
           content:
@@ -395,6 +695,11 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+              examples:
+                SnapshotNotFound:
+                  summary: legacy run에 canonical snapshot이 없음
+                  value:
+                    error: "BuildSpec snapshot unavailable for run: legacy-run"
         "500":
           description: snapshot 파일을 읽거나 UTF-8로 해석할 수 없음
           content:
@@ -422,12 +727,30 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/BuildsResponse"
+              examples:
+                RecentBuilds:
+                  summary: 최신 수정 시각 순 build 목록
+                  value:
+                    builds:
+                      - run_id: air-quality-20260815
+                        status: ok
+                        started_at: "2026-08-15T09:30:00+00:00"
+                        finished_at: "2026-08-15T09:30:07+00:00"
+                      - run_id: air-quality-20260814
+                        status: failed
+                        started_at: "2026-08-14T09:30:00+00:00"
+                        finished_at: "2026-08-14T09:30:02+00:00"
         "400":
           description: 잘못된 limit 파라미터
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+              examples:
+                InvalidLimit:
+                  summary: 양수가 아닌 목록 limit
+                  value:
+                    error: limit must be a positive integer
         "401":
           $ref: "#/components/responses/Unauthorized"
 
@@ -454,6 +777,29 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DatasetsResponse"
+              examples:
+                BuiltDatasets:
+                  summary: dataset_id별 latest accessible run 요약
+                  value:
+                    datasets:
+                      - dataset_id: seoul-air-quality
+                        title: 서울 대기질 관측
+                        sources:
+                          - provider: datago
+                            dataset: air_quality
+                            alias: air
+                        latest_run_id: air-quality-20260815
+                        status: ok
+                        updated_at: "2026-08-15T09:30:07+00:00"
+                        row_counts:
+                          air: 25
+                        total_row_count: 25
+                        stages:
+                          air:
+                            bronze: completed
+                            silver: completed
+                            gold: completed
+                        quality: null
         "400":
           description: 잘못된 limit 파라미터
           content:
@@ -476,6 +822,29 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DatasetDetailResponse"
+              examples:
+                AirQualityDataset:
+                  summary: canonical snapshot과 manifest에서 만든 dataset 상세
+                  value:
+                    dataset_id: seoul-air-quality
+                    title: 서울 대기질 관측
+                    sources:
+                      - provider: datago
+                        dataset: air_quality
+                        alias: air
+                    latest_run_id: air-quality-20260815
+                    status: ok
+                    updated_at: "2026-08-15T09:30:07+00:00"
+                    row_counts:
+                      air: 25
+                    total_row_count: 25
+                    stages:
+                      air:
+                        bronze: completed
+                        silver: completed
+                        gold: completed
+                    quality: null
+                    run_count: 2
         "400":
           description: dataset_id가 비어 있음
           content:
@@ -492,6 +861,11 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+              examples:
+                DatasetNotFound:
+                  summary: 접근 가능한 run이 없는 dataset
+                  value:
+                    error: "dataset not found: unknown-dataset"
 
   /datasets/{dataset_id}/runs:
     get:
@@ -514,6 +888,24 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DatasetRunsResponse"
+              examples:
+                AirQualityRuns:
+                  summary: 최신순 canonical run history
+                  value:
+                    dataset_id: seoul-air-quality
+                    runs:
+                      - run_id: air-quality-20260815
+                        status: ok
+                        started_at: "2026-08-15T09:30:00+00:00"
+                        finished_at: "2026-08-15T09:30:07+00:00"
+                        spec_digest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                        created_by: "oidc:example-user"
+                      - run_id: air-quality-20260814
+                        status: failed
+                        started_at: "2026-08-14T09:30:00+00:00"
+                        finished_at: "2026-08-14T09:30:02+00:00"
+                        spec_digest: null
+                        created_by: null
         "400":
           description: dataset_id가 비어 있거나 limit이 잘못됨
           content:
@@ -528,6 +920,11 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+              examples:
+                DatasetNotFound:
+                  summary: run history를 조회할 수 없는 dataset
+                  value:
+                    error: "dataset not found: unknown-dataset"
 
   /builds/{run_id}/stages:
     get:
@@ -542,6 +939,22 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RunStagesResponse"
+              examples:
+                CompletedStages:
+                  summary: 단일 source의 모든 medallion stage 완료
+                  value:
+                    run_id: air-quality-20260815
+                    sources:
+                      - source_key: air
+                        bronze:
+                          status: completed
+                          available: true
+                        silver:
+                          status: completed
+                          available: true
+                        gold:
+                          status: completed
+                          available: true
         "400":
           description: 경로 안전하지 않은 run_id
           content:
@@ -596,6 +1009,66 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/StageDetailResponse"
+              examples:
+                BronzeDetail:
+                  summary: credential과 fetch params가 제거된 Bronze summary
+                  value:
+                    run_id: air-quality-20260815
+                    stage: bronze
+                    source_key: air
+                    status: completed
+                    available: true
+                    provider: datago
+                    dataset: air_quality
+                    fetched_at: "2026-08-15T09:30:02+00:00"
+                    record_count: 25
+                SilverDetail:
+                  summary: persist된 bounded Silver sample
+                  value:
+                    run_id: air-quality-20260815
+                    stage: silver
+                    source_key: air
+                    status: completed
+                    available: true
+                    row_count: 25
+                    schema:
+                      - name: station_name
+                        dtype: String
+                        nullable: false
+                        unique_count: 25
+                      - name: pm10_value
+                        dtype: Int64
+                        nullable: true
+                        unique_count: 18
+                    statistics:
+                      row_count: 25
+                      null_counts:
+                        station_name: 0
+                        pm10_value: 1
+                      duplicate_rate: 0.0
+                    validation:
+                      ok: true
+                      problems: []
+                    sample:
+                      - station_name: 종로구
+                        pm10_value: 31
+                      - station_name: 중구
+                        pm10_value: 28
+                GoldDetail:
+                  summary: export options와 내부 경로가 없는 Gold summary
+                  value:
+                    run_id: air-quality-20260815
+                    stage: gold
+                    source_key: air
+                    status: completed
+                    available: true
+                    row_count: 25
+                    columns: [station_name, pm10_value]
+                    splits: null
+                    exports:
+                      - kind: jsonl
+                    sample: null
+                    sample_available: false
         "400":
           description: >-
             경로 안전하지 않은 run_id/source, 잘못된 stage 이름, source 누락,
@@ -604,6 +1077,11 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+              examples:
+                MissingSource:
+                  summary: 필수 source query parameter 누락
+                  value:
+                    error: source query parameter is required
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -643,6 +1121,30 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DatasetQualityHistoryResponse"
+              examples:
+                AirQualityHistory:
+                  summary: 평가 건수와 검증 행 수를 분리한 quality 이력
+                  value:
+                    dataset_id: seoul-air-quality
+                    runs:
+                      - run_id: air-quality-20260815
+                        timestamp: "2026-08-15T09:30:07+00:00"
+                        status: ok
+                        pass_count: 2
+                        warn_count: 1
+                        fail_count: 0
+                        evaluated_checks: 3
+                        rule_pass_rate: 0.6666666666666666
+                        validated_rows: 25
+                      - run_id: air-quality-legacy
+                        timestamp: null
+                        status: ok
+                        pass_count: 0
+                        warn_count: 0
+                        fail_count: 0
+                        evaluated_checks: 0
+                        rule_pass_rate: null
+                        validated_rows: null
         "400":
           description: dataset_id가 비어 있거나 limit이 잘못됨
           content:
@@ -657,6 +1159,11 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+              examples:
+                DatasetNotFound:
+                  summary: quality history가 없는 dataset
+                  value:
+                    error: "dataset not found: unknown-dataset"
 
   /builds/{run_id}/quality:
     get:
@@ -676,6 +1183,48 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/BuildQualityResponse"
+              examples:
+                EvaluatedQuality:
+                  summary: PASS와 WARN 및 schema drift를 포함한 run quality
+                  value:
+                    run_id: air-quality-20260815
+                    availability: available
+                    evaluated_checks: 2
+                    quality_results:
+                      air:
+                        - source_key: air
+                          category: row_count
+                          rule: min_rows
+                          column: null
+                          status: pass
+                          actual: 25
+                          threshold: 10
+                          affected_rows: null
+                          evaluated_rows: null
+                          detail: null
+                        - source_key: air
+                          category: missing
+                          rule: max_null_ratio
+                          column: pm10_value
+                          status: warn
+                          actual: 0.04
+                          threshold: 0.01
+                          affected_rows: 1
+                          evaluated_rows: 25
+                          detail: null
+                    schema_drift:
+                      air:
+                        - kind: column_added
+                          column: station_code
+                          detail: column added since previous successful run
+                LegacyQualityUnavailable:
+                  summary: quality 결과가 없던 legacy run
+                  value:
+                    run_id: air-quality-legacy
+                    availability: unavailable
+                    evaluated_checks: 0
+                    quality_results: {}
+                    schema_drift: {}
         "400":
           description: 경로 안전하지 않은 run_id
           content:
@@ -696,6 +1245,11 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+              examples:
+                RunNotFound:
+                  summary: manifest가 없는 run
+                  value:
+                    error: "manifest not found: missing-run"
 
   /query:
     post:
@@ -707,6 +1261,16 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/QueryRequest"
+            examples:
+              AveragePm10ByStation:
+                summary: 서버가 resolve한 Silver table 집계
+                value:
+                  dataset_id: seoul-air-quality
+                  run_id: air-quality-20260815
+                  stage: silver
+                  source: air
+                  sql: SELECT station_name, AVG(pm10_value) AS avg_pm10 FROM dataset GROUP BY station_name ORDER BY avg_pm10 DESC
+                  limit: 100
       responses:
         "200":
           description: bounded query result preview
@@ -714,12 +1278,35 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/QueryResponse"
+              examples:
+                AveragePm10Result:
+                  summary: bounded row 결과와 현재 1.8.0 실행 시간 필드
+                  value:
+                    columns: [station_name, avg_pm10]
+                    rows:
+                      - station_name: 종로구
+                        avg_pm10: 31.5
+                      - station_name: 중구
+                        avg_pm10: 28.0
+                    truncated: false
+                    execution_ms: 7
         "400":
           description: invalid context, unsafe SQL, syntax/execution failure
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+              examples:
+                UnsafeQuery:
+                  summary: write statement가 포함된 SQL 거부
+                  value:
+                    error: only read-only SELECT queries are allowed
+                    code: unsafe_query
+                InvalidContext:
+                  summary: dataset_id와 run snapshot이 일치하지 않음
+                  value:
+                    error: dataset does not match run snapshot
+                    code: invalid_context
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -728,24 +1315,48 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+              examples:
+                Forbidden:
+                  summary: 다른 principal 소유 run
+                  value:
+                    error: forbidden
+                    code: forbidden
         "404":
           description: stage artifact unavailable
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+              examples:
+                ArtifactUnavailable:
+                  summary: 요청 stage의 table artifact가 없음
+                  value:
+                    error: query artifact unavailable
+                    code: artifact_unavailable
         "429":
           description: query 전용 capacity 포화. child process는 생성되지 않는다.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+              examples:
+                QueryBusy:
+                  summary: query 전용 동시 실행 capacity 포화
+                  value:
+                    error: query is busy
+                    code: query_busy
         "504":
           description: query process timeout 및 강제 종료
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+              examples:
+                QueryTimeout:
+                  summary: 격리된 query process 제한 시간 초과
+                  value:
+                    error: query timed out
+                    code: query_timeout
 
 components:
   securitySchemes:
@@ -771,6 +1382,11 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
+          examples:
+            MissingOrInvalidApiKey:
+              summary: 인증 정보가 없거나 일치하지 않음
+              value:
+                error: unauthorized
 
   parameters:
     RunId:
