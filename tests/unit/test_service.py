@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import threading
 import urllib.error
@@ -13,6 +14,7 @@ from typing import cast
 
 import pytest
 
+import kpubdata_builder.service.app as app_module
 from kpubdata_builder.service import BuilderService, ServiceResponse, dispatch
 from kpubdata_builder.service.app import _OWNERSHIP_ENV
 from kpubdata_builder.service.auth import Principal
@@ -1341,3 +1343,76 @@ class TestRunIdRouteValidation:
         # ENFORCE_OWNERSHIP off(기본) → 200
         resp = dispatch(service, "GET", "/artifacts/run1", None)
         assert resp.status_code == 200
+
+
+class TestBuildSpecSnapshot:
+    """GET /builds/{run_id}/spec의 조회·보안·legacy 정책 (#487)."""
+
+    def test_owner_reads_snapshot_and_index_digest_matches(self, tmp_path: Path) -> None:
+        service = _service(tmp_path)
+        build = dispatch(service, "POST", "/build", {"spec": VALID_SPEC_YAML, "run_id": "spec-run"})
+        assert build.status_code == 200
+
+        response = dispatch(service, "GET", "/builds/spec-run/spec", None)
+
+        assert response.status_code == 200
+        snapshot = (tmp_path / "spec-run" / "buildspec.yaml").read_bytes()
+        expected = f"sha256:{hashlib.sha256(snapshot).hexdigest()}"
+        assert response.body == {
+            "run_id": "spec-run",
+            "spec": snapshot.decode("utf-8"),
+            "spec_digest": expected,
+        }
+        entry = service._build_index.get("spec-run")
+        assert entry is not None
+        assert entry.spec_digest == expected
+
+    def test_unknown_and_legacy_run_return_404(self, tmp_path: Path) -> None:
+        service = _service(tmp_path)
+        assert dispatch(service, "GET", "/builds/unknown/spec", None).status_code == 404
+
+        legacy = tmp_path / "legacy"
+        legacy.mkdir()
+        (legacy / "manifest.json").write_text("{}", encoding="utf-8")
+        response = dispatch(service, "GET", "/builds/legacy/spec", None)
+        assert response.status_code == 404
+        assert "unavailable" in str(response.body["error"])
+
+    @pytest.mark.parametrize("run_id", ["..", "../escape", "bad%2Fsegment"])
+    def test_invalid_run_id_returns_400(self, tmp_path: Path, run_id: str) -> None:
+        response = dispatch(_service(tmp_path), "GET", f"/builds/{run_id}/spec", None)
+        assert response.status_code == 400
+
+    def test_another_owner_receives_403(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(_OWNERSHIP_ENV, "true")
+        service = _service(tmp_path)
+        monkeypatch.setattr(
+            app_module, "authenticate", lambda **_kwargs: Principal(kind="oidc", identifier="a")
+        )
+        build = dispatch(service, "POST", "/build", {"spec": VALID_SPEC_YAML, "run_id": "owned"})
+        assert build.status_code == 200
+
+        monkeypatch.setattr(
+            app_module, "authenticate", lambda **_kwargs: Principal(kind="oidc", identifier="b")
+        )
+        response = dispatch(service, "GET", "/builds/owned/spec", None)
+        assert response.status_code == 403
+
+        # ownership 거부 시 snapshot reader까지 도달하지 않는다.
+        monkeypatch.setattr(Path, "read_bytes", lambda _path: pytest.fail("snapshot read leaked"))
+        response = dispatch(service, "GET", "/builds/owned/spec", None)
+        assert response.status_code == 403
+
+    def test_unknown_run_returns_404_before_ownership(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(_OWNERSHIP_ENV, "true")
+        monkeypatch.setattr(
+            app_module, "authenticate", lambda **_kwargs: Principal(kind="oidc", identifier="a")
+        )
+
+        response = dispatch(_service(tmp_path), "GET", "/builds/unknown/spec", None)
+
+        assert response.status_code == 404

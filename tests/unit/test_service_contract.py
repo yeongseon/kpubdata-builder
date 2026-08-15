@@ -44,6 +44,7 @@ _DISPATCH_ROUTES: dict[tuple[str, str], str] = {
     ("/build", "POST"): "createBuild",
     ("/builds", "GET"): "listBuilds",
     ("/builds/{run_id}/manifest", "GET"): "getBuildManifest",
+    ("/builds/{run_id}/spec", "GET"): "getBuildSpecSnapshot",
     ("/artifacts/{run_id}", "GET"): "listBuildArtifacts",
 }
 
@@ -57,6 +58,7 @@ _REQUIRED_OPERATIONS = [
     ("/preview", "post"),
     ("/build", "post"),
     ("/builds/{run_id}/manifest", "get"),
+    ("/builds/{run_id}/spec", "get"),
     ("/artifacts/{run_id}", "get"),
     ("/builds", "get"),
 ]
@@ -245,6 +247,7 @@ _IMPLEMENTED_OPERATIONS = {
     "previewBuild",
     "createBuild",
     "getBuildManifest",
+    "getBuildSpecSnapshot",
     "listBuildArtifacts",
     "listBuilds",
 }
@@ -423,6 +426,7 @@ _OPERATION_STATUS_CODES: dict[str, set[int]] = {
     "previewBuild": {200, 400},
     "createBuild": {200, 400, 502},
     "getBuildManifest": {200, 400, 404, 500},
+    "getBuildSpecSnapshot": {200, 400, 403, 404, 500},
     "listBuilds": {200, 400},
     "listBuildArtifacts": {200, 400, 404},
 }
@@ -752,6 +756,18 @@ class TestResponseConformance:
         resp = dispatch(_conform_service(tmp_path), "GET", "/builds/nope/manifest", None)
         assert resp.status_code == 404
         _assert_conforms(resp, "/builds/{run_id}/manifest", "GET")
+
+    def test_spec_200_after_build(self, tmp_path: Path) -> None:
+        service = _conform_service(tmp_path)
+        dispatch(service, "POST", "/build", {"spec": _CONFORM_SPEC_YAML, "run_id": "spec-ok"})
+        resp = dispatch(service, "GET", "/builds/spec-ok/spec", None)
+        assert resp.status_code == 200
+        _assert_conforms(resp, "/builds/{run_id}/spec", "GET")
+
+    def test_spec_404_missing(self, tmp_path: Path) -> None:
+        resp = dispatch(_conform_service(tmp_path), "GET", "/builds/nope/spec", None)
+        assert resp.status_code == 404
+        _assert_conforms(resp, "/builds/{run_id}/spec", "GET")
 
     def test_builds_400_bad_limit(self, tmp_path: Path) -> None:
         resp = dispatch(_conform_service(tmp_path), "GET", "/builds", None, query="limit=0")

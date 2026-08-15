@@ -31,6 +31,7 @@ from typing_extensions import assert_never
 from ..errors import SpecLoadError, ValidationError
 from ..pipeline import preview_build, run_build
 from ..spec import BuildSpec, JsonValue, parse_spec
+from ..spec.serializer import BUILDSPEC_SNAPSHOT_FILENAME, compute_spec_digest
 from ..spec.validator import validate_spec
 from ..stages._path_safety import ensure_within, validate_path_segment
 from ..stages.bronze.build import SourceClient
@@ -101,6 +102,15 @@ def _check_ownership(
     return ServiceResponse(403, {"error": "forbidden: not run owner"})
 
 
+def _check_run_exists(service: BuilderService, run_id: str) -> ServiceResponse | None:
+    """snapshot 파일을 읽지 않고 run workspace 존재 여부만 확인한다."""
+    run_dir = service._output_root / run_id
+    ensure_within(service._output_root, run_dir, label="run directory")
+    if run_dir.is_dir():
+        return None
+    return ServiceResponse(404, {"error": f"run not found: {run_id}"})
+
+
 # Build list entry type for API responses
 _BuildListEntry = dict[str, str | None]
 
@@ -122,7 +132,7 @@ def _apply_ownership(
 # Builder API 계약 버전. contract/builder-api.yaml의 info.version과 일치해야 하며
 # (test_service_contract가 강제), 응답에 실어 Studio 같은 소비자가 하위 호환을
 # 협상할 수 있게 한다 (#209).
-API_CONTRACT_VERSION = "1.3.0"
+API_CONTRACT_VERSION = "1.4.0"
 
 
 @dataclass(frozen=True)
@@ -353,6 +363,7 @@ class BuilderService:
                 status=result.status,  # type: ignore[arg-type]
                 started_at=started_at,
                 finished_at=finished_at,
+                spec_digest=result.spec_digest,
                 created_by=manifest_data.get("created_by"),
             )
         except Exception:
@@ -449,6 +460,38 @@ class BuilderService:
         if not isinstance(manifest, dict):
             return ServiceResponse(500, {"error": "invalid manifest: expected object"})
         return ServiceResponse(200, cast(dict[str, JsonValue], manifest))
+
+    def spec(self, run_id: str) -> ServiceResponse:
+        """run에서 실제 사용한 canonical BuildSpec snapshot과 digest를 반환한다."""
+        try:
+            validate_path_segment(run_id, field_name="run_id")
+        except ValueError as exc:
+            return ServiceResponse(400, {"error": str(exc)})
+
+        run_dir = self._output_root / run_id
+        ensure_within(self._output_root, run_dir, label="run directory")
+        if not run_dir.is_dir():
+            return ServiceResponse(404, {"error": f"run not found: {run_id}"})
+
+        snapshot_path = run_dir / BUILDSPEC_SNAPSHOT_FILENAME
+        ensure_within(run_dir, snapshot_path, label="BuildSpec snapshot")
+        if not snapshot_path.is_file():
+            return ServiceResponse(
+                404, {"error": f"BuildSpec snapshot unavailable for run: {run_id}"}
+            )
+        try:
+            payload = snapshot_path.read_bytes()
+            spec_text = payload.decode("utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            return ServiceResponse(500, {"error": f"failed to read BuildSpec snapshot: {exc}"})
+        return ServiceResponse(
+            200,
+            {
+                "run_id": run_id,
+                "spec": spec_text,
+                "spec_digest": compute_spec_digest(payload),
+            },
+        )
 
     def serve_artifact_file(self, run_id: str, file_path: str) -> ServiceResponse | FileResponse:
         """실행 워크스페이스의 특정 파일을 제공한다 (#323).
@@ -703,6 +746,20 @@ def dispatch(
             if ownership_error is not None:
                 return ownership_error
             return service.manifest(run_id)
+
+    if method == "GET" and path.startswith("/builds/") and path.endswith("/spec"):
+        run_id = path[len("/builds/") : -len("/spec")]
+        try:
+            validate_path_segment(run_id, field_name="run_id")
+        except ValueError as exc:
+            return ServiceResponse(400, {"error": str(exc)})
+        existence_error = _check_run_exists(service, run_id)
+        if existence_error is not None:
+            return existence_error
+        ownership_error = _check_ownership(service, run_id, principal)
+        if ownership_error is not None:
+            return ownership_error
+        return service.spec(run_id)
 
     if method == "GET" and path.startswith("/artifacts/"):
         rest = path[len("/artifacts/") :]

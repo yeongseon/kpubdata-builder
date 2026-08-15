@@ -276,6 +276,15 @@ Builder는 최소한 다음 규칙을 검증해야 합니다.
 - BuildSpec은 실행 계획이지 UI 상태 저장 포맷이 아닙니다.
 - exports/publish는 source 정의를 대체하지 않습니다.
 - manifest는 BuildSpec의 결과 기록물이지 입력이 아닙니다.
+- 검증된 실행 입력은 run workspace의 `buildspec.yaml`에 canonical YAML로 저장됩니다.
+  이 snapshot은 결정적 직렬화와 `sha256:<hex>` digest의 기준이며, source pipeline이
+  부분 실패해도 남습니다. 검증 실패 입력은 snapshot으로 기록하지 않습니다.
+- `metadata`, `sources[].params`, `exports[].options` 안의 명시적 credential 키 값은
+  snapshot에서 `<redacted>`로 대체됩니다. 따라서 inline credential이 있던 snapshot은
+  감사·비교용이며, 재실행 시 credential을 환경 또는 서비스 설정에서 다시 공급해야 합니다.
+- `spec_digest`는 **저장된 redaction 후 canonical `buildspec.yaml` bytes**의 SHA-256입니다.
+  따라서 credential 값만 다르고 나머지 spec이 같으면 두 snapshot과 digest도 같을 수 있으며,
+  이는 secret을 digest로 식별하거나 노출하지 않기 위한 의도된 보안 정책입니다.
 
 ## 8. 관련 문서
 
