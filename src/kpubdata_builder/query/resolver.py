@@ -32,9 +32,13 @@ class ResolvedQueryContext:
 
 
 def _ownership_allowed(manifest: dict[str, object], principal: Principal) -> bool:
+    """#504 query ownership 게이트 — ``ownership_allows``(#505 canonical) 공용 predicate."""
     created_by = manifest.get("created_by")
+    owner_id = manifest.get("owner_id")
     return ownership_allows(
-        created_by=created_by if isinstance(created_by, str) else None, principal=principal
+        created_by=created_by if isinstance(created_by, str) else None,
+        owner_id=owner_id if isinstance(owner_id, str) else None,
+        principal=principal,
     )
 
 

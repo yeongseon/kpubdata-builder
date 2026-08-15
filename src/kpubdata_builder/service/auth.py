@@ -1,4 +1,4 @@
-"""HTTP 서비스 인증 (#384 B2, #385 B3, ADR 0006/0009).
+"""HTTP 서비스 인증 (#384 B2, #385 B3, ADR 0006/0009, #505).
 
 인증 결과를 ``bool`` 대신 ``Principal`` 로 반환해 "누가 요청했는가"를 보존한다 (B2).
 본 모듈은 두 인증 경로를 통합한다 (B3, ADR 0009):
@@ -8,10 +8,20 @@
 
 ``OIDC_ISSUER`` 미설정 시 Bearer 경로가 비활성화되어 기존 배포에 영향이 없다.
 설정 시 ``OIDC_AUDIENCE`` 가 필수이고 ``pyjwt`` extra가 설치되어야 한다 (fail-closed).
+
+``Principal`` 의 display 역할과 persistent ownership 역할을 분리한다 (#505):
+
+- ``identifier``/``label`` — 사람이 읽는 표시용 라벨이자 기존(#388/#389) ``created_by``와의
+  하위 호환 비교에 쓰인다. OIDC의 경우 로그 노출 최소화를 위해 이미 ``sub`` 앞 8자만
+  담아왔다 — 이 필드는 트렁케이션이 있어 단독으로는 충돌 방지를 보장하지 않는다.
+- ``owner_id`` — ``compute_owner_id()`` 로 계산되는 canonical하고 stable한 persistent
+  owner identity. OIDC는 트렁케이션 없이 전체 issuer+subject를 해시해 충돌을 방지한다.
+  신규 리소스의 ownership 판정은 이 필드를 우선 사용해야 한다(``principal_owns()`` 참조).
 """
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import os
 import threading
@@ -38,21 +48,78 @@ _OIDC_ALLOWED_EMAILS_ENV = "OIDC_ALLOWED_EMAILS"
 
 @dataclass(frozen=True)
 class Principal:
-    """인증된 요청 주체 (#384).
+    """인증된 요청 주체 (#384, #505).
 
-    인가(C1/C2)에서 run 소유권 판단에 쓰인다. ``kind`` 는 확장 가능 —
-    ``'dev'``(로컬 개발), ``'service'``(X-API-Key), 향후 ``'oidc'``/``'user'``(Bearer, ADR 0009).
+    인가(C1/C2/#505)에서 run 소유권 판단에 쓰인다. ``kind`` 는 확장 가능 —
+    ``'dev'``(로컬 개발), ``'service'``(X-API-Key), ``'oidc'``(Bearer, ADR 0009).
     식별자는 민감 값(원본 API 키 등)을 담지 않는다 — manifest created_by 등에는
     안전한 라벨(``apikey:<name>``)만 쓴다.
+
+    ``identifier``/``label`` 은 display/legacy 호환용이고, ``owner_id`` 가 신규
+    persistent ownership 판정에 쓰이는 canonical stable identity다(#505). 이 둘의
+    역할은 의도적으로 분리되어 있다 — display label(예: 향후 프로필 이름/이메일
+    노출)이 바뀌어도 ``owner_id`` 는 바뀌지 않아야 한다.
     """
 
     kind: str
     identifier: str | None = None
+    owner_id: str | None = None
 
     @property
     def label(self) -> str:
-        """manifest created_by용 라벨 (#388)."""
+        """manifest created_by용 display 라벨 (#388).
+
+        하위 호환을 위해 유지된다 — legacy(#505 이전) 리소스의 ownership fallback
+        비교에 쓰인다(``principal_owns()`` 참조). 신규 ownership 판정에는 대신
+        ``owner_id`` 를 우선 사용해야 한다.
+        """
         return f"{self.kind}:{self.identifier}" if self.identifier else self.kind
+
+
+def compute_owner_id(kind: str, *material: str) -> str:
+    """canonical하고 stable한 persistent owner identity를 계산한다 (#505).
+
+    해시 입력은 모든 필드(kind와 material 각 부분)를 8바이트 big-endian 길이
+    프리픽스로 프레이밍해 이어 붙인다 — 구분자 기반 결합(``"\\0"`` 등)은 필드
+    값에 구분자가 포함되면 충돌할 수 있어(예: issuer="a", sub="b\\0c" vs
+    issuer="a\\0b", sub="c") #505의 concatenation collision 방지 보장을 깨뜨릴
+    수 있으므로 쓰지 않는다. 길이 프리픽스는 필드 경계를 결정적으로 고정해
+    모호성이 없다.
+
+    ``kind`` 을 해시 입력에 포함시켜(principal 종류가 다르면 동일 material이라도
+    절대 같은 owner_id가 나오지 않게 한다 — domain separation).
+
+    반환값은 SHA-256 hex digest 기반이라 원본 claim(sub/email 등)을 복원할 수
+    없다 — owner ID를 로그/저장소에 남겨도 raw claim이 노출되지 않는다.
+    """
+    framed = b"".join(_frame_owner_id_field(value) for value in (kind, *material))
+    digest = hashlib.sha256(framed).hexdigest()
+    return f"{kind}:{digest}"
+
+
+def _frame_owner_id_field(value: str) -> bytes:
+    raw = value.encode("utf-8")
+    return len(raw).to_bytes(8, "big") + raw
+
+
+def principal_owns(*, created_by: str | None, owner_id: str | None, principal: Principal) -> bool:
+    """레코드가 ``principal`` 소유인지 판정하는 단일 canonical 구현이다 (#505).
+
+    ``/query``, ``/builds``, dataset/stage/quality 조회 등 모든 ownership
+    consumer가 이 함수를 공유한다 — endpoint마다 비교 로직을 중복 구현하지 않는다.
+
+    - 레코드와 principal 양쪽 모두 stable ``owner_id`` 가 있으면(신규 경로) 이를
+      우선 비교한다 — OIDC subject 트렁케이션 충돌 없이 안전하다.
+    - 둘 중 하나라도 ``owner_id`` 가 없으면(legacy 레코드 또는 owner_id 미설정
+      principal) 기존 ``created_by``/``label`` 비교로 폴백한다(#388/#389 이후
+      하위 호환 — 기존 리소스를 즉시 접근 불가로 만들지 않는다).
+    - 두 값이 모두 없으면(예: created_by가 아예 기록되지 않은 legacy 레코드)
+      비교는 항상 실패한다 — "owner 정보 없음 = 누구나 접근 가능"으로 취급하지
+      않는다(fail-closed).
+    """
+    if owner_id is not None and principal.owner_id is not None:
+        return owner_id == principal.owner_id
+    return created_by == principal.label
 
 
 @dataclass(frozen=True)
@@ -77,12 +144,18 @@ def _is_dev_mode() -> bool:
 
 
 def _verify_api_key(api_key: str | None) -> Principal | AuthError:
-    """X-API-Key 경로 (B2). fail-closed: 키 미설정·불일치 → AuthError."""
+    """X-API-Key 경로 (B2). fail-closed: 키 미설정·불일치 → AuthError.
+
+    현재 구성은 인스턴스당 단일 공유 정적 키만 지원한다(ADR 0006) — 키 값 자체를
+    owner_id 소재로 쓰지 않는다(원문 secret이 owner_id/로그에 노출되면 안 됨,
+    #505). 고정된 이름표("default")를 해시해 하나의 stable service owner
+    identity를 부여한다.
+    """
     expected = os.environ.get(_API_KEY_ENV)
     if not expected:
         return AuthError(reason="api key not configured")
     if api_key is not None and hmac.compare_digest(api_key, expected):
-        return Principal(kind="service")
+        return Principal(kind="service", owner_id=compute_owner_id("service", "default"))
     return AuthError(reason="invalid api key")
 
 
@@ -248,8 +321,19 @@ def _verify_bearer_token(token: str) -> Principal | AuthError:
             return AuthError(reason="principal not in allowlist", status_code=403)
 
     sub = str(payload.get("sub", ""))
+    if not sub:
+        # jwt.decode의 require=["sub"]는 claim의 "존재"만 강제하고 값이 비어있지
+        # 않음을 보장하지 않는다. 빈 sub를 허용하면 서로 다른 토큰이 모두 같은
+        # (issuer, "") owner_id로 수렴해 ownership이 섞일 수 있다 (#505).
+        return AuthError(reason="missing subject claim")
+    issuer = str(payload.get("iss", ""))
+    # owner_id는 트렁케이션 없는 전체 issuer+subject를 해시한다(#505) — issuer와
+    # sub를 별도 필드로 전달해 구분자 없이도 충돌이 불가능하다(length-prefix
+    # framing). 아래 identifier(로그/표시용, sub 앞 8자)와 달리 충돌 방지가
+    # 필요한 persistent ownership 판정에 쓰인다.
+    owner_id = compute_owner_id("oidc", issuer, sub)
     # 로그 추적용 식별자로 sub 앞 8자만(전체 sub 노출 최소화).
-    return Principal(kind="oidc", identifier=sub[:8] if sub else None)
+    return Principal(kind="oidc", identifier=sub[:8], owner_id=owner_id)
 
 
 def authenticate(
@@ -265,7 +349,9 @@ def authenticate(
     OIDC 비활성 시 Bearer는 무시되어 기존 배포에 영향이 없다.
     """
     if _is_dev_mode():
-        return Principal(kind="dev")
+        # dev principal owner_id는 실행마다 바뀌지 않는 고정 local 식별자다(#505) —
+        # OIDC principal의 owner_id는 항상 "oidc:" 로 시작해 namespace가 겹치지 않는다.
+        return Principal(kind="dev", owner_id=compute_owner_id("dev", "local"))
 
     if bearer_token and _oidc_issuers():
         if bearer_token.lower().startswith("bearer "):
@@ -275,4 +361,11 @@ def authenticate(
     return _verify_api_key(api_key)
 
 
-__all__ = ["AuthError", "Principal", "authenticate", "validate_oidc_config"]
+__all__ = [
+    "AuthError",
+    "Principal",
+    "authenticate",
+    "compute_owner_id",
+    "principal_owns",
+    "validate_oidc_config",
+]

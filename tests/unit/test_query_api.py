@@ -182,9 +182,18 @@ class TestQueryOwnershipEnforcement:
     """
 
     def _prepare_run(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, created_by: str
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        *,
+        created_by: str | None,
+        owner_id: str | None = None,
     ) -> None:
-        manifest = {"inputs": ["source"], "created_by": created_by}
+        manifest: dict[str, object] = {"inputs": ["source"]}
+        if created_by is not None:
+            manifest["created_by"] = created_by
+        if owner_id is not None:
+            manifest["owner_id"] = owner_id
         monkeypatch.setattr(
             resolver_module.datasets_service, "read_manifest", lambda root, run_id: manifest
         )
@@ -248,6 +257,55 @@ class TestQueryOwnershipEnforcement:
         response = service.query(_body(), principal=Principal("dev"))
 
         assert response.status_code == 200
+
+    def test_query_owner_id_match_succeeds_despite_different_label(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """canonical owner_id가 일치하면 display label이 달라도 소유자로 인정된다 (#505)."""
+        monkeypatch.setenv(_OWNERSHIP_ENV, "true")
+        self._prepare_run(
+            monkeypatch,
+            tmp_path,
+            created_by="oidc:old-display-name",
+            owner_id="oidc:canonical-abc",
+        )
+        service = self._service(tmp_path)
+
+        principal = Principal(
+            kind="oidc", identifier="new-display-name", owner_id="oidc:canonical-abc"
+        )
+        response = service.query(_body(), principal=principal)
+
+        assert response.status_code == 200
+
+    def test_query_owner_id_mismatch_denied_despite_matching_label(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """owner_id가 있는 신규 레코드는 label이 같아도 owner_id 불일치면 거부한다 (#505)."""
+        monkeypatch.setenv(_OWNERSHIP_ENV, "true")
+        self._prepare_run(
+            monkeypatch, tmp_path, created_by="oidc:userA", owner_id="oidc:canonical-real-owner"
+        )
+        service = self._service(tmp_path)
+
+        impostor = Principal(kind="oidc", identifier="userA", owner_id="oidc:different-owner")
+        response = service.query(_body(), principal=impostor)
+
+        assert response.status_code == 403
+
+    def test_query_ambiguous_record_with_no_owner_info_fails_closed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """owner_id도 created_by도 없는 레코드는 거부한다 — fail-closed(#505)."""
+        monkeypatch.setenv(_OWNERSHIP_ENV, "true")
+        self._prepare_run(monkeypatch, tmp_path, created_by=None, owner_id=None)
+        service = self._service(tmp_path)
+
+        response = service.query(
+            _body(), principal=Principal(kind="oidc", identifier="userA", owner_id="oidc:abc")
+        )
+
+        assert response.status_code == 403
 
 
 class TestQueryRequestValidation:

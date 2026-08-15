@@ -444,6 +444,7 @@ def run_build(
     output_root: Path,
     run_id: str | None = None,
     created_by: str | None = None,
+    owner_id: str | None = None,
 ) -> BuildResult:
     """BuildSpec을 Medallion 파이프라인으로 실행한다.
 
@@ -452,6 +453,9 @@ def run_build(
         client: Bronze fetch에 사용할 kpubdata 호환 클라이언트.
         output_root: 실행 워크스페이스 루트.
         run_id: 실행 식별자. 생략 시 타임스탬프 기반으로 생성.
+        created_by: 빌드를 요청한 principal의 display/legacy 라벨(#388).
+        owner_id: canonical stable persistent owner identity (#505). manifest에
+            created_by와 함께 additive로 기록된다.
 
     반환값:
         BuildResult: 전체 상태, 소스별 결과, 매니페스트 경로.
@@ -527,6 +531,7 @@ def run_build(
         build_environment=capture_build_environment(),
         inputs_fingerprint=compute_inputs_fingerprint(provenance),
         created_by=created_by,
+        owner_id=owner_id,
         quality_results=quality_results,
         schema_drift=schema_drift,
     )

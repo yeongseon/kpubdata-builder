@@ -251,6 +251,47 @@ def test_manifest_writer_emits_existing_created_by_as_additive_field(tmp_path: P
     assert payload["schema_version"] == MANIFEST_SCHEMA_VERSION == "1.0.0"
 
 
+def test_manifest_writer_emits_owner_id_as_additive_field(tmp_path: Path) -> None:
+    """owner_id는 created_by와 나란히 기록되는 additive 필드다 (#505).
+
+    MANIFEST_SCHEMA_VERSION은 바뀌지 않는다 — 형식이 호환 불가하게 바뀐 것이
+    아니라(#211) 기존 소비자가 몰라도 무해한 필드가 추가됐을 뿐이다.
+    """
+    manifest = BuildManifest(
+        build_id="build-owner-id",
+        started_at=datetime(2026, 5, 26, 1, 0, 0, tzinfo=timezone.utc),
+        finished_at=datetime(2026, 5, 26, 1, 0, 0, tzinfo=timezone.utc),
+        created_by="oidc:user@example.com",
+        owner_id="oidc:deadbeef",
+    )
+    output_path = tmp_path / "manifest.json"
+
+    manifest_writer(manifest, output_path)
+
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["created_by"] == "oidc:user@example.com"
+    assert payload["owner_id"] == "oidc:deadbeef"
+    assert payload["schema_version"] == MANIFEST_SCHEMA_VERSION == "1.0.0"
+
+
+def test_manifest_writer_owner_id_defaults_to_null_for_legacy_style_manifest(
+    tmp_path: Path,
+) -> None:
+    """owner_id를 지정하지 않으면 null로 기록된다 — legacy(#505 이전) 호출부와 동일한 shape."""
+    manifest = BuildManifest(
+        build_id="build-no-owner-id",
+        started_at=datetime(2026, 5, 26, 1, 0, 0, tzinfo=timezone.utc),
+        finished_at=datetime(2026, 5, 26, 1, 0, 0, tzinfo=timezone.utc),
+        created_by="oidc:user@example.com",
+    )
+    output_path = tmp_path / "manifest.json"
+
+    manifest_writer(manifest, output_path)
+
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["owner_id"] is None
+
+
 def test_capture_build_environment_reports_python_and_builder_version() -> None:
     env = capture_build_environment()
     # builder는 설치되어 있으므로 실제 버전을, kpubdata도 의존성이므로 버전 문자열을 가진다.

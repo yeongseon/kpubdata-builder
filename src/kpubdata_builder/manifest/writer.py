@@ -42,6 +42,9 @@ def manifest_writer(manifest: BuildManifest, output_path: Path) -> None:
         "inputs": list(manifest.inputs),
         "inputs_fingerprint": manifest.inputs_fingerprint,
         "created_by": manifest.created_by,
+        # canonical stable owner identity (#505, additive) — created_by는 legacy
+        # display 라벨로 계속 함께 기록된다. legacy 소비자는 이 키를 몰라도 무해하다.
+        "owner_id": manifest.owner_id,
         "outputs": list(manifest.outputs),
         "warnings": list(manifest.warnings),
         "errors": list(manifest.errors),

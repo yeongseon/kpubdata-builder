@@ -224,6 +224,25 @@ class TestBuild:
         assert resp.body["build_id"] == "run1"
         assert resp.body["schema_version"] == "1.0.0"
 
+    def test_manifest_route_strips_persisted_internal_owner_id(self, tmp_path: Path) -> None:
+        """owner_id는 persisted manifest에 남지만 HTTP wire에는 노출하지 않는다 (#505)."""
+        service = _service(tmp_path)
+        service.build(
+            VALID_SPEC_YAML,
+            run_id="run1",
+            created_by="oidc:abcdef12",
+            owner_id="oidc:canonical-owner",
+        )
+
+        persisted = json.loads((tmp_path / "run1" / "manifest.json").read_text(encoding="utf-8"))
+        assert persisted["owner_id"] == "oidc:canonical-owner"
+
+        resp = dispatch(service, "GET", "/builds/run1/manifest", None)
+
+        assert resp.status_code == 200
+        assert "owner_id" not in resp.body
+        assert resp.body["created_by"] == "oidc:abcdef12"
+
     def test_manifest_route_returns_404_for_missing_run(self, tmp_path: Path) -> None:
         resp = dispatch(_service(tmp_path), "GET", "/builds/nope/manifest", None)
 
@@ -1128,6 +1147,16 @@ class TestOwnershipEnforcement:
 
     def _build_as(self, service: BuilderService, run_id: str, created_by: str) -> None:
         """created_by를 명시적으로 기록하며 빌드 (테스트 단순화용 주입)."""
+        self._build_with_manifest_fields(service, run_id, created_by=created_by)
+
+    def _build_with_manifest_fields(
+        self, service: BuilderService, run_id: str, **fields: object
+    ) -> None:
+        """빌드 후 manifest.json의 임의 필드(created_by/owner_id 등)를 덮어쓴다 (#505).
+
+        owner_id를 None으로 명시하면 manifest에서 해당 키를 완전히 제거해
+        legacy(#505 이전) manifest shape를 흉내낸다.
+        """
         dispatch(
             service,
             "POST",
@@ -1136,7 +1165,11 @@ class TestOwnershipEnforcement:
         )
         mpath = service._output_root / run_id / "manifest.json"
         data = json.loads(mpath.read_text(encoding="utf-8"))
-        data["created_by"] = created_by
+        for key, value in fields.items():
+            if value is None:
+                data.pop(key, None)
+            else:
+                data[key] = value
         mpath.write_text(json.dumps(data), encoding="utf-8")
 
     def test_fallback_filters_other_owners_when_index_empty(
@@ -1198,6 +1231,126 @@ class TestOwnershipEnforcement:
         builds = cast(list[dict[str, object]], resp.body["builds"])
         run_ids = [cast(str, b["run_id"]) for b in builds]
         assert "runA" in run_ids
+
+
+def _build_run_ids(resp: ServiceResponse) -> list[str]:
+    builds = cast(list[dict[str, object]], resp.body["builds"])
+    return [cast(str, b["run_id"]) for b in builds]
+
+
+class TestStableOwnerIdOwnership:
+    """canonical owner_id 기반 ownership 판정 (#505) — /builds 목록·상세 경로."""
+
+    def _build_with_manifest_fields(
+        self, service: BuilderService, run_id: str, **fields: object
+    ) -> None:
+        dispatch(
+            service,
+            "POST",
+            "/build",
+            {"spec": VALID_SPEC_YAML, "run_id": run_id},
+        )
+        mpath = service._output_root / run_id / "manifest.json"
+        data = json.loads(mpath.read_text(encoding="utf-8"))
+        for key, value in fields.items():
+            if value is None:
+                data.pop(key, None)
+            else:
+                data[key] = value
+        mpath.write_text(json.dumps(data), encoding="utf-8")
+
+    def test_owner_id_match_wins_even_with_different_display_label(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """owner_id가 일치하면 표시용 label(created_by)이 달라도 소유자로 인정된다 (#505).
+
+        display identity가 바뀌어도(향후 프로필 이름 갱신 등) persistent owner
+        identity는 바뀌지 않아야 한다는 완료 조건을 응답 목록 수준에서 검증한다.
+        """
+        monkeypatch.setenv(_OWNERSHIP_ENV, "true")
+        service = _service(tmp_path)
+        self._build_with_manifest_fields(
+            service, "runA", created_by="oidc:old-display-name", owner_id="oidc:canonical-abc"
+        )
+        monkeypatch.setattr(service._build_index, "list_builds", lambda limit: [])
+
+        # label은 manifest의 created_by와 다르지만 owner_id는 동일 — 여전히 소유자.
+        renamed_principal = Principal(
+            kind="oidc", identifier="new-display-name", owner_id="oidc:canonical-abc"
+        )
+        resp = service.list_builds(principal=renamed_principal)
+        run_ids = _build_run_ids(resp)
+        assert "runA" in run_ids
+
+    def test_owner_id_mismatch_denied_even_with_matching_label(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """owner_id가 있는 신규 레코드는 label이 같아도 owner_id 불일치면 거부한다 (#505).
+
+        legacy 트렁케이션(sub 앞 8자) 충돌로 label만 우연히 같아지는 상황에서도
+        canonical owner_id가 우선하여 ownership이 섞이지 않는다.
+        """
+        monkeypatch.setenv(_OWNERSHIP_ENV, "true")
+        service = _service(tmp_path)
+        self._build_with_manifest_fields(
+            service, "runA", created_by="oidc:userA", owner_id="oidc:canonical-real-owner"
+        )
+        monkeypatch.setattr(service._build_index, "list_builds", lambda limit: [])
+
+        # label(identifier)은 "userA"로 원래 소유자와 같지만 owner_id는 다르다.
+        impostor = Principal(kind="oidc", identifier="userA", owner_id="oidc:different-owner")
+        resp = service.list_builds(principal=impostor)
+        run_ids = _build_run_ids(resp)
+        assert "runA" not in run_ids
+
+    def test_legacy_run_without_owner_id_falls_back_to_label(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """owner_id가 없는(#505 이전) run은 created_by/label 비교로 계속 접근 가능해야 한다."""
+        monkeypatch.setenv(_OWNERSHIP_ENV, "true")
+        service = _service(tmp_path)
+        self._build_with_manifest_fields(service, "runA", created_by="oidc:userA", owner_id=None)
+        monkeypatch.setattr(service._build_index, "list_builds", lambda limit: [])
+
+        # owner_id 없이(예: 기존 구성) 인증된 principal도 label로 자신의 legacy run에 접근.
+        user_a = Principal(kind="oidc", identifier="userA")
+        resp = service.list_builds(principal=user_a)
+        run_ids = _build_run_ids(resp)
+        assert "runA" in run_ids
+
+    def test_ambiguous_record_with_no_owner_info_fails_closed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """owner_id도 created_by도 없는 레코드는 "누구나 접근 가능"으로 취급하지 않는다.
+
+        "owner field가 없으니 누구나 접근 가능" 폴백은 금지한다는 요구사항의 회귀 테스트.
+        """
+        monkeypatch.setenv(_OWNERSHIP_ENV, "true")
+        service = _service(tmp_path)
+        self._build_with_manifest_fields(service, "runA", created_by=None, owner_id=None)
+        monkeypatch.setattr(service._build_index, "list_builds", lambda limit: [])
+
+        any_user = Principal(kind="oidc", identifier="userA", owner_id="oidc:canonical-abc")
+        resp = service.list_builds(principal=any_user)
+        run_ids = _build_run_ids(resp)
+        assert "runA" not in run_ids
+
+    def test_builds_response_does_not_leak_owner_id_field(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """owner_id는 ownership 판정 내부용일 뿐 /builds wire 응답에 노출되면 안 된다 (#505)."""
+        monkeypatch.setenv(_OWNERSHIP_ENV, "true")
+        service = _service(tmp_path)
+        self._build_with_manifest_fields(
+            service, "runA", created_by="oidc:userA", owner_id="oidc:canonical-abc"
+        )
+        monkeypatch.setattr(service._build_index, "list_builds", lambda limit: [])
+
+        user_a = Principal(kind="oidc", identifier="userA", owner_id="oidc:canonical-abc")
+        resp = service.list_builds(principal=user_a)
+        builds = cast(list[dict[str, object]], resp.body["builds"])
+        assert builds
+        assert "owner_id" not in builds[0]
 
 
 class _FakeCatalogRef:
