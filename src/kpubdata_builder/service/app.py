@@ -336,11 +336,10 @@ class BuilderService:
             )
 
         kwargs: dict[str, object] = {}
-        if _factory_accepts_keyword(self._client_factory, "provider_keys"):
-            kwargs["provider_keys"] = provider_keys
-        elif provider_keys:
-            raise RuntimeError("client_factory cannot accept principal provider credentials")
         if provider_keys:
+            if not _factory_accepts_keyword(self._client_factory, "provider_keys"):
+                raise RuntimeError("client_factory cannot accept principal provider credentials")
+            kwargs["provider_keys"] = provider_keys
             if not _factory_accepts_keyword(self._client_factory, "cache"):
                 raise RuntimeError("client_factory cannot disable credential response cache")
             # kpubdata#263이 해결되기 전에는 credential이 cache key에 포함되지 않는다.

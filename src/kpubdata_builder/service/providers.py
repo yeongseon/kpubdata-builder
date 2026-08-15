@@ -102,7 +102,6 @@ class CredentialResolver:
     def provider_keys(self, owner_id: str | None, providers: Iterable[str]) -> dict[str, str]:
         """요청에 필요한 provider만 해석해 새 Client용 key mapping을 만든다."""
         resolved: dict[str, str] = {}
-        sources: dict[str, CredentialSource] = {}
         for provider in providers:
             credential = self.resolve(owner_id, provider)
             if credential.value is None:
@@ -114,7 +113,6 @@ class CredentialResolver:
                     f"providers sharing credential slot {slot!r} have conflicting credentials"
                 )
             resolved[slot] = credential.value
-            sources[slot] = credential.source
         return resolved
 
     def metadata(self, owner_id: str, provider: str) -> CredentialMetadata:
