@@ -154,9 +154,16 @@ def test_examples_are_secret_safe_and_have_no_internal_absolute_paths() -> None:
     assert credential == {"credential": "replace-with-your-provider-key"}
 
 
-def test_query_example_has_only_main_1_8_0_result_fields() -> None:
+def test_query_example_has_main_1_9_0_result_fields() -> None:
     result = _example("/query", "post", "response:200", "AveragePm10Result")
-    assert set(result) == {"columns", "rows", "truncated", "execution_ms"}
+    assert set(result) == {
+        "columns",
+        "rows",
+        "truncated",
+        "execution_ms",
+        "startup_ms",
+        "engine_execution_ms",
+    }
 
 
 def test_extraction_script_emits_documented_json_shape() -> None:
@@ -168,7 +175,7 @@ def test_extraction_script_emits_documented_json_shape() -> None:
         text=True,
     )
     payload = json.loads(completed.stdout)
-    assert payload["contract_version"] == "1.8.0"
+    assert payload["contract_version"] == "1.9.0"
     assert len(payload["examples"]) >= 50
     assert set(payload["examples"][0]) == {
         "path",
@@ -192,6 +199,8 @@ class _ExampleQueryService:
             ),
             False,
             7,
+            12,
+            5,
         )
 
 

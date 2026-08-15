@@ -1281,7 +1281,7 @@ paths:
                 $ref: "#/components/schemas/QueryResponse"
               examples:
                 AveragePm10Result:
-                  summary: bounded row 결과와 현재 1.8.0 실행 시간 필드
+                  summary: bounded row 결과와 현재 1.9.0 실행 시간 필드
                   value:
                     columns: [station_name, avg_pm10]
                     rows:
@@ -1291,6 +1291,8 @@ paths:
                         avg_pm10: 28.0
                     truncated: false
                     execution_ms: 7
+                    startup_ms: 12
+                    engine_execution_ms: 5
         "400":
           description: invalid context, unsafe SQL, syntax/execution failure
           content:
