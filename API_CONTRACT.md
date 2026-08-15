@@ -2,7 +2,7 @@
 
 ## 1. 단일 소스
 
-Builder HTTP wire 계약의 단일 소스는 [contract/builder-api.yaml](./contract/builder-api.yaml)입니다.
+Builder HTTP wire 계약의 단일 소스는 [contract/builder-api.yaml](https://github.com/yeongseon/kpubdata-builder/blob/main/contract/builder-api.yaml)입니다.
 
 - endpoint, request body, response body, status code, security scheme은 OpenAPI 문서를 기준으로 합니다.
 - `contract/builder-api.yaml`의 `info.version`은 `kpubdata_builder.service.API_CONTRACT_VERSION`과 일치해야 합니다.
@@ -318,9 +318,9 @@ build_response = service.build(spec_yaml_str, run_id="my-run-001")
 
 | 문서 | 역할 |
 | :--- | :--- |
-| [contract/builder-api.yaml](./contract/builder-api.yaml) | HTTP wire 계약 SSOT |
+| [contract/builder-api.yaml](https://github.com/yeongseon/kpubdata-builder/blob/main/contract/builder-api.yaml) | HTTP wire 계약 SSOT |
 | [BUILD_SPEC.md](./BUILD_SPEC.md) | BuildSpec 입력 계약 |
 | [BUILD_STATE.md](./BUILD_STATE.md) | build 상태 모델 |
 | [BOUNDARY.md](./BOUNDARY.md) | Builder-Studio 경계 |
-| [docs/adrs/0002-build-execution-model.md](./docs/adrs/0002-build-execution-model.md) | v0.4 동기 build 모델 결정 |
-| [docs/adrs/0005-api-contract-single-source.md](./docs/adrs/0005-api-contract-single-source.md) | OpenAPI SSOT 결정 |
+| [docs/adrs/0002-build-execution-model.md](https://github.com/yeongseon/kpubdata-builder/blob/main/docs/adrs/0002-build-execution-model.md) | v0.4 동기 build 모델 결정 |
+| [docs/adrs/0005-api-contract-single-source.md](https://github.com/yeongseon/kpubdata-builder/blob/main/docs/adrs/0005-api-contract-single-source.md) | OpenAPI SSOT 결정 |

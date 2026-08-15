@@ -199,7 +199,7 @@ src/kpubdata_builder/
 ### 프로젝트 관리
 - [요구사항 (PRD)](PRD.md): 제품 요구사항 및 목표 정의
 - [로드맵](ROADMAP.md): 향후 개발 계획 및 마일스톤
-- [작업 계획](PLAN.md): 초기 구축 및 작업 계획
+- [작업 계획](https://github.com/yeongseon/kpubdata-builder/blob/main/.github/PLAN.md): 초기 구축 및 작업 계획
 
 ### 자세한 참고
 - [ADR: 오케스트레이터로서의 Builder](adrs/0001-builder-as-orchestrator.md): 빌더 아키텍처 결정 기록
@@ -231,7 +231,7 @@ src/kpubdata_builder/
 | [기여 방법](CONTRIBUTING.md) | 프로젝트 기여 가이드 |
 | [요구사항 (PRD)](PRD.md) | 제품 요구사항 정의서 |
 | [로드맵](ROADMAP.md) | 프로젝트 로드맵 |
-| [작업 계획](PLAN.md) | 작업 실행 계획 |
+| [작업 계획](https://github.com/yeongseon/kpubdata-builder/blob/main/.github/PLAN.md) | 작업 실행 계획 |
 | [에러 처리](guides/error-handling.md) | 오류 처리 가이드 |
 | [변경 이력](CHANGELOG.md) | 프로젝트 변경 이력 |
 
