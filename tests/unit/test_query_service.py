@@ -30,7 +30,7 @@ class _BlockingEngine:
             if self.calls >= 2:
                 self.started.set()
         self.release.wait(timeout=5)
-        return QueryResult((), (), False, 0)
+        return QueryResult((), (), False, 0, 0, 0)
 
 
 def test_capacity_plus_one_is_rejected_without_engine_call() -> None:

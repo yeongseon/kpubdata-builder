@@ -195,7 +195,8 @@ def _strip_internal_fields(entries: list[_BuildListEntry]) -> list[_BuildListEnt
 # 1.4.0 -> 1.5.0: Dataset Catalog·Detail·Stage Summary API 추가 (#488, additive).
 # 1.5.0 -> 1.6.0: 구조화된 Quality/Schema Drift 결과, quality history/detail API 추가
 # (#486, additive — 기존 엔드포인트는 변경되지 않는다).
-API_CONTRACT_VERSION = "1.8.0"
+# 1.8.0 -> 1.9.0: query startup/engine timing fields 추가 (#523, additive).
+API_CONTRACT_VERSION = "1.9.0"
 
 
 def _quality_result_to_json(r: QualityCheckResult) -> dict[str, JsonValue]:
@@ -467,6 +468,8 @@ class BuilderService:
                 "rows": list(result.rows),
                 "truncated": result.truncated,
                 "execution_ms": result.execution_ms,
+                "startup_ms": result.startup_ms,
+                "engine_execution_ms": result.engine_execution_ms,
             },
         )
 

@@ -36,13 +36,13 @@ class _BlockingEngine:
             if self.calls == 2:
                 self.started.set()
         self.release.wait(timeout=5)
-        return QueryResult((), (), False, 1)
+        return QueryResult((), (), False, 1, 0, 0)
 
 
 class _QueryStub:
     def execute(self, table_path: Path, canonical_sql: str, *, limit: int) -> QueryResult:
         del table_path, canonical_sql, limit
-        return QueryResult(("value",), ({"value": 1},), False, 3)
+        return QueryResult(("value",), ({"value": 1},), False, 3, 1, 1)
 
 
 def _context(tmp_path: Path) -> ResolvedQueryContext:
@@ -79,6 +79,8 @@ def test_query_response_contains_only_documented_result_fields(
         "rows",
         "truncated",
         "execution_ms",
+        "startup_ms",
+        "engine_execution_ms",
     }
 
 

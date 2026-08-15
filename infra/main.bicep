@@ -34,6 +34,32 @@ param storageAccountName string = 'kpubdatabuilder'
 @description('Allowed CORS origins (comma-separated).')
 param allowedOrigins string = ''
 
+@description('ACA CPU cores assigned to the single Builder replica.')
+@allowed([
+  '0.5'
+  '1.0'
+  '1.5'
+  '2.0'
+])
+param containerCpu string = '1.0'
+
+@description('ACA memory assigned to the single Builder replica.')
+@allowed([
+  '1Gi'
+  '2Gi'
+  '3Gi'
+  '4Gi'
+])
+param containerMemory string = '2Gi'
+
+@description('KPUBDATA_BUILDER_MAX_WORKERS: maximum concurrent HTTP request threads.')
+@minValue(1)
+param builderMaxWorkers int = 4
+
+@description('KPUBDATA_QUERY_MAX_CONCURRENCY: maximum spawned query child processes.')
+@minValue(1)
+param queryMaxConcurrency int = 1
+
 @description('Location for all resources.')
 param location string = resourceGroup().location
 
@@ -50,8 +76,13 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   }
 }
 
-resource fileShare 'Microsoft.Storage/storageAccounts/fileServices/shares@2023-05-01' = {
+resource fileService 'Microsoft.Storage/storageAccounts/fileServices@2023-05-01' = {
   parent: storageAccount
+  name: 'default'
+}
+
+resource fileShare 'Microsoft.Storage/storageAccounts/fileServices/shares@2023-05-01' = {
+  parent: fileService
   name: azureFilesShareName
   properties: {
     shareQuota: 50
@@ -129,7 +160,19 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
               name: 'KPUBDATA_BUILDER_ALLOWED_ORIGINS'
               value: allowedOrigins
             }
+            {
+              name: 'KPUBDATA_BUILDER_MAX_WORKERS'
+              value: string(builderMaxWorkers)
+            }
+            {
+              name: 'KPUBDATA_QUERY_MAX_CONCURRENCY'
+              value: string(queryMaxConcurrency)
+            }
           ]
+          resources: {
+            cpu: json(containerCpu)
+            memory: containerMemory
+          }
           volumeMounts: [
             {
               volumeName: 'data'

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 from multiprocessing.connection import Connection
@@ -14,9 +15,13 @@ from kpubdata_builder.query.engine import QueryEngine, QueryExecutionError, Quer
 
 
 def _sleeping_worker(
-    connection: Connection, table_path: str, canonical_sql: str, limit: int
+    connection: Connection,
+    table_path: str,
+    canonical_sql: str,
+    limit: int,
+    parent_started_ns: int,
 ) -> None:
-    del canonical_sql, limit
+    del canonical_sql, limit, parent_started_ns
     Path(table_path).write_text(str(os.getpid()), encoding="utf-8")
     try:
         time.sleep(60)
@@ -58,21 +63,42 @@ def test_timeout_leaves_child_not_alive(tmp_path: Path) -> None:
     assert not _pid_is_alive(pid)
 
 
-def test_real_engine_executes_canonical_sql_and_hard_limit(tmp_path: Path) -> None:
+def test_real_engine_executes_canonical_sql_and_hard_limit(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     import polars as pl
 
     table_path = tmp_path / "table.parquet"
     pl.DataFrame({"value": [3, 1, 2]}).write_parquet(table_path)
+    sql = "SELECT value FROM dataset ORDER BY value"
+    caplog.set_level(logging.INFO, logger=engine_module.__name__)
 
     result = QueryEngine(timeout_seconds=5).execute(
         table_path,
-        "SELECT value FROM dataset ORDER BY value",
+        sql,
         limit=2,
     )
 
     assert result.columns == ("value",)
     assert result.rows == ({"value": 1}, {"value": 2})
     assert result.truncated is True
+    assert result.execution_ms >= 0
+    assert result.startup_ms >= 0
+    assert result.engine_execution_ms >= 0
+    timing_record = next(record for record in caplog.records if record.event == "query_timing")
+    assert timing_record.ipc_serialization_ms >= 0
+    assert sql not in timing_record.getMessage()
+    assert str(table_path) not in timing_record.getMessage()
+
+
+@pytest.mark.parametrize("value", [None, True, False, -1, 1.5, "1"])
+def test_timing_payload_requires_nonnegative_integer(value: object) -> None:
+    with pytest.raises(QueryExecutionError, match="invalid timing data"):
+        engine_module._timing_from_payload({"startup_ms": value}, "startup_ms")
+
+
+def test_timing_payload_accepts_zero() -> None:
+    assert engine_module._timing_from_payload({"startup_ms": 0}, "startup_ms") == 0
 
 
 def test_real_engine_raises_execution_error_for_unresolvable_column(tmp_path: Path) -> None:
@@ -112,8 +138,12 @@ def test_worker_rejects_result_over_response_byte_cap(
     connection = _CaptureConnection()
     monkeypatch.setattr(engine_module, "MAX_QUERY_RESPONSE_BYTES", 100)
 
-    engine_module._query_worker(  # type: ignore[arg-type]
-        connection, str(table_path), "SELECT * FROM dataset", 1
+    engine_module._query_worker(
+        connection,  # type: ignore[arg-type]
+        str(table_path),
+        "SELECT * FROM dataset",
+        1,
+        time.monotonic_ns(),
     )
 
     assert connection.payload == {"ok": False}
