@@ -145,6 +145,15 @@ def test_service_api_version_matches_contract() -> None:
     assert str(_load_contract()["info"]["version"]) == API_CONTRACT_VERSION
 
 
+def test_main_contract_version_is_stable_semver() -> None:
+    """main 계약은 prerelease/build suffix 없는 식별 가능한 stable SemVer다 (#521)."""
+    from kpubdata_builder.service import API_CONTRACT_VERSION
+
+    parts = API_CONTRACT_VERSION.split(".")
+    assert len(parts) == 3
+    assert all(part.isdigit() for part in parts)
+
+
 def test_build_manifest_does_not_publish_internal_owner_id() -> None:
     """persisted owner_id는 HTTP BuildManifest의 공개 property가 아니다 (#505)."""
     manifest = _load_contract()["components"]["schemas"]["BuildManifest"]
