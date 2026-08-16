@@ -265,6 +265,46 @@ v0.4 Builder service는 동기식 실행 모델을 유지합니다.
   그렇지 않으면 다른 principal의 최신 run들이 LIMIT을 다 채워 요청자 본인의
   recent run이 빠질 수 있습니다.
 
+### File·URL Source Ingestion (#498)
+
+Public API/File/URL source가 동일한 canonical source contract와
+Bronze→Silver→Gold pipeline을 공유합니다. `BuildSpec.sources[].kind`가
+`public_api`(기본)/`file`/`url`을 구분하며, `kind`를 생략한 source는 항상
+`public_api`로 해석되어 기존 동작이 그대로 유지됩니다.
+
+- **File 업로드**: `POST /uploads`는 JSON이 아니라 raw binary body를 받습니다
+  (multipart 대신 동등한 binary upload). `format`/`encoding`/`filename`은
+  query parameter로 전달하며, 서버가 즉시 파싱 가능성을 검증해(손상·빈 파일은
+  400) fail-fast합니다. 저장된 content는 요청 principal의 `owner_id`로
+  격리되며, 다시 원문을 내려주는 API는 없습니다 — `GET /uploads/{upload_id}`는
+  메타데이터만 반환합니다. `BuildSpec.sources[].upload_id`가 참조하는 업로드는
+  build/preview를 요청한 principal과 소유자가 같아야 하며, 다르면 존재 여부를
+  구분하지 않고 동일하게 not found로 처리합니다(fail-closed, #505의 ownership
+  패턴과 동일). `sources[].format`/`encoding`은 업로드 시점에 검증된 값과
+  정확히 일치해야 합니다. 업로드 content는 로컬 파일시스템 경로가 아니라
+  SQLite에 저장되므로 path traversal 표면이 없고, `upload_id`는 서버가
+  발급하는 불투명한 식별자(`upl_<hex32>`)입니다 — 사용자가 filename/path를
+  직접 참조할 수 없습니다.
+- **URL fetch(P0)**: `kind="url"` source는 GET, Auth=None인 안전한 HTTP(S)
+  fetch만 지원합니다(Bearer credential 연동은 #492 이후 P1). SSRF 방어로
+  `https` 외 scheme과 userinfo가 포함된 URL을 거부하고, hostname을 DNS로 직접
+  resolve해 loopback/private/link-local/reserved 등 비공인(non-global) 주소로의
+  접속을 차단합니다(하나라도 비공인이면 전체 거부). 실제 TCP 연결은 검증한
+  IP에 직접 여는 방식으로 검증 시점과 연결 시점 사이의 DNS rebinding을
+  방지하며, redirect마다 동일 검증을 반복합니다(최대 5회). 응답 크기와
+  connect/read timeout에 상한을 둡니다. BuildSpec 계약에 header/POST/PUT/PATCH
+  필드가 아예 없어 임의 header나 다른 HTTP method를 표현할 수 없습니다.
+- **Provenance/manifest 비노출**: file source의 provenance는 로컬 파일시스템
+  경로 대신 `upload_id`만 담습니다. url source의 provenance/manifest는 query
+  string이 제거된 endpoint만 담아 우연히 섞인 secret이 남지 않게 합니다. 두
+  kind 모두 기존 `SourceProvenance`(provider/dataset 필드) 모양을 그대로
+  재사용합니다 — file은 `provider="file", dataset=upload_id`, url은
+  `provider="url", dataset=<host+path 기반 경로-안전 slug>`로 채웁니다(사람이
+  읽는 원본 endpoint는 `fetch_params.endpoint`에 별도로 남습니다).
+- **Preview/Build 동일 경로**: `POST /preview`와 `POST /build` 모두 같은
+  source resolver를 공유하므로, file/url source도 Public API source와 동일한
+  스키마/샘플/quality 판정 흐름을 거칩니다.
+
 ## 4. 인증과 CORS
 
 브라우저 클라이언트(Studio 등)와의 연동을 위해 CORS는 default-deny입니다.

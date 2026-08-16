@@ -73,7 +73,19 @@ exports:
 
 ### 4.4 `sources` (배열)
 
-각 소스는 다음 필드를 가집니다.
+`kind` 필드로 세 종류의 source를 표현합니다(#498). `kind`를 생략하면 항상
+`public_api`로 해석되므로 기존 BuildSpec은 수정 없이 그대로 동작합니다.
+
+| kind | 의미 |
+| :--- | :--- |
+| `public_api` (기본) | 기존 kpubdata provider/dataset 참조 |
+| `file` | `POST /uploads`로 사전 업로드한 파일(CSV/JSON/JSONL/Parquet) 참조 |
+| `url` | 안전한 GET(Auth=None) HTTP(S) 소스 |
+
+`alias`/`schema`는 세 kind 공통 필드입니다. 그 외 필드는 kind별로 서로
+배타적이며, 다른 kind의 필드가 섞이면 BuildSpec 로드 시 즉시 거부됩니다.
+
+#### `kind: public_api` (기본값)
 
 ```yaml
 sources:
@@ -96,11 +108,71 @@ sources:
 
 | 필드 | 타입 | 필수 | 설명 |
 | :--- | :--- | :--- | :--- |
+| `kind` | string | 아니오 | 생략 시 `public_api` |
 | `provider` | string | 예 | `kpubdata` provider 이름 |
 | `dataset` | string | 예 | provider 내부 dataset 이름 |
 | `params` | object | 아니오 | source 호출 파라미터 (JSON 호환 값) |
 | `alias` | string | 아니오 | 조립 단계에서 사용할 사용자 정의 소스 이름 |
 | `schema` | object | 아니오 | Silver 정규화 및 required-column/dtype 검증 계약 |
+
+#### `kind: file` (#498)
+
+`POST /uploads`가 발급한 `upload_id`를 참조합니다. 파일시스템 경로를 직접
+쓸 수 없습니다 — `upload_id`는 서버가 발급한 불투명한 식별자(`upl_<hex32>`)이며,
+업로드 자체는 principal의 owner_id로 격리됩니다(다른 사용자의 upload_id를
+참조할 수 없음). `format`/`encoding`은 업로드 시점에 검증된 값과 정확히
+일치해야 합니다.
+
+```yaml
+sources:
+  - kind: file
+    upload_id: upl_0123456789abcdef0123456789abcdef
+    format: csv
+    encoding: utf-8
+    alias: uploaded_trades
+```
+
+| 필드 | 타입 | 필수 | 설명 |
+| :--- | :--- | :--- | :--- |
+| `kind` | string | 예 | `file` |
+| `upload_id` | string | 예 | `POST /uploads` 응답의 `upload_id` |
+| `format` | string | 예 | `csv` \| `json` \| `jsonl` \| `parquet` (업로드 시 검증된 값과 일치해야 함) |
+| `encoding` | string | 아니오 | 텍스트 포맷(csv/json/jsonl) 디코딩 인코딩. 기본값 `utf-8`. parquet은 무시됨 |
+| `alias` | string | 아니오 | 조립 단계에서 사용할 사용자 정의 소스 이름 |
+| `schema` | object | 아니오 | Silver 정규화 및 required-column/dtype 검증 계약 |
+
+지원 포맷은 CSV/JSON(top-level array of objects)/JSONL/Parquet입니다.
+Excel/ZIP은 범위 밖입니다.
+
+#### `kind: url` (#498 P0)
+
+GET, Auth=None인 안전한 HTTP(S) 소스만 P0 범위입니다. Bearer credential
+연동은 #492 이후 P1 확장입니다.
+
+```yaml
+sources:
+  - kind: url
+    endpoint: https://example.org/data.json
+    method: GET
+    alias: external_feed
+```
+
+| 필드 | 타입 | 필수 | 설명 |
+| :--- | :--- | :--- | :--- |
+| `kind` | string | 예 | `url` |
+| `endpoint` | string | 예 | fetch할 절대 URL. `https`만 허용하며 userinfo(`user:pass@host`)는 금지 |
+| `method` | string | 아니오 | 기본값 `GET`. P0는 `GET`만 허용 |
+| `format` | string | 아니오 | `json` \| `jsonl` \| `csv`. 생략 시 응답 `Content-Type`으로 추론(기본 `json`) |
+| `alias` | string | 아니오 | 조립 단계에서 사용할 사용자 정의 소스 이름 |
+| `schema` | object | 아니오 | Silver 정규화 및 required-column/dtype 검증 계약 |
+
+**SSRF 방어(#498)**: `https` 외 scheme(`http`/`file`/`ftp` 등) 거부, userinfo
+포함 URL 거부, hostname을 DNS로 직접 resolve해 loopback/private/link-local/
+reserved 등 비공인(non-global) 주소로의 fetch 거부(하나라도 비공인이면 전체
+거부), 실제 TCP 연결은 검증된 IP에 직접 연결(DNS rebinding 방지), redirect마다
+동일 검증 반복(최대 5회), connect/read timeout과 응답 크기 상한 적용. 임의
+header나 POST/PUT/PATCH는 계약에 필드 자체가 없어 표현할 수 없습니다.
+provenance/manifest에는 query string이 제거된 endpoint만 남습니다.
 
 `schema`는 다음 선택 필드를 지원합니다.
 

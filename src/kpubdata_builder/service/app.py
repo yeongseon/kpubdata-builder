@@ -18,6 +18,7 @@ import inspect
 import json
 import logging
 import os
+import threading
 import time
 from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime, timezone
@@ -35,6 +36,7 @@ from ..credentials import (
     SQLiteCredentialRepository,
 )
 from ..errors import SpecLoadError, ValidationError
+from ..ingestion import IngestionError, parse_tabular_bytes
 from ..pipeline import DEFAULT_PREVIEW_SEED, SampleMode, preview_build, run_build
 from ..quality import QualityCheckResult
 from ..query.engine import QueryExecutionError, QueryTimeoutError
@@ -47,12 +49,19 @@ from ..query.resolver import (
 from ..query.security import UnsafeQueryError, validate_read_only_sql
 from ..query.service import QueryBusyError, QueryService
 from ..spec import BuildSpec, JsonValue, parse_spec
+from ..spec.models import SOURCE_FILE_FORMATS
 from ..spec.serializer import BUILDSPEC_SNAPSHOT_FILENAME, compute_spec_digest
 from ..spec.validator import validate_spec
 from ..stages._path_safety import ensure_within, validate_path_segment
 from ..stages.bronze.build import SourceClient
 from ..store import BuildIndex
 from ..tabular import DEFAULT_PREVIEW_LIMIT
+from ..uploads import (
+    SQLiteUploadRepository,
+    UploadMetadata,
+    UploadRepository,
+    resolve_max_upload_bytes,
+)
 from . import datasets as datasets_service
 from . import monitoring as monitoring_service
 from . import ownership as ownership_module
@@ -72,6 +81,7 @@ from .providers import (
 )
 from .responses import FileResponse, ServiceResponse
 from .routes import ROUTE_ADAPTERS
+from .routes import uploads as uploads_route
 from .routes.core import MAX_PREVIEW_LIMIT
 
 logger = logging.getLogger(__name__)
@@ -90,6 +100,11 @@ class _CloseableClient(Protocol):
 def _close_request_client(client: SourceClient) -> None:
     if isinstance(client, _CloseableClient):
         client.close()
+
+
+def _raise_provider_test_error(client: SourceClient, provider: str) -> None:
+    """provider_status의 client 생성 실패 fallback에서 쓰는 항상-raise operation."""
+    raise RuntimeError()
 
 
 def _credential_repository_from_env(output_root: Path) -> CredentialRepository | None:
@@ -211,7 +226,12 @@ def _strip_internal_fields(entries: list[_BuildListEntry]) -> list[_BuildListEnt
 # MonitoringSummaryResponse.status(healthy/degraded)는 required subsystem
 # availability로부터 계산되는 deterministic aggregate다(latency threshold
 # 미사용).
-API_CONTRACT_VERSION = "1.11.0"
+# 1.11.0 -> 1.12.0: BuildSpec sources[]에 kind="file"/"url"을 추가하고 (기존
+# provider/dataset source는 kind="public_api"로 additive 해석), POST /uploads,
+# GET /uploads/{upload_id}, DELETE /uploads/{upload_id}를 추가한다(#498,
+# additive — 기존 엔드포인트/kind 없는 source는 변경되지 않는다). url source는
+# P0 범위(GET, Auth=None, https만 허용)로 SSRF를 방어하는 safe fetch를 거친다.
+API_CONTRACT_VERSION = "1.12.0"
 
 
 def _quality_result_to_json(r: QualityCheckResult) -> dict[str, JsonValue]:
@@ -227,6 +247,18 @@ def _quality_result_to_json(r: QualityCheckResult) -> dict[str, JsonValue]:
         "affected_rows": r.affected_rows,
         "evaluated_rows": r.evaluated_rows,
         "detail": r.detail,
+    }
+
+
+def _upload_metadata_body(metadata: UploadMetadata) -> dict[str, JsonValue]:
+    """UploadMetadata를 wire JSON으로 변환한다 (#498). content는 절대 포함하지 않는다."""
+    return {
+        "upload_id": metadata.upload_id,
+        "format": metadata.format,
+        "encoding": metadata.encoding,
+        "size_bytes": metadata.size_bytes,
+        "original_filename": metadata.original_filename,
+        "created_at": metadata.created_at,
     }
 
 
@@ -248,6 +280,7 @@ class BuilderService:
         client_factory: Callable[..., SourceClient],
         query_service: QueryService | None = None,
         credential_repository: CredentialRepository | None = None,
+        upload_repository: UploadRepository | None = None,
         provider_test_operation: ProviderTestOperation = default_provider_test,
         provider_test_timeout: float | None = None,
         async_max_workers: int = 10,
@@ -256,6 +289,14 @@ class BuilderService:
         self._output_root = output_root
         self._client_factory = client_factory
         self._build_index = BuildIndex(output_root)  # #309, ADR 0003
+        # kind="file" source(#498)의 업로드 저장소. 명시적으로 주입되지 않으면
+        # 실제로 처음 쓰일 때까지 SQLite 파일을 만들지 않는다(지연 생성,
+        # `_upload_repository` property) — credential repository(마스터 키
+        # 미설정 시 None)처럼, 업로드 기능을 쓰지 않는 워크스페이스에는 흔적을
+        # 남기지 않는다(예: preview는 파일을 하나도 쓰지 않는다는 기존 계약).
+        self._upload_repository_override: UploadRepository | None = upload_repository
+        self._upload_repository_lazy: UploadRepository | None = None
+        self._upload_repository_lock = threading.Lock()
         # Monitoring API용 bounded latency recorder (#516). dispatch()가 매 요청
         # 처리 시간을 기록한다 — 인스턴스별로 분리해 테스트 간 상태가 섞이지 않는다.
         self._latency_recorder = monitoring_service.LatencyRecorder()
@@ -275,6 +316,36 @@ class BuilderService:
             max_workers=async_max_workers,
             max_queue_size=async_max_queue_size,
         )
+
+    @property
+    def _upload_repository(self) -> UploadRepository:
+        """kind="file" source(#498)의 업로드 저장소를 지연 생성해 반환한다.
+
+        명시적으로 주입됐으면 그대로 쓴다. 아니면 처음 호출될 때만
+        SQLite 파일을 만든다 — preview/build가 업로드를 전혀 참조하지 않는
+        워크스페이스에는 ``.service/uploads.sqlite3`` 흔적을 남기지 않는다.
+        """
+        if self._upload_repository_override is not None:
+            return self._upload_repository_override
+        with self._upload_repository_lock:
+            if self._upload_repository_lazy is None:
+                self._upload_repository_lazy = SQLiteUploadRepository(
+                    self._output_root / ".service" / "uploads.sqlite3",
+                    max_bytes=resolve_max_upload_bytes(),
+                )
+            return self._upload_repository_lazy
+
+    def _upload_repository_for(self, spec: BuildSpec) -> UploadRepository | None:
+        """spec에 ``kind="file"`` source가 있을 때만 업로드 저장소를 만든다 (#498).
+
+        file source가 없는 preview/build는 이 property를 아예 건드리지 않아
+        지연 생성이 실제로 지연되게 한다 — property 자체를 호출하면(설령
+        결과를 안 쓰더라도) 매 요청마다 SQLite를 초기화하게 되므로 여기서
+        먼저 필요 여부를 가른다.
+        """
+        if any(source.kind == "file" for source in spec.sources):
+            return self._upload_repository
+        return None
 
     def _create_client(
         self,
@@ -372,7 +443,7 @@ class BuilderService:
                 provider=provider,
                 configured=True,
                 client=cast(SourceClient, object()),
-                operation=lambda _client, _provider: (_ for _ in ()).throw(RuntimeError()),
+                operation=_raise_provider_test_error,
             )
             return ServiceResponse(200, cast(dict[str, JsonValue], test_result_body(result)))
         finally:
@@ -446,6 +517,63 @@ class BuilderService:
             200,
             {"provider": provider, "configured": False, "masked": None, "updated_at": None},
         )
+
+    def create_upload(
+        self,
+        raw: bytes,
+        *,
+        format: str,  # noqa: A002 - 계약 필드명과 맞춘다
+        encoding: str,
+        original_filename: str | None,
+        principal: Principal,
+    ) -> ServiceResponse:
+        """업로드 content를 저장하고 즉시 파싱 가능한지 검증한다 (#498).
+
+        저장은 owner_id로 격리된다 — 나중에 BuildSpec의 ``kind="file"`` source가
+        이 upload_id를 참조하려면 같은 principal이어야 한다(``build``/``preview``의
+        resolver가 다시 확인한다). 파싱 가능성은 여기서 fail-fast로 확인한다 —
+        나중에 build 시점에야 손상된 파일임을 알게 되는 것을 피한다.
+        """
+        if principal.owner_id is None:
+            return ServiceResponse(403, {"error": "stable principal is required"})
+        if format not in SOURCE_FILE_FORMATS:
+            return ServiceResponse(
+                400,
+                {"error": f"format must be one of {SOURCE_FILE_FORMATS}, got {format!r}"},
+            )
+        try:
+            _ = parse_tabular_bytes(raw, format=format, encoding=encoding)
+        except IngestionError as exc:
+            return ServiceResponse(400, {"error": str(exc)})
+        try:
+            metadata = self._upload_repository.put(
+                principal.owner_id,
+                content=raw,
+                format=format,
+                encoding=encoding,
+                original_filename=original_filename,
+            )
+        except ValueError as exc:
+            return ServiceResponse(400, {"error": str(exc)})
+        return ServiceResponse(200, _upload_metadata_body(metadata))
+
+    def get_upload(self, upload_id: str, *, principal: Principal) -> ServiceResponse:
+        """현재 principal 소유 업로드의 안전한 메타데이터만 반환한다 (content 제외)."""
+        if principal.owner_id is None:
+            return ServiceResponse(403, {"error": "stable principal is required"})
+        metadata = self._upload_repository.get_metadata(principal.owner_id, upload_id)
+        if metadata is None:
+            return ServiceResponse(404, {"error": f"upload not found: {upload_id}"})
+        return ServiceResponse(200, _upload_metadata_body(metadata))
+
+    def delete_upload(self, upload_id: str, *, principal: Principal) -> ServiceResponse:
+        """현재 principal 소유 업로드만 삭제한다."""
+        if principal.owner_id is None:
+            return ServiceResponse(403, {"error": "stable principal is required"})
+        deleted = self._upload_repository.delete(principal.owner_id, upload_id)
+        if not deleted:
+            return ServiceResponse(404, {"error": f"upload not found: {upload_id}"})
+        return ServiceResponse(200, {"upload_id": upload_id, "deleted": True})
 
     def query(
         self, body: Mapping[str, JsonValue] | None, *, principal: Principal
@@ -585,7 +713,12 @@ class BuilderService:
         if isinstance(spec_or_error, ServiceResponse):
             return spec_or_error
 
-        provider_names = tuple(source.provider for source in spec_or_error.sources)
+        # provider credential은 kind="public_api" source에만 의미가 있다(#498) —
+        # file/url source의 provider는 항상 빈 문자열이므로 섞으면 credential
+        # resolver에 의미 없는 provider 이름이 전달된다.
+        provider_names = tuple(
+            source.provider for source in spec_or_error.sources if source.kind == "public_api"
+        )
         try:
             provider_keys = (
                 self._credential_resolver.provider_keys(principal.owner_id, provider_names)
@@ -608,6 +741,8 @@ class BuilderService:
                 limit=limit,
                 sample_mode=cast(SampleMode, sample_mode),
                 seed=seed,
+                upload_repository=self._upload_repository_for(spec_or_error),
+                owner_id=principal.owner_id if principal is not None else None,
             )
         finally:
             _close_request_client(client)
@@ -690,7 +825,11 @@ class BuilderService:
         if isinstance(spec_or_error, ServiceResponse):
             return spec_or_error
 
-        provider_names = tuple(source.provider for source in spec_or_error.sources)
+        # provider credential은 kind="public_api" source에만 의미가 있다(#498) —
+        # file/url source의 provider는 항상 빈 문자열이다.
+        provider_names = tuple(
+            source.provider for source in spec_or_error.sources if source.kind == "public_api"
+        )
         try:
             provider_keys = (
                 self._credential_resolver.provider_keys(principal.owner_id, provider_names)
@@ -714,6 +853,7 @@ class BuilderService:
                 run_id=run_id,
                 created_by=created_by,
                 owner_id=owner_id,
+                upload_repository=self._upload_repository_for(spec_or_error),
             )
         finally:
             _close_request_client(client)
@@ -1409,6 +1549,7 @@ def dispatch(
     *,
     api_key: str | None = None,
     bearer_token: str | None = None,
+    raw_body: bytes | None = None,
 ) -> ServiceResponse | FileResponse:
     """``_dispatch_impl``을 호출하고 처리 시간을 Monitoring latency 표본으로
     기록한다 (#516).
@@ -1416,11 +1557,21 @@ def dispatch(
     타이밍은 라우팅+인증+비즈니스 로직 전체를 감싼다(HTTP 소켓 I/O는 제외 —
     그건 http.py 계층). metric 기록 실패가 요청 실패로 전파되지 않도록
     ``LatencyRecorder.record``가 이미 내부적으로 예외를 흡수한다.
+
+    ``raw_body``는 ``POST /uploads``(#498)에서만 쓰이는 binary body다 — 다른
+    모든 endpoint는 JSON ``body``만 사용하며 ``raw_body``는 None이다.
     """
     started = time.perf_counter()
     try:
         return _dispatch_impl(
-            service, method, path, body, query, api_key=api_key, bearer_token=bearer_token
+            service,
+            method,
+            path,
+            body,
+            query,
+            api_key=api_key,
+            bearer_token=bearer_token,
+            raw_body=raw_body,
         )
     finally:
         elapsed_ms = (time.perf_counter() - started) * 1000
@@ -1436,6 +1587,7 @@ def _dispatch_impl(
     *,
     api_key: str | None = None,
     bearer_token: str | None = None,
+    raw_body: bytes | None = None,
 ) -> ServiceResponse | FileResponse:
     """(method, path)를 BuilderService 연산으로 라우팅한다.
 
@@ -1454,6 +1606,16 @@ def _dispatch_impl(
     principal = authenticate(api_key=api_key, bearer_token=bearer_token)
     if isinstance(principal, AuthError):
         return ServiceResponse(principal.status_code, {"error": principal.reason})
+
+    # /uploads(#498)는 binary body(raw_body)가 필요한 유일한 endpoint라 표준
+    # RouteAdapter(JSON body만 받음) 목록에 넣지 않고 여기서 직접 호출한다 —
+    # 과거의 거대한 dispatch monolith를 복원하는 것이 아니라, 이 한 endpoint의
+    # 전송 형태가 route adapter 계약과 다르기 때문이다.
+    uploads_response = uploads_route.handle(
+        service, method, path, principal, query=query, raw_body=raw_body
+    )
+    if uploads_response is not None:
+        return uploads_response
 
     for adapter in ROUTE_ADAPTERS:
         response = adapter(service, method, path, body, query, principal)

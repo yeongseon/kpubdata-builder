@@ -25,12 +25,18 @@ from typing import Any, cast
 from urllib.parse import urlsplit
 
 from ..spec import JsonValue
+from ..uploads import resolve_max_upload_bytes
 from .app import BuilderService, FileResponse, dispatch
 from .auth import validate_oidc_config
 
 # 단일 요청이 메모리를 고갈시키거나 단일 스레드 서버를 멈추게 하지 않도록 body 크기를
 # 제한한다. spec YAML 요청에 충분하면서도 남용을 막는 보수적 상한 (#186).
 _MAX_BODY_BYTES = 10 * 1024 * 1024  # 10 MiB
+
+# POST /uploads(#498)는 JSON이 아니라 파일 binary를 담으므로 일반 JSON 상한보다
+# 크게 잡는다 — 실제 상한은 uploads.resolve_max_upload_bytes()(환경변수로 조정)를
+# 그대로 재사용해 두 곳에 서로 다른 숫자를 두지 않는다.
+_UPLOADS_PATH = "/uploads"
 
 # 소켓 읽기 타임아웃(초). 느린 클라이언트/slowloris 공격이 스레드를 무한 점거하지 않도록
 # 한다 (#219). ThreadingHTTPServer를 사용하더라도 각 연결 스레드가 여기서 해제된다.
@@ -138,6 +144,20 @@ def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
 
         def _dispatch(self, method: str) -> None:
             self._request_id = uuid.uuid4().hex[:12]
+            # 쿼리 스트링이 경로/run_id로 새지 않도록 path 컴포넌트만으로 라우팅하고,
+            # 쿼리는 별도로 dispatch에 전달한다 (#252). body 크기 상한을 고르려면
+            # method+path를 먼저 알아야 하므로 body를 읽기 전에 파싱한다.
+            # getattr 기본값은 실제 서빙 경로에서는 절대 쓰이지 않는다 —
+            # BaseHTTPRequestHandler.parse_request()가 do_*() 호출 전에 항상
+            # self.path를 채운다. 오직 body-read 실패만 다루는 단위 테스트가
+            # object.__new__()로 handler를 만들어 self.path를 생략하는 경우에만
+            # 쓰인다 (#498 이전부터의 기존 테스트 fixture, TestHttpRobustness).
+            split = urlsplit(getattr(self, "path", ""))
+            path = split.path
+            # POST /uploads(#498)만 JSON이 아니라 파일 binary body를 받는다 — 다른
+            # 모든 endpoint는 지금까지와 동일하게 JSON body만 받는다.
+            is_binary_upload = method == "POST" and path == _UPLOADS_PATH
+            max_body_bytes = resolve_max_upload_bytes() if is_binary_upload else _MAX_BODY_BYTES
             try:
                 length = int(self.headers.get("Content-Length", 0) or 0)
             except ValueError:
@@ -147,7 +167,7 @@ def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
                 self._write(400, {"error": "invalid Content-Length header"})
                 return
             # 선언된 길이가 상한을 넘으면 body를 읽지 않고 413으로 거부한다 (#186).
-            if length > _MAX_BODY_BYTES:
+            if length > max_body_bytes:
                 self._write(413, {"error": "request body too large"})
                 return
             # body 읽기: 타임아웃이나 불완전한 읽기는 dropped connection 대신
@@ -164,7 +184,10 @@ def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
             else:
                 raw = b""
             body: dict[str, JsonValue] | None = None
-            if raw:
+            raw_body: bytes | None = None
+            if is_binary_upload:
+                raw_body = raw
+            elif raw:
                 try:
                     parsed = cast(object, json.loads(raw))
                 except json.JSONDecodeError:
@@ -176,10 +199,6 @@ def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
                     self._write(400, {"error": "JSON body must be an object"})
                     return
                 body = cast(dict[str, JsonValue], parsed)
-            # 쿼리 스트링이 경로/run_id로 새지 않도록 path 컴포넌트만으로 라우팅하고,
-            # 쿼리는 별도로 dispatch에 전달한다 (#252).
-            split = urlsplit(self.path)
-            path = split.path
             # dispatch()에서 예상치 못한 예외가 발생하면 연결을 끊는 대신 JSON 500을
             # 반환한다. 상세 정보는 서버 로그에만 기록하고 클라이언트에는 누설하지 않는다 (#218).
             try:
@@ -191,6 +210,7 @@ def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
                     query=split.query,
                     api_key=self.headers.get("X-API-Key"),
                     bearer_token=self.headers.get("Authorization"),
+                    raw_body=raw_body,
                 )
             except Exception:
                 _logger.error(

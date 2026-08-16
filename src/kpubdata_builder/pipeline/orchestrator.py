@@ -23,6 +23,7 @@ from pathlib import Path
 from ..artifact import ArtifactDataset
 from ..errors import DatasetValidationError, ValidationError
 from ..exporters import get_exporter
+from ..ingestion import IngestionError
 from ..manifest import (
     BuildManifest,
     SchemaSummary,
@@ -36,9 +37,10 @@ from ..manifest import (
 from ..quality import QualityCheckResult, SchemaDriftFinding, evaluate_quality
 from ..spec import BuildSpec, ExportTarget, SourceRef, write_buildspec_snapshot
 from ..spec.validator import validate_spec
-from ..stages.bronze.build import SourceClient, build_bronze_artifact
+from ..stages.bronze.build import SourceClient
 from ..stages.bronze.models import BronzeArtifact, utc_now
 from ..stages.bronze.persist import persist_bronze_artifact
+from ..stages.bronze.resolve import build_bronze_artifact_for_source, source_identity
 from ..stages.gold.build import build_gold_package
 from ..stages.gold.card import build_dataset_card, render_dataset_card
 from ..stages.gold.persist import persist_gold_package
@@ -46,6 +48,7 @@ from ..stages.silver.build import build_silver_dataset
 from ..stages.silver.drift import DriftFinding, detect_drift, find_previous_silver
 from ..stages.silver.persist import persist_silver_dataset
 from ..stages.silver.pii import scan_pii
+from ..uploads import UploadRepository
 from .context import BuildContext
 from .export import export_gold_package
 
@@ -113,8 +116,9 @@ class BuildResult:
 
 
 def _fetch_source_key(source: SourceRef) -> str:
-    """Bronze fetch에 사용할 실제 provider.dataset 키를 반환한다."""
-    return f"{source.provider}.{source.dataset}"
+    """Bronze fetch identity 키를 반환한다 (kind별 canonical identity, #498)."""
+    provider, dataset = source_identity(source)
+    return f"{provider}.{dataset}"
 
 
 def _output_source_key(source: SourceRef) -> str:
@@ -213,13 +217,17 @@ def _run_source_pipeline(
     *,
     client: SourceClient,
     context: BuildContext,
+    upload_repository: UploadRepository | None = None,
+    owner_id: str | None = None,
 ) -> _SourcePipelineResult:
     """한 소스를 Bronze → Silver → Gold로 실행하고 산출물을 저장한다.
 
     공유 가변 컨테이너를 인자로 받는 대신 결과를 로컬로 모아 반환하므로,
     여러 소스에 대해 동시에(스레드 풀에서) 안전하게 호출할 수 있다 (#247).
+
+    ``upload_repository``/``owner_id`` 는 ``kind="file"`` source에서만 쓰인다
+    (#498) — 업로드 소유권 확인에 필요한 stable principal id다.
     """
-    fetch_key = _fetch_source_key(source)
     output_key = _output_source_key(source)
     completed: list[str] = []
     outputs: list[str] = []
@@ -232,8 +240,13 @@ def _run_source_pipeline(
     quality_evaluated = False
     schema_drift: tuple[SchemaDriftFinding, ...] = ()
     try:
-        bronze = build_bronze_artifact(
-            client, source_key=fetch_key, fetch_params=dict(source.params)
+        # kind(public_api/file/url)에 맞는 resolver로 원시 레코드를 가져온다
+        # (#498) — 이후 Silver/Gold는 kind를 전혀 알 필요가 없다.
+        bronze = build_bronze_artifact_for_source(
+            source,
+            client=client,
+            upload_repository=upload_repository,
+            owner_id=owner_id,
         )
         bronze = _retag_bronze_artifact(bronze, output_key=output_key)
         bronze_paths = persist_bronze_artifact(
@@ -243,12 +256,17 @@ def _run_source_pipeline(
         _record_output_paths(outputs, bronze_paths.records_path, bronze_paths.metadata_path)
         # bronze 성공 직후 확정한다: 이후 단계가 실패해도(부분 실패) provenance는 남는다
         # (병렬화 이전 shared list에 즉시 append하던 것과 동일한 동작을 유지) (#247).
+        provenance_provider, provenance_dataset = source_identity(source)
         provenance_entry = build_source_provenance(
-            provider=source.provider,
-            dataset=source.dataset,
+            provider=provenance_provider,
+            dataset=provenance_dataset,
             fetched_at=bronze.fetched_at,
             records=bronze.raw_records,
-            params=source.params,
+            # bronze.fetch_params는 kind별 resolver가 이미 secret/path 없이
+            # 채운 값이다(#498) — file은 upload_id/format/encoding, url은 query
+            # string이 제거된 endpoint/method, public_api는 기존 source.params
+            # 그대로다.
+            params=bronze.fetch_params,
         )
 
         required_columns = source.schema.required if source.schema else ()
@@ -407,11 +425,14 @@ def _run_source_pipeline(
         )
     except Exception as exc:  # stage 실패를 결과로 변환하여 매니페스트에 기록
         # 검증 오류(ValidationError, DatasetValidationError)는 파일시스템 경로를
-        # 포함하지 않으므로 메시지를 그대로 전달한다.
+        # 포함하지 않으므로 메시지를 그대로 전달한다. IngestionError(#498)도
+        # 마찬가지로 안전한 메시지만 담도록 설계되어 있다(raw 응답 본문/내부
+        # 스택 없음) — SSRF 차단·오버사이즈·손상 파일 사유를 사용자가 바로
+        # 확인할 수 있어야 한다.
         # ExportError/ManifestError 등 다른 BuildError 하위 예외는 목적지 경로
         # 같은 내부 정보를 메시지에 포함할 수 있으므로, 상세 내용은 서버 경고로
         # 기록하고 클라이언트에는 일반 메시지만 반환한다 (#225).
-        if isinstance(exc, (ValidationError, DatasetValidationError)):
+        if isinstance(exc, (ValidationError, DatasetValidationError, IngestionError)):
             error_msg = str(exc)
         else:
             logger.error(
@@ -445,6 +466,7 @@ def run_build(
     run_id: str | None = None,
     created_by: str | None = None,
     owner_id: str | None = None,
+    upload_repository: UploadRepository | None = None,
 ) -> BuildResult:
     """BuildSpec을 Medallion 파이프라인으로 실행한다.
 
@@ -455,7 +477,12 @@ def run_build(
         run_id: 실행 식별자. 생략 시 타임스탬프 기반으로 생성.
         created_by: 빌드를 요청한 principal의 display/legacy 라벨(#388).
         owner_id: canonical stable persistent owner identity (#505). manifest에
-            created_by와 함께 additive로 기록된다.
+            created_by와 함께 additive로 기록된다. ``kind="file"`` source가
+            있으면 업로드 소유권 확인에도 이 값을 그대로 재사용한다(#498) —
+            "이 run을 요청한 principal"과 "이 run이 참조하는 업로드의 소유자"는
+            항상 같은 사람이어야 한다.
+        upload_repository: ``kind="file"`` source의 업로드 content를 조회할
+            저장소 (#498). None이면 file source가 있는 build는 실패한다.
 
     반환값:
         BuildResult: 전체 상태, 소스별 결과, 매니페스트 경로.
@@ -475,7 +502,13 @@ def run_build(
     )
 
     def _worker(source: SourceRef) -> _SourcePipelineResult:
-        return _run_source_pipeline(source, client=client, context=context)
+        return _run_source_pipeline(
+            source,
+            client=client,
+            context=context,
+            upload_repository=upload_repository,
+            owner_id=owner_id,
+        )
 
     # 소스별 fetch/stage는 대부분 네트워크 I/O 대기이므로 스레드 풀로 동시에 실행해
     # 총 소요 시간을 줄인다 (#247). executor.map은 완료 순서가 아니라 spec.sources

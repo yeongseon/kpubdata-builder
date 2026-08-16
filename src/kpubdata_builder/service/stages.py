@@ -26,6 +26,7 @@ from ..stages._stage_reader import (
     read_gold_summary,
     read_silver_summary,
 )
+from ..stages.bronze.resolve import source_identity
 
 Stage = Literal["bronze", "silver", "gold"]
 STAGE_NAMES: tuple[Stage, ...] = ("bronze", "silver", "gold")
@@ -98,9 +99,14 @@ def _output_source_key(source: SourceRef) -> str:
     """pipeline.orchestrator._output_source_key와 동일한 규칙을 미러링한다.
 
     stage 조회는 파이프라인이 실제로 파일을 쓸 때 쓴 것과 같은 output-facing
-    key(alias 우선, 아니면 provider.dataset)로 소스를 찾아야 한다.
+    key(alias 우선, 아니면 kind별 canonical identity)로 소스를 찾아야 한다.
+    file/url kind(#498)는 provider/dataset이 비어 있으므로 orchestrator와
+    동일한 source_identity()로 identity를 채운다.
     """
-    return source.alias if source.alias else f"{source.provider}.{source.dataset}"
+    if source.alias:
+        return source.alias
+    provider, dataset = source_identity(source)
+    return f"{provider}.{dataset}"
 
 
 def match_source_ref(spec: BuildSpec, source_key: str) -> SourceRef | None:

@@ -79,15 +79,26 @@ def canonical_spec_mapping(spec: BuildSpec) -> dict[str, JsonValue]:
                 "dtypes": _canonical_json(cast(JsonValue, source.schema.dtypes)),
                 "casts": _canonical_json(cast(JsonValue, source.schema.casts)),
             }
-        sources.append(
-            {
-                "provider": source.provider,
-                "dataset": source.dataset,
-                "params": _canonical_json(source.params),
-                "alias": source.alias,
-                "schema": schema,
-            }
-        )
+        # kind별로 유효한 field만 싣는다 (#498). loader의 _reject_foreign_fields가
+        # kind-foreign field의 "존재"만으로 거부하므로, 여기서 모든 kind의 field를
+        # 항상 함께 실으면 canonical snapshot 자체가 round-trip 불가능한 spec이
+        # 된다 — schema(#437)가 이미 쓰는 "관련 없으면 아예 emit하지 않는다" 패턴을
+        # 그대로 따른다. 기존 public_api-only spec에는 "kind": "public_api" 한
+        # 필드만 additive로 늘어난다.
+        entry: dict[str, JsonValue] = {"kind": source.kind, "alias": source.alias, "schema": schema}
+        if source.kind == "file":
+            entry["upload_id"] = source.upload_id
+            entry["format"] = source.format
+            entry["encoding"] = source.encoding
+        elif source.kind == "url":
+            entry["endpoint"] = source.endpoint
+            entry["method"] = source.method
+            entry["format"] = source.format
+        else:
+            entry["provider"] = source.provider
+            entry["dataset"] = source.dataset
+            entry["params"] = _canonical_json(source.params)
+        sources.append(entry)
 
     exports: list[JsonValue] = [
         {

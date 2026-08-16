@@ -13,13 +13,22 @@ BL3 (#417): problems를 {code, path, message, hint} 객체 배열로 구조화.
 
 from __future__ import annotations
 
+import codecs
 import math
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 from ..errors import ValidationError
 from ..exporters import EXPORTER_REGISTRY
 from ..tabular.polars_helpers import _NAMED_DTYPES
-from .models import BuildSpec
+from .models import (
+    SOURCE_FILE_FORMATS,
+    SOURCE_URL_FORMATS,
+    SOURCE_URL_METHODS,
+    UPLOAD_ID_PATTERN,
+    BuildSpec,
+    SourceRef,
+)
 
 
 @dataclass(frozen=True)
@@ -61,22 +70,25 @@ def validate_spec(spec: BuildSpec) -> None:
     if not spec.sources:
         problems.append(_p("missing_sources", "sources", "at least one source is required"))
     for i, source in enumerate(spec.sources):
-        if not source.provider.strip():
-            problems.append(
-                _p(
-                    "empty_field",
-                    f"sources[{i}].provider",
-                    f"sources[{i}].provider must be a non-empty string",
+        # provider/dataset은 kind="public_api"(기본값)에서만 의미가 있다 — 다른
+        # kind의 필수/금지 field는 _source_kind_problems가 검증한다 (#498).
+        if source.kind == "public_api":
+            if not source.provider.strip():
+                problems.append(
+                    _p(
+                        "empty_field",
+                        f"sources[{i}].provider",
+                        f"sources[{i}].provider must be a non-empty string",
+                    )
                 )
-            )
-        if not source.dataset.strip():
-            problems.append(
-                _p(
-                    "empty_field",
-                    f"sources[{i}].dataset",
-                    f"sources[{i}].dataset must be a non-empty string",
+            if not source.dataset.strip():
+                problems.append(
+                    _p(
+                        "empty_field",
+                        f"sources[{i}].dataset",
+                        f"sources[{i}].dataset must be a non-empty string",
+                    )
                 )
-            )
         if source.alias and not source.alias.strip():
             problems.append(
                 _p(
@@ -115,6 +127,7 @@ def validate_spec(spec: BuildSpec) -> None:
             break
     problems.extend(_split_problems(spec))
     problems.extend(_schema_problems(spec))
+    problems.extend(_source_kind_problems(spec))
     problems.extend(_pii_problems(spec))
     problems.extend(_license_problems(spec))
     problems.extend(_quality_problems(spec))
@@ -243,6 +256,118 @@ def _schema_problems(spec: BuildSpec) -> list[ValidationProblem]:
                         hint=f"Use one of: {', '.join(supported)}",
                     )
                 )
+    return problems
+
+
+def _source_kind_problems(spec: BuildSpec) -> list[ValidationProblem]:
+    """kind='file'/'url' source의 값 vocabulary와 SSRF 관련 형태를 검증한다 (#498).
+
+    field 구조(서로 다른 kind의 field 혼입 금지)는 loader가 이미 거부한다. 여기서는
+    loader가 검사하지 않는 의미 규칙(허용 format/encoding/method vocabulary, URL
+    scheme/userinfo, upload_id 형태)만 다룬다. 실제 네트워크 SSRF 방어(DNS
+    resolve·redirect 재검증)는 fetch 시점(ingestion.url_fetch)의 책임이다 — 여기서는
+    명백히 안전하지 않은 선언(scheme=http, userinfo 포함 등)을 build 실행 전에
+    빠르게 거부한다.
+    """
+    problems: list[ValidationProblem] = []
+    for i, source in enumerate(spec.sources):
+        prefix = f"sources[{i}]"
+        if source.kind == "file":
+            problems.extend(_file_source_problems(source, prefix))
+        elif source.kind == "url":
+            problems.extend(_url_source_problems(source, prefix))
+    return problems
+
+
+def _file_source_problems(source: SourceRef, prefix: str) -> list[ValidationProblem]:
+    problems: list[ValidationProblem] = []
+    if not source.upload_id.strip():
+        problems.append(
+            _p(
+                "empty_field",
+                f"{prefix}.upload_id",
+                f"{prefix}.upload_id must be a non-empty string",
+            )
+        )
+    elif not UPLOAD_ID_PATTERN.match(source.upload_id):
+        problems.append(
+            _p(
+                "invalid_upload_id",
+                f"{prefix}.upload_id",
+                f"{prefix}.upload_id {source.upload_id!r} is not a valid upload identifier",
+                hint="upload_id must come from POST /uploads",
+            )
+        )
+    if source.format not in SOURCE_FILE_FORMATS:
+        problems.append(
+            _p(
+                "unsupported_source_format",
+                f"{prefix}.format",
+                f"{prefix}.format {source.format!r} is not supported for kind='file'",
+                hint=f"Use one of: {', '.join(SOURCE_FILE_FORMATS)}",
+            )
+        )
+    try:
+        codecs.lookup(source.encoding)
+    except LookupError:
+        problems.append(
+            _p(
+                "unknown_encoding",
+                f"{prefix}.encoding",
+                f"{prefix}.encoding {source.encoding!r} is not a known encoding",
+            )
+        )
+    return problems
+
+
+def _url_source_problems(source: SourceRef, prefix: str) -> list[ValidationProblem]:
+    problems: list[ValidationProblem] = []
+    if source.method not in SOURCE_URL_METHODS:
+        problems.append(
+            _p(
+                "unsupported_source_method",
+                f"{prefix}.method",
+                f"{prefix}.method {source.method!r} is not supported "
+                "(P0 supports GET only, #498)",
+                hint=f"Use one of: {', '.join(SOURCE_URL_METHODS)}",
+            )
+        )
+    if source.format and source.format not in SOURCE_URL_FORMATS:
+        problems.append(
+            _p(
+                "unsupported_source_format",
+                f"{prefix}.format",
+                f"{prefix}.format {source.format!r} is not supported for kind='url'",
+                hint=f"Use one of: {', '.join(SOURCE_URL_FORMATS)}",
+            )
+        )
+    problems.extend(_endpoint_problems(source.endpoint, f"{prefix}.endpoint"))
+    return problems
+
+
+def _endpoint_problems(endpoint: str, path: str) -> list[ValidationProblem]:
+    if not endpoint.strip():
+        return [_p("empty_field", path, f"{path} must be a non-empty string")]
+    parsed = urlsplit(endpoint)
+    problems: list[ValidationProblem] = []
+    if parsed.scheme != "https":
+        problems.append(
+            _p(
+                "unsafe_url_scheme",
+                path,
+                f"{path} must use https (got {parsed.scheme or 'none'!r}) — SSRF policy, #498",
+            )
+        )
+    if parsed.username or parsed.password:
+        problems.append(
+            _p(
+                "url_userinfo_forbidden",
+                path,
+                f"{path} must not contain userinfo (SSRF policy, #498)",
+            )
+        )
+    if not parsed.hostname:
+        problems.append(_p("missing_url_host", path, f"{path} must include a host"))
     return problems
 
 

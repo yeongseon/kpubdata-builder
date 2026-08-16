@@ -646,3 +646,110 @@ def test_run_build_keeps_snapshot_when_source_pipeline_fails(tmp_path: Path) -> 
     assert result.status == "failed"
     assert (tmp_path / "failed-run" / "buildspec.yaml").is_file()
     assert result.spec_digest.startswith("sha256:")
+
+
+# --- Canonical source contract(#498): file/url kind가 동일 pipeline을 타는지 검증 ---
+
+
+def test_run_build_with_file_source_runs_full_pipeline(tmp_path: Path) -> None:
+    """kind="file" source도 public_api와 동일한 Bronze→Silver→Gold 산출물을 만든다."""
+    from kpubdata_builder.uploads import SQLiteUploadRepository
+
+    upload_repository = SQLiteUploadRepository(tmp_path / "uploads.sqlite3")
+    metadata = upload_repository.put(
+        "owner-1",
+        content=b"id,amount\n1,1000\n2,2500\n",
+        format="csv",
+        encoding="utf-8",
+        original_filename="trades.csv",
+    )
+    spec = _spec(
+        SourceRef(
+            kind="file",
+            upload_id=metadata.upload_id,
+            format="csv",
+            encoding="utf-8",
+            alias="uploaded_trades",
+        )
+    )
+
+    result = run_build(
+        spec,
+        client=_FakeClient({}),
+        output_root=tmp_path,
+        run_id="file-run",
+        owner_id="owner-1",
+        upload_repository=upload_repository,
+    )
+
+    assert result.status == "ok"
+    assert result.outcomes[0].source_key == "uploaded_trades"
+    assert result.outcomes[0].stages_completed == ("bronze", "silver", "gold")
+
+    gold_parquet = tmp_path / "file-run" / "gold" / "uploaded_trades" / "table.parquet"
+    assert pl.read_parquet(gold_parquet).to_dicts() == [
+        {"id": 1, "amount": 1000},
+        {"id": 2, "amount": 2500},
+    ]
+
+    # provenance/manifest 어디에도 로컬 파일시스템 경로가 남지 않는다(#498).
+    manifest_text = result.manifest_path.read_text(encoding="utf-8")
+    assert str(tmp_path / "uploads.sqlite3") not in manifest_text
+    manifest = cast(
+        dict[str, JsonValue], json.loads(result.manifest_path.read_text(encoding="utf-8"))
+    )
+    provenance = cast(list[dict[str, JsonValue]], manifest["provenance"])
+    assert provenance[0]["provider"] == "file"
+    assert provenance[0]["dataset"] == metadata.upload_id
+    assert cast(dict[str, JsonValue], provenance[0]["params"])["upload_id"] == metadata.upload_id
+
+
+def test_run_build_with_file_source_fails_closed_without_owner(tmp_path: Path) -> None:
+    """owner_id 없이 file source를 실행하면 해당 소스만 명확히 실패한다."""
+    from kpubdata_builder.uploads import SQLiteUploadRepository
+
+    upload_repository = SQLiteUploadRepository(tmp_path / "uploads.sqlite3")
+    metadata = upload_repository.put(
+        "owner-1", content=b"id\n1\n", format="csv", encoding="utf-8", original_filename=None
+    )
+    spec = _spec(SourceRef(kind="file", upload_id=metadata.upload_id, format="csv"))
+
+    result = run_build(
+        spec,
+        client=_FakeClient({}),
+        output_root=tmp_path,
+        run_id="no-owner-run",
+        upload_repository=upload_repository,
+    )
+
+    assert result.status == "failed"
+    assert result.outcomes[0].status == "failed"
+    assert "authenticated" in (result.outcomes[0].error or "")
+
+
+def test_run_build_with_url_source_runs_full_pipeline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """kind="url" source도 SSRF-safe fetch를 거쳐 동일 pipeline을 탄다."""
+    from kpubdata_builder.ingestion.url_fetch import FetchResult
+    from kpubdata_builder.stages.bronze import resolve as resolve_module
+
+    def _fake_fetch(url: str, *, max_bytes: int) -> FetchResult:
+        assert url == "https://example.org/data.json"
+        return FetchResult(
+            content=b'[{"id": 1, "amount": 1000}]',
+            content_type="application/json",
+            final_url=url,
+        )
+
+    monkeypatch.setattr(resolve_module, "safe_fetch_get", _fake_fetch)
+    spec = _spec(
+        SourceRef(kind="url", endpoint="https://example.org/data.json", alias="external_feed")
+    )
+
+    result = run_build(spec, client=_FakeClient({}), output_root=tmp_path, run_id="url-run")
+
+    assert result.status == "ok"
+    assert result.outcomes[0].source_key == "external_feed"
+    gold_parquet = tmp_path / "url-run" / "gold" / "external_feed" / "table.parquet"
+    assert pl.read_parquet(gold_parquet).to_dicts() == [{"id": 1, "amount": 1000}]

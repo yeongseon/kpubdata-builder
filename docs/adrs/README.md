@@ -18,6 +18,7 @@ KPubData Builder의 주요 설계 결정을 기록합니다. 각 ADR은 배경·
 | [0012](./0012-provider-credential-boundary.md) | Provider credential 저장·주입 경계 | 승인됨 | #492 |
 | [0013](./0013-api-contract-release-policy.md) | API 계약 버전과 릴리스 경계 정책 | 승인됨 | #521 |
 | [0012](./0012-provider-credential-boundary.md) | 사용자별 Provider Credential 저장과 Client 격리 | 승인됨 | #492, #505 |
+| [0014](./0014-source-ingestion-file-url-boundary.md) | Public API·File·URL Source 통합 경계 | 승인됨 | #498 |
 
 ## 작성 규칙
 

@@ -18,6 +18,7 @@ import yaml
 
 from ..errors import SpecLoadError
 from .models import (
+    SOURCE_KINDS,
     BuildSpec,
     CompareColumnsRule,
     ExportTarget,
@@ -220,8 +221,29 @@ def _parse_json_mapping(value: object, *, field_name: str) -> dict[str, JsonValu
     return parsed
 
 
+# kind별로만 유효한 field들 (#498). 서로 다른 kind의 field가 섞인 source는 명백한
+# 계약 오류이므로 loader가 즉시 거부한다 — "kind=file인데 provider도 있음" 같은
+# 모호한 spec을 조용히 부분 해석하지 않는다.
+_PUBLIC_API_ONLY_FIELDS: tuple[str, ...] = ("upload_id", "format", "encoding", "endpoint", "method")
+_FILE_ONLY_FIELDS: tuple[str, ...] = ("provider", "dataset", "params", "endpoint", "method")
+_URL_ONLY_FIELDS: tuple[str, ...] = ("provider", "dataset", "params", "upload_id", "encoding")
+
+
+def _reject_foreign_fields(
+    mapping: dict[str, object], forbidden: tuple[str, ...], *, prefix: str, kind: str
+) -> None:
+    present = sorted(name for name in forbidden if name in mapping)
+    if present:
+        raise TypeError(f"{prefix}: fields {present} are not valid for kind={kind!r} (#498)")
+
+
 def _parse_sources(value: object) -> tuple[SourceRef, ...]:
-    """sources 배열을 SourceRef 튜플로 변환한다."""
+    """sources 배열을 SourceRef 튜플로 변환한다 (#498).
+
+    ``kind`` 로 public_api(기본, 하위 호환)/file/url을 구분해 서로 다른 field
+    조합을 파싱한다. ``kind`` 를 생략한 기존 source는 항상 ``public_api`` 로
+    해석된다 — 기존 Public API BuildSpec은 재작성 없이 그대로 동작한다.
+    """
     if not isinstance(value, list):
         raise TypeError("sources must be a list")
     if not value:
@@ -232,11 +254,6 @@ def _parse_sources(value: object) -> tuple[SourceRef, ...]:
     for index, item in enumerate(items):
         prefix = f"sources[{index}]"
         mapping = _ensure_mapping(item, field_name=prefix)
-        provider = _require_string(mapping, "provider", prefix=prefix)
-        dataset = _require_string(mapping, "dataset", prefix=prefix)
-        params = _parse_json_mapping(
-            mapping.get("params", {}), field_name=f"sources[{index}].params"
-        )
         # normalization_mode 필드는 제거됨 (#438). sources[].schema 가 대체.
         # 조용히 무시하지 않고 명시적 에러로 알린다.
         if "normalization_mode" in mapping:
@@ -244,21 +261,96 @@ def _parse_sources(value: object) -> tuple[SourceRef, ...]:
                 f"sources[{index}].normalization_mode is removed; "
                 "use sources[].schema instead (#438)"
             )
+        kind_obj = mapping.get("kind", "public_api")
+        if not isinstance(kind_obj, str):
+            raise TypeError(f"{prefix}.kind must be a string")
+        if kind_obj not in SOURCE_KINDS:
+            raise ValueError(
+                f"{prefix}.kind {kind_obj!r} is not supported; use one of {SOURCE_KINDS} (#498)"
+            )
         alias_obj = mapping.get("alias", "")
         if not isinstance(alias_obj, str):
             raise TypeError(f"sources[{index}].alias must be a string")
         schema_obj = mapping.get("schema")
         schema = _parse_schema(schema_obj, prefix=prefix) if schema_obj is not None else None
-        parsed_sources.append(
-            SourceRef(
-                provider=provider,
-                dataset=dataset,
-                params=params,
-                alias=alias_obj,
-                schema=schema,
+
+        if kind_obj == "file":
+            parsed_sources.append(
+                _parse_file_source(mapping, index=index, alias=alias_obj, schema=schema)
             )
-        )
+        elif kind_obj == "url":
+            parsed_sources.append(
+                _parse_url_source(mapping, index=index, alias=alias_obj, schema=schema)
+            )
+        else:
+            parsed_sources.append(
+                _parse_public_api_source(mapping, index=index, alias=alias_obj, schema=schema)
+            )
     return tuple(parsed_sources)
+
+
+def _parse_public_api_source(
+    mapping: dict[str, object], *, index: int, alias: str, schema: SchemaContract | None
+) -> SourceRef:
+    prefix = f"sources[{index}]"
+    _reject_foreign_fields(mapping, _PUBLIC_API_ONLY_FIELDS, prefix=prefix, kind="public_api")
+    provider = _require_string(mapping, "provider", prefix=prefix)
+    dataset = _require_string(mapping, "dataset", prefix=prefix)
+    params = _parse_json_mapping(mapping.get("params", {}), field_name=f"{prefix}.params")
+    return SourceRef(
+        provider=provider,
+        dataset=dataset,
+        params=params,
+        alias=alias,
+        schema=schema,
+        kind="public_api",
+    )
+
+
+def _parse_file_source(
+    mapping: dict[str, object], *, index: int, alias: str, schema: SchemaContract | None
+) -> SourceRef:
+    """kind='file' source를 파싱한다 (#498). 값 vocabulary(허용 format/encoding
+    존재 여부, upload_id 형태)의 의미 검증은 validator.py가 담당한다."""
+    prefix = f"sources[{index}]"
+    _reject_foreign_fields(mapping, _FILE_ONLY_FIELDS, prefix=prefix, kind="file")
+    upload_id = _require_string(mapping, "upload_id", prefix=prefix)
+    format_value = _require_string(mapping, "format", prefix=prefix)
+    encoding_obj = mapping.get("encoding", "utf-8")
+    if not isinstance(encoding_obj, str) or not encoding_obj.strip():
+        raise TypeError(f"{prefix}.encoding must be a non-empty string")
+    return SourceRef(
+        alias=alias,
+        schema=schema,
+        kind="file",
+        upload_id=upload_id,
+        format=format_value,
+        encoding=encoding_obj,
+    )
+
+
+def _parse_url_source(
+    mapping: dict[str, object], *, index: int, alias: str, schema: SchemaContract | None
+) -> SourceRef:
+    """kind='url' source를 파싱한다 (#498). scheme/userinfo/method vocabulary 같은
+    SSRF 관련 의미 검증은 validator.py가 담당한다 — 여기서는 구조만 본다."""
+    prefix = f"sources[{index}]"
+    _reject_foreign_fields(mapping, _URL_ONLY_FIELDS, prefix=prefix, kind="url")
+    endpoint = _require_string(mapping, "endpoint", prefix=prefix)
+    method_obj = mapping.get("method", "GET")
+    if not isinstance(method_obj, str) or not method_obj.strip():
+        raise TypeError(f"{prefix}.method must be a non-empty string")
+    format_obj = mapping.get("format", "")
+    if not isinstance(format_obj, str):
+        raise TypeError(f"{prefix}.format must be a string")
+    return SourceRef(
+        alias=alias,
+        schema=schema,
+        kind="url",
+        endpoint=endpoint,
+        method=method_obj,
+        format=format_obj,
+    )
 
 
 def _parse_schema(value: object, *, prefix: str) -> SchemaContract:

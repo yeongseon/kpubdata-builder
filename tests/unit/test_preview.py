@@ -581,3 +581,84 @@ class TestRegression:
         assert preview.preview.total_rows == 10
         assert len(preview.preview.rows) == 3
         assert preview.statistics.row_count == 10
+
+
+# ---------------------------------------------------------------------------
+# Canonical source contract(#498) — file/url kind가 public_api와 동일하게 preview된다.
+# ---------------------------------------------------------------------------
+
+
+class TestSourceKinds:
+    def test_preview_file_source_returns_schema_and_sample(self, tmp_path: Path) -> None:
+        from kpubdata_builder.uploads import SQLiteUploadRepository
+
+        repo = SQLiteUploadRepository(tmp_path / "uploads.sqlite3")
+        metadata = repo.put(
+            "owner-1",
+            content=b"id,amount\n1,1000\n2,2500\n",
+            format="csv",
+            encoding="utf-8",
+            original_filename=None,
+        )
+        spec = _spec(
+            SourceRef(kind="file", upload_id=metadata.upload_id, format="csv", alias="uploaded")
+        )
+
+        result = preview_build(
+            spec, client=_FakeClient({}), upload_repository=repo, owner_id="owner-1"
+        )
+
+        preview = result.previews[0]
+        assert preview.source_key == "uploaded"
+        assert preview.status == "ok"
+        assert [c.name for c in preview.schema.columns] == ["id", "amount"]
+        assert preview.preview.total_rows == 2
+
+    def test_preview_file_source_without_owner_reports_failed_status(self, tmp_path: Path) -> None:
+        from kpubdata_builder.uploads import SQLiteUploadRepository
+
+        repo = SQLiteUploadRepository(tmp_path / "uploads.sqlite3")
+        spec = _spec(
+            SourceRef(kind="file", upload_id="upl_" + "a" * 32, format="csv", alias="uploaded")
+        )
+
+        # upload_repository는 있지만 owner_id가 없다 — 인증되지 않은 preview 요청.
+        result = preview_build(spec, client=_FakeClient({}), upload_repository=repo)
+
+        preview = result.previews[0]
+        assert preview.status == "failed"
+        assert "authenticated" in (preview.error or "")
+
+    def test_preview_file_source_without_repository_reports_failed_status(self) -> None:
+        spec = _spec(
+            SourceRef(kind="file", upload_id="upl_" + "a" * 32, format="csv", alias="uploaded")
+        )
+
+        result = preview_build(spec, client=_FakeClient({}))
+
+        preview = result.previews[0]
+        assert preview.status == "failed"
+        assert "upload store" in (preview.error or "")
+
+    def test_preview_url_source_returns_schema_and_sample(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from kpubdata_builder.ingestion.url_fetch import FetchResult
+        from kpubdata_builder.stages.bronze import resolve as resolve_module
+
+        def _fake_fetch(url: str, *, max_bytes: int) -> FetchResult:
+            return FetchResult(
+                content=b'[{"id": 1}, {"id": 2}]', content_type="application/json", final_url=url
+            )
+
+        monkeypatch.setattr(resolve_module, "safe_fetch_get", _fake_fetch)
+        spec = _spec(
+            SourceRef(kind="url", endpoint="https://example.org/data.json", alias="feed")
+        )
+
+        result = preview_build(spec, client=_FakeClient({}))
+
+        preview = result.previews[0]
+        assert preview.source_key == "feed"
+        assert preview.status == "ok"
+        assert preview.preview.total_rows == 2
