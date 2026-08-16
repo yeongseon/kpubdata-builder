@@ -36,6 +36,7 @@ from ..credentials import (
     SQLiteCredentialRepository,
 )
 from ..errors import SpecLoadError, ValidationError
+from ..events import BuildEvent, BuildEventStore
 from ..ingestion import IngestionError, parse_tabular_bytes
 from ..pipeline import DEFAULT_PREVIEW_SEED, SampleMode, preview_build, run_build
 from ..quality import QualityCheckResult
@@ -63,6 +64,7 @@ from ..uploads import (
     resolve_max_upload_bytes,
 )
 from . import datasets as datasets_service
+from . import events as events_service
 from . import monitoring as monitoring_service
 from . import ownership as ownership_module
 from . import quality as quality_service
@@ -231,7 +233,14 @@ def _strip_internal_fields(entries: list[_BuildListEntry]) -> list[_BuildListEnt
 # GET /uploads/{upload_id}, DELETE /uploads/{upload_id}를 추가한다(#498,
 # additive — 기존 엔드포인트/kind 없는 source는 변경되지 않는다). url source는
 # P0 범위(GET, Auth=None, https만 허용)로 SSRF를 방어하는 safe fetch를 거친다.
-API_CONTRACT_VERSION = "1.12.0"
+# 1.12.0 -> 1.13.0: GET /builds/{run_id}/events를 추가한다(#496, additive —
+# 기존 엔드포인트는 변경되지 않는다). run/source fetch/medallion
+# stage(bronze/silver/gold/export)/quality checkpoint의 structured event
+# append-only timeline을 raw logger 파싱 없이 조회할 수 있다. limit/tail
+# query parameter는 bounded(기본 200, 상한 1000)이며 반환은 항상 chronological
+# ascending이다. Monitoring(#516)의 시스템 aggregate와는 역할이 분리된다 — 이
+# endpoint는 단일 run의 이벤트만 다룬다.
+API_CONTRACT_VERSION = "1.13.0"
 
 
 def _quality_result_to_json(r: QualityCheckResult) -> dict[str, JsonValue]:
@@ -289,6 +298,13 @@ class BuilderService:
         self._output_root = output_root
         self._client_factory = client_factory
         self._build_index = BuildIndex(output_root)  # #309, ADR 0003
+        # run event timeline 저장소(#496). `_upload_repository`와 동일하게 지연
+        # 생성한다 — preview는 build를 전혀 실행하지 않아 event를 남길 일이
+        # 없으므로("Preview writes no files" 기존 계약, #497 범위 밖 #496도
+        # 동일), 실제로 처음 쓰일 때(build/submit_build/events 조회)까지
+        # `_build_events.sqlite` 흔적을 남기지 않는다.
+        self._event_store_lazy: BuildEventStore | None = None
+        self._event_store_lock = threading.Lock()
         # kind="file" source(#498)의 업로드 저장소. 명시적으로 주입되지 않으면
         # 실제로 처음 쓰일 때까지 SQLite 파일을 만들지 않는다(지연 생성,
         # `_upload_repository` property) — credential repository(마스터 키
@@ -316,6 +332,20 @@ class BuilderService:
             max_workers=async_max_workers,
             max_queue_size=async_max_queue_size,
         )
+
+    @property
+    def _event_store(self) -> BuildEventStore:
+        """run event timeline 저장소를 지연 생성해 반환한다 (#496).
+
+        처음 접근될 때만 ``_build_events.sqlite``를 만든다 — preview만 하는
+        워크스페이스에는 흔적을 남기지 않는다(기존 "Preview writes no files"
+        계약과 동일한 이유로 지연 생성한다).
+        """
+        if self._event_store_lazy is None:
+            with self._event_store_lock:
+                if self._event_store_lazy is None:
+                    self._event_store_lazy = BuildEventStore(self._output_root)
+        return self._event_store_lazy
 
     @property
     def _upload_repository(self) -> UploadRepository:
@@ -854,6 +884,7 @@ class BuilderService:
                 created_by=created_by,
                 owner_id=owner_id,
                 upload_repository=self._upload_repository_for(spec_or_error),
+                event_store=self._event_store,
             )
         finally:
             _close_request_client(client)
@@ -931,12 +962,75 @@ class BuilderService:
                     "run_id": resolved_run_id,
                 },
             )
-        result = self._async_builds.submit(
-            spec_yaml=spec_yaml,
-            run_id=resolved_run_id,
-            created_by=created_by,
-            runner=self._run_build_job,
-        )
+
+        def _record_run_submitted() -> None:
+            # AsyncBuildExecutor.submit()이 job을 worker pool에 큐잉하기 *전에*
+            # 호출된다(#496) — "existing"/"queue_full"이면 새 submission이 아니므로
+            # 아예 호출되지 않는다. store.append()는 실패를 삼키지 않고 그대로
+            # 전파한다(BuildEventStore, event timeline의 유일한 정본) — 여기서는
+            # 그 전파를 그대로 둔다. job이 아직 큐잉되지 않은 시점이라, 이 event가
+            # 기록되지 못하면 job도 만들어지지 않는다: "event는 유실됐는데 job은
+            # 이미 실행 중"이라는 모순이 생기지 않는다(recorder의 흡수 정책과
+            # 달리, 여기는 아직 다른 정본을 침범할 real side effect가 없다).
+            self._event_store.append(
+                BuildEvent(
+                    seq=0,
+                    timestamp=datetime.now(tz=timezone.utc),
+                    run_id=resolved_run_id,
+                    event="run_submitted",
+                    status="ok",
+                    message="build accepted for async execution",
+                )
+            )
+
+        def _record_enqueue_failure() -> None:
+            # registry.mark_failed() 직후, 예외 재전파 *전에* 호출된다(#496
+            # lifecycle 계약: timeline 자체도 이 실패를 표현해야 한다) —
+            # run_submitted는 이미 기록됐으니 지우지 않고(append-only), 기존
+            # "run_failed" vocabulary로 동일 run_id에 종결 event를 하나 더
+            # 남긴다. raw exception/stack trace는 담지 않는다 — bounded,
+            # 안전한 고정 message만 쓴다(recorder의 다른 event들과 동일한
+            # 방어 원칙). 이 append 자체가 실패해도 로그만 남기고 흡수한다 —
+            # 이미 registry가 "failed"로 확정된 뒤라, 이 부가 event 기록
+            # 실패가 원래 enqueue 실패(재전파될 예외)를 가리면 안 된다.
+            try:
+                self._event_store.append(
+                    BuildEvent(
+                        seq=0,
+                        timestamp=datetime.now(tz=timezone.utc),
+                        run_id=resolved_run_id,
+                        event="run_failed",
+                        status="fail",
+                        message="build could not be queued for execution",
+                    )
+                )
+            except Exception:
+                logger.error(
+                    "failed to record run_failed event after enqueue failure (run_id=%s)",
+                    resolved_run_id,
+                    exc_info=True,
+                )
+
+        try:
+            result = self._async_builds.submit(
+                spec_yaml=spec_yaml,
+                run_id=resolved_run_id,
+                created_by=created_by,
+                runner=self._run_build_job,
+                on_accept=_record_run_submitted,
+                on_enqueue_failure=_record_enqueue_failure,
+            )
+        except Exception:
+            # run_submitted event append 실패, 또는 event는 기록됐지만 이후
+            # worker pool 큐잉(executor.submit) 자체가 실패한 경우 둘 다
+            # 여기로 온다 — 두 경우 모두 job은 실행되지 않으므로 202를 주지
+            # 않는다(#496).
+            logger.error(
+                "failed to accept build submission; build was not queued (run_id=%s)",
+                resolved_run_id,
+                exc_info=True,
+            )
+            return ServiceResponse(500, {"error": "failed to accept build submission"})
         match result.status:
             case "accepted":
                 if result.snapshot is None:
@@ -1487,6 +1581,21 @@ class BuilderService:
             body["sample"] = None
             body["sample_available"] = False
 
+        return ServiceResponse(200, body)
+
+    def get_build_events(self, run_id: str, *, limit: int, tail: bool) -> ServiceResponse:
+        """run의 append-only structured event timeline을 조회한다 (#496).
+
+        호출 전에 run_id 검증·존재 확인·ownership 게이팅이 끝나 있어야 한다
+        (``/builds/{run_id}/stages``와 동일하게 dispatch route adapter가 먼저
+        처리한다). 반환은 항상 chronological ascending이다 — ``tail=True``도
+        최신 ``limit``개를 고르되 정렬 자체는 뒤집지 않는다(#496 ordering 정책).
+        """
+        events = self._event_store.list_for_run(run_id, limit=limit, tail=tail)
+        body: dict[str, JsonValue] = {
+            "run_id": run_id,
+            "events": cast(JsonValue, [events_service.event_to_json(e) for e in events]),
+        }
         return ServiceResponse(200, body)
 
     def _load_validated(self, spec_yaml: str) -> BuildSpec | ServiceResponse:

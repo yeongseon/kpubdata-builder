@@ -60,6 +60,7 @@ _DISPATCH_ROUTES: dict[tuple[str, str], str] = {
     ("/builds/{run_id}/stages", "GET"): "listBuildStages",
     ("/builds/{run_id}/stages/{stage}", "GET"): "getBuildStageDetail",
     ("/builds/{run_id}/quality", "GET"): "getBuildQuality",
+    ("/builds/{run_id}/events", "GET"): "getBuildEvents",
     ("/monitoring/summary", "GET"): "getMonitoringSummary",
     ("/monitoring/builds", "GET"): "getMonitoringBuilds",
     ("/uploads", "POST"): "createUpload",
@@ -94,6 +95,7 @@ _REQUIRED_OPERATIONS = [
     ("/builds/{run_id}/stages", "get"),
     ("/builds/{run_id}/stages/{stage}", "get"),
     ("/builds/{run_id}/quality", "get"),
+    ("/builds/{run_id}/events", "get"),
     ("/monitoring/summary", "get"),
     ("/monitoring/builds", "get"),
     ("/uploads", "post"),
@@ -384,6 +386,7 @@ _IMPLEMENTED_OPERATIONS = {
     "listBuildStages",
     "getBuildStageDetail",
     "getBuildQuality",
+    "getBuildEvents",
     "getMonitoringSummary",
     "getMonitoringBuilds",
     "createUpload",
@@ -606,6 +609,7 @@ _OPERATION_STATUS_CODES: dict[str, set[int]] = {
     "listBuildStages": {200, 400, 403, 404},
     "getBuildStageDetail": {200, 400, 403, 404},
     "getBuildQuality": {200, 400, 403, 404},
+    "getBuildEvents": {200, 400, 403, 404},
     "getMonitoringSummary": {200},
     "getMonitoringBuilds": {200, 400},
     "createUpload": {200, 400, 403, 413},
@@ -1154,6 +1158,57 @@ class TestResponseConformance:
         resp = dispatch(_conform_service(tmp_path), "GET", "/builds/nope/quality", None)
         assert resp.status_code == 404
         _assert_conforms(resp, "/builds/{run_id}/quality", "GET")
+
+    # -------------------------------------------------------------------
+    # Run Event Timeline API conformance (#496)
+    # -------------------------------------------------------------------
+
+    def test_build_events_200(self, tmp_path: Path) -> None:
+        service = _conform_service(tmp_path)
+        dispatch(service, "POST", "/build", {"spec": _CONFORM_SPEC_YAML, "run_id": "conform-ev"})
+        resp = dispatch(service, "GET", "/builds/conform-ev/events", None)
+        assert resp.status_code == 200
+        _assert_conforms(resp, "/builds/{run_id}/events", "GET")
+
+    def test_build_events_200_with_limit_and_tail(self, tmp_path: Path) -> None:
+        service = _conform_service(tmp_path)
+        dispatch(
+            service, "POST", "/build", {"spec": _CONFORM_SPEC_YAML, "run_id": "conform-ev-tail"}
+        )
+        resp = dispatch(
+            service,
+            "GET",
+            "/builds/conform-ev-tail/events",
+            None,
+            query="limit=2&tail=true",
+        )
+        assert resp.status_code == 200
+        _assert_conforms(resp, "/builds/{run_id}/events", "GET")
+
+    def test_build_events_404_missing(self, tmp_path: Path) -> None:
+        resp = dispatch(_conform_service(tmp_path), "GET", "/builds/nope/events", None)
+        assert resp.status_code == 404
+        _assert_conforms(resp, "/builds/{run_id}/events", "GET")
+
+    def test_build_events_400_bad_limit(self, tmp_path: Path) -> None:
+        service = _conform_service(tmp_path)
+        dispatch(
+            service, "POST", "/build", {"spec": _CONFORM_SPEC_YAML, "run_id": "conform-ev-400"}
+        )
+        resp = dispatch(service, "GET", "/builds/conform-ev-400/events", None, query="limit=0")
+        assert resp.status_code == 400
+        _assert_conforms(resp, "/builds/{run_id}/events", "GET")
+
+    def test_build_events_400_bad_tail(self, tmp_path: Path) -> None:
+        service = _conform_service(tmp_path)
+        dispatch(
+            service, "POST", "/build", {"spec": _CONFORM_SPEC_YAML, "run_id": "conform-ev-tail-400"}
+        )
+        resp = dispatch(
+            service, "GET", "/builds/conform-ev-tail-400/events", None, query="tail=yes"
+        )
+        assert resp.status_code == 400
+        _assert_conforms(resp, "/builds/{run_id}/events", "GET")
 
     def test_monitoring_summary_200(self, tmp_path: Path) -> None:
         resp = dispatch(_conform_service(tmp_path), "GET", "/monitoring/summary", None)

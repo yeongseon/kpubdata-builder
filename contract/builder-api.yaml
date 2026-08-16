@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: KPubData Builder Service API
-  version: "1.12.0"
+  version: "1.13.0"
   description: >-
     Builder 중심 서비스 계약. BuildSpec 검증, preview, build 실행, artifact 조회,
     계약 버전 조회를 제공한다. CLI와 HTTP service mode(#36)가 동일한 도메인 계약을
@@ -50,6 +50,18 @@ info:
     재검증, redirect마다 재검증, 응답 크기 상한)를 거친다. 두 kind 모두 기존
     Bronze artifact/provenance 계약을 그대로 재사용하며, provenance/manifest에
     로컬 파일 경로나 쿼리스트링 secret을 남기지 않는다.
+    v1.13.0은 `GET /builds/{run_id}/events`를 추가한다(#496, additive — 기존
+    엔드포인트는 변경되지 않는다). run 실행 과정(submitted/started/finished/
+    failed, source fetch started/completed/failed, medallion
+    stage(bronze/silver/gold/export) started/completed/failed, quality
+    checkpoint)을 raw logger parsing 없이 append-only structured event
+    timeline으로 조회한다. `limit`(기본 200, 상한 1000)과 `tail`로 bounded
+    query를 제공하며, 반환은 항상 chronological ascending이다. event의
+    ordering identifier(`seq`)는 store가 append 시점에 부여하는 monotonic
+    값이라 병렬 source 간 실제 append 순서를 손실 없이 보존한다. Monitoring
+    (#516, `GET /monitoring/summary`·`GET /monitoring/builds`)은 시스템/집계
+    observability를 다루고, 이 endpoint는 단일 run의 event만 다룬다 — 역할이
+    분리되어 있다.
 servers:
   - url: http://localhost:8000
     description: 로컬 builder 개발 서버
@@ -1103,6 +1115,130 @@ paths:
                   summary: run history를 조회할 수 없는 dataset
                   value:
                     error: "dataset not found: unknown-dataset"
+
+  /builds/{run_id}/events:
+    get:
+      operationId: getBuildEvents
+      summary: >-
+        run의 append-only structured event timeline 조회 (#496). raw logger를
+        파싱하지 않고, 실제 실행 boundary(run/source fetch/medallion
+        stage/quality checkpoint)에서 남긴 구조화된 event만 반환한다. 반환은
+        항상 chronological ascending이다 — `tail=true`도 최신 `limit`개를
+        고르되 결과 자체는 뒤집지 않는다. 실패했다고 이전 성공 event를
+        지우지 않으므로(append-only), partial run에서도 마지막 정상 event와
+        실패 event를 함께 확인할 수 있다.
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+        - name: limit
+          in: query
+          required: false
+          description: "반환할 최대 event 수 (기본값: 200, 상한: 1000)"
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 200
+        - name: tail
+          in: query
+          required: false
+          description: >-
+            true면 run 시작부터가 아니라 가장 최근 `limit`개를 선택한다(반환
+            순서는 여전히 chronological ascending).
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: run_id와 chronological ascending으로 정렬된 event 목록
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BuildEventsResponse"
+              examples:
+                CompletedRun:
+                  summary: 단일 source가 Bronze→Silver→Gold→Export까지 모두 성공한 run
+                  value:
+                    run_id: air-quality-20260815
+                    events:
+                      - seq: 1
+                        timestamp: "2026-08-15T09:30:00+00:00"
+                        run_id: air-quality-20260815
+                        event: run_started
+                        status: ok
+                        source_key: null
+                        stage: null
+                        message: pipeline execution started
+                        metrics: null
+                      - seq: 2
+                        timestamp: "2026-08-15T09:30:01+00:00"
+                        run_id: air-quality-20260815
+                        event: stage_completed
+                        status: ok
+                        source_key: air
+                        stage: bronze
+                        message: Bronze written
+                        metrics: {records: 84321}
+                      - seq: 3
+                        timestamp: "2026-08-15T09:30:02+00:00"
+                        run_id: air-quality-20260815
+                        event: run_finished
+                        status: ok
+                        source_key: null
+                        stage: null
+                        message: build completed
+                        metrics: null
+                PartialFailure:
+                  summary: 한 source가 bronze fetch에서 실패한 run — 이전 event는 남아 있다
+                  value:
+                    run_id: air-quality-partial
+                    events:
+                      - seq: 1
+                        timestamp: "2026-08-15T09:30:00+00:00"
+                        run_id: air-quality-partial
+                        event: run_started
+                        status: ok
+                        source_key: null
+                        stage: null
+                        message: pipeline execution started
+                        metrics: null
+                      - seq: 2
+                        timestamp: "2026-08-15T09:30:01+00:00"
+                        run_id: air-quality-partial
+                        event: source_fetch_failed
+                        status: fail
+                        source_key: air
+                        stage: null
+                        message: "pipeline failed for source 'air'"
+                        metrics: null
+                      - seq: 3
+                        timestamp: "2026-08-15T09:30:01+00:00"
+                        run_id: air-quality-partial
+                        event: run_failed
+                        status: fail
+                        source_key: null
+                        stage: null
+                        message: 1 source(s) failed
+                        metrics: null
+        "400":
+          description: 경로 안전하지 않은 run_id, 잘못된 limit, 또는 잘못된 tail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: 해당 run의 소유자가 아님
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: 해당 run을 찾을 수 없음
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /builds/{run_id}/stages:
     get:
@@ -2789,6 +2925,93 @@ components:
           type: string
         alias:
           type: string
+
+    BuildEventName:
+      type: string
+      description: >-
+        structured run event의 bounded vocabulary (#496). run_submitted은
+        실제 async job submission이 있는 `POST /builds`(비동기)에서만 발생하며
+        동기 `POST /build`에는 없다. run_cancelled은 아직 이 API에 없다 —
+        cancellation state transition(#481)이 구현되기 전까지는 발생하지
+        않는다.
+      enum:
+        - run_submitted
+        - run_started
+        - run_finished
+        - run_failed
+        - source_fetch_started
+        - source_fetch_completed
+        - source_fetch_failed
+        - stage_started
+        - stage_completed
+        - stage_failed
+        - quality_evaluated
+
+    BuildEventStatus:
+      type: string
+      description: >-
+        event의 결과. ok(성공/정상 완료), warn(quality_evaluated에서 FAIL 없이
+        WARN이 하나 이상), fail(실패).
+      enum: [ok, warn, fail]
+
+    BuildEventStageName:
+      type: string
+      description: 관련 medallion stage. export는 BuildSpec.exports 실행 단계다.
+      enum: [bronze, silver, gold, export]
+
+    BuildEvent:
+      type: object
+      description: >-
+        단일 structured run event(#496). arbitrary object dump, exception
+        객체, stack trace, raw provider response, raw path, credential은
+        담기지 않는다 — message/metrics는 항상 bounded하고 안전하다.
+      required: [seq, timestamp, run_id, event, status, source_key, stage, message, metrics]
+      properties:
+        seq:
+          type: integer
+          description: >-
+            store가 append 시점에 부여하는 monotonic ordering identifier.
+            병렬 source worker의 실제 append 순서를 그대로 보존하며, 존재하지
+            않는 causal ordering을 지어내지 않는다.
+        timestamp:
+          type: string
+          format: date-time
+          description: timezone-aware UTC 시각.
+        run_id:
+          type: string
+        event:
+          $ref: "#/components/schemas/BuildEventName"
+        status:
+          $ref: "#/components/schemas/BuildEventStatus"
+        source_key:
+          type: [string, "null"]
+          description: 관련 소스 식별자. run 수준 event는 null.
+        stage:
+          oneOf:
+            - $ref: "#/components/schemas/BuildEventStageName"
+            - type: "null"
+          description: 관련 medallion stage. source fetch/run 수준 event는 null.
+        message:
+          type: [string, "null"]
+          description: 사람이 읽는 bounded, 안전한 요약. 없으면 null.
+        metrics:
+          type: [object, "null"]
+          description: >-
+            JSON 직렬화 가능한 안전한 수치 요약(예: records/row_count/
+            check_count). 원본 provider 응답이나 임의 object는 담지 않는다.
+          additionalProperties: true
+
+    BuildEventsResponse:
+      type: object
+      description: run identity와 chronological ascending으로 정렬된 event 목록.
+      required: [run_id, events]
+      properties:
+        run_id:
+          type: string
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/BuildEvent"
 
     StageStatusValue:
       type: string
