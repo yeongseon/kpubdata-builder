@@ -80,6 +80,54 @@ def _build(service: BuilderService, run_id: str, spec_yaml: str = VALID_SPEC_YAM
     return resp.status_code
 
 
+def _file_source_spec_yaml(upload_id: str) -> str:
+    return (
+        f"""
+dataset_id: dataset.async-uploaded
+title: Async Uploaded Fixture
+description: file source build (#498 async owner propagation regression)
+sources:
+  - kind: file
+    upload_id: {upload_id}
+    format: csv
+    encoding: utf-8
+exports:
+  - kind: jsonl
+    output_path: out/data.jsonl
+""".strip()
+        + "\n"
+    )
+
+
+class _ObservedAsyncService(BuilderService):
+    """``_run_build_job``(``build()`` 호출 + owner_id manifest 보정까지 전부)이
+    끝난 뒤 ``completed``를 set한다 — async build가 실제로 완료된(manifest 보정
+    까지 반영된) 시점을 폴링/sleep 없이 결정론적으로 기다리기 위한 헬퍼다."""
+
+    def __init__(
+        self,
+        *,
+        output_root: Path,
+        client_factory: object,
+        completed: threading.Event,
+        async_max_workers: int = 1,
+    ) -> None:
+        super().__init__(
+            output_root=output_root,
+            client_factory=client_factory,  # type: ignore[arg-type]
+            async_max_workers=async_max_workers,
+        )
+        self._completed = completed
+
+    def _run_build_job(
+        self, spec_yaml: str, run_id: str, created_by: str | None
+    ) -> ServiceResponse:
+        try:
+            return super()._run_build_job(spec_yaml, run_id, created_by)
+        finally:
+            self._completed.set()
+
+
 class _BlockingAsyncService(BuilderService):
     """async worker를 ``release``까지 붙잡아둔다.
 
@@ -675,3 +723,256 @@ class TestActiveAsyncRunEvents:
         )
         resp2 = dispatch(service, "GET", "/builds/run1/events", None)
         assert resp2.status_code == 403
+
+
+class TestAsyncManifestOwnerIdPropagation:
+    """async run 완료 후 persisted manifest.owner_id가 제출 principal의 stable
+    owner_id를 담아야 한다 (#496 follow-up: security BLOCKER).
+
+    수정 전에는 ``_run_build_job``이 ``build()``에 owner_id를 전혀 넘기지
+    않아 async run의 manifest.owner_id가 항상 None이었다 — manifest가 써지는
+    순간 ``check_active_run_access``가 manifest 경로로 전환되면서 stable
+    owner_id 비교(#505) 대신 legacy created_by/label 비교로 되돌아갔다. 같은
+    label(OIDC sub 앞 8자 truncation 충돌 등)을 쓰는 서로 다른 owner_id의
+    principal 두 명이 있으면, "완료된" run에서만 그 fallback이 cross-owner
+    접근을 허용해버릴 수 있었다 — 아래 A/B 시나리오가 그 재현이다.
+    """
+
+    def _submit(
+        self, service: BuilderService, run_id: str, spec_yaml: str = VALID_SPEC_YAML
+    ) -> ServiceResponse:
+        resp = dispatch(service, "POST", "/builds", {"spec": spec_yaml, "run_id": run_id})
+        assert isinstance(resp, ServiceResponse)
+        return resp
+
+    def test_completed_manifest_records_submitting_principals_stable_owner_id(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A(``oidc:same``/``oidc:owner-A``)가 async build → 완료 → manifest 생성.
+
+        요구사항 시나리오 1: persisted manifest 내부 owner_id == oidc:owner-A.
+        """
+        completed = threading.Event()
+        service = _ObservedAsyncService(
+            output_root=tmp_path,
+            client_factory=lambda: _FakeClient({"datago.air_quality": [{"id": "1", "v": 10}]}),
+            completed=completed,
+        )
+        principal_a = Principal(kind="oidc", identifier="same", owner_id="oidc:owner-A")
+        monkeypatch.setattr(app_module, "authenticate", lambda **_kwargs: principal_a)
+
+        submitted = self._submit(service, "run1")
+        assert submitted.status_code == 202
+        assert completed.wait(timeout=5)
+
+        manifest_data = json.loads(
+            (tmp_path / "run1" / "manifest.json").read_text(encoding="utf-8")
+        )
+        assert manifest_data["owner_id"] == "oidc:owner-A"
+
+    def test_completed_run_owner_gets_200_other_same_label_principal_gets_403(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """요구사항 시나리오 2/3: A는 200, 같은 label을 쓰는 B(다른 owner_id)는 403."""
+        monkeypatch.setenv(_OWNERSHIP_ENV, "true")
+        completed = threading.Event()
+        service = _ObservedAsyncService(
+            output_root=tmp_path,
+            client_factory=lambda: _FakeClient({"datago.air_quality": [{"id": "1", "v": 10}]}),
+            completed=completed,
+        )
+        principal_a = Principal(kind="oidc", identifier="same", owner_id="oidc:owner-A")
+        principal_b = Principal(kind="oidc", identifier="same", owner_id="oidc:owner-B")
+        assert principal_a.label == principal_b.label  # 회귀의 전제조건: legacy label이 같다.
+
+        monkeypatch.setattr(app_module, "authenticate", lambda **_kwargs: principal_a)
+        submitted = self._submit(service, "run1")
+        assert submitted.status_code == 202
+        assert completed.wait(timeout=5)
+        assert (tmp_path / "run1" / "manifest.json").exists()
+
+        resp_owner = dispatch(service, "GET", "/builds/run1/events", None)
+        assert resp_owner.status_code == 200
+
+        monkeypatch.setattr(app_module, "authenticate", lambda **_kwargs: principal_b)
+        resp_other = dispatch(service, "GET", "/builds/run1/events", None)
+        assert resp_other.status_code == 403
+
+    def test_active_same_label_different_owner_still_returns_403(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """회귀 방지: manifest가 아직 없는 active 구간(#496 이전 라운드 fix)도
+        여전히 동작해야 한다 — 이번 수정이 그 경로를 깨지 않았는지 확인."""
+        monkeypatch.setenv(_OWNERSHIP_ENV, "true")
+        entered = threading.Event()
+        release = threading.Event()
+        completed = threading.Event()
+        service = _BlockingAsyncService(
+            output_root=tmp_path,
+            client_factory=lambda: _FakeClient({"datago.air_quality": [{"id": "1", "v": 10}]}),
+            entered=entered,
+            release=release,
+            completed=completed,
+        )
+        monkeypatch.setattr(
+            app_module,
+            "authenticate",
+            lambda **_kwargs: Principal(kind="oidc", identifier="same", owner_id="oidc:owner-A"),
+        )
+        submitted = self._submit(service, "run1")
+        assert submitted.status_code == 202
+        assert entered.wait(timeout=5)
+        assert not (tmp_path / "run1" / "manifest.json").exists()
+
+        monkeypatch.setattr(
+            app_module,
+            "authenticate",
+            lambda **_kwargs: Principal(kind="oidc", identifier="same", owner_id="oidc:owner-B"),
+        )
+        resp = dispatch(service, "GET", "/builds/run1/events", None)
+        release.set()
+        assert resp.status_code == 403
+        assert completed.wait(timeout=5)
+
+    def test_owner_id_not_exposed_via_wire_after_completion(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """manifest 보정 이후에도 owner_id는 build_status/events/manifest 응답
+        어디에도 노출되지 않는다 — public API/OpenAPI 계약은 바뀌지 않는다."""
+        completed = threading.Event()
+        service = _ObservedAsyncService(
+            output_root=tmp_path,
+            client_factory=lambda: _FakeClient({"datago.air_quality": [{"id": "1", "v": 10}]}),
+            completed=completed,
+        )
+        secret_owner_id = "oidc:super-secret-owner-hash"
+        monkeypatch.setattr(
+            app_module,
+            "authenticate",
+            lambda **_kwargs: Principal(kind="oidc", identifier="a", owner_id=secret_owner_id),
+        )
+        submitted = self._submit(service, "run1")
+        assert submitted.status_code == 202
+        assert completed.wait(timeout=5)
+
+        status = dispatch(service, "GET", "/builds/run1", None)
+        assert "owner_id" not in status.body
+        assert secret_owner_id not in json.dumps(status.body)
+
+        events_resp = dispatch(service, "GET", "/builds/run1/events", None)
+        assert events_resp.status_code == 200
+        assert "owner_id" not in json.dumps(events_resp.body)
+        assert secret_owner_id not in json.dumps(events_resp.body)
+
+        manifest_resp = dispatch(service, "GET", "/builds/run1/manifest", None)
+        assert manifest_resp.status_code == 200
+        assert "owner_id" not in manifest_resp.body
+        assert secret_owner_id not in json.dumps(manifest_resp.body)
+
+    def test_async_file_source_resolver_still_does_not_receive_owner_id(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """#498 known limitation 유지 확인: async 경로로 제출된 ``kind=file``
+        build는, manifest owner_id가 이제 올바르게 채워지더라도, 여전히 file
+        source resolver에는 owner_id를 넘기지 않는다 — 업로드 소유자 본인이
+        제출해도 async 경로에서는 그 업로드를 찾지 못해 build가 실패해야
+        한다(동기 ``/build``와 달리)."""
+        completed = threading.Event()
+        service = _ObservedAsyncService(
+            output_root=tmp_path,
+            client_factory=lambda: _FakeClient({}),
+            completed=completed,
+        )
+        owner = Principal(kind="oidc", identifier="a", owner_id="oidc:owner-a")
+
+        created = service.create_upload(
+            b"id,amount\n1,1000\n",
+            format="csv",
+            encoding="utf-8",
+            original_filename="trades.csv",
+            principal=owner,
+        )
+        assert created.status_code == 200
+        upload_id = created.body["upload_id"]
+        assert isinstance(upload_id, str)
+
+        monkeypatch.setattr(app_module, "authenticate", lambda **_kwargs: owner)
+        submitted = self._submit(service, "run1", _file_source_spec_yaml(upload_id))
+        assert submitted.status_code == 202
+        assert completed.wait(timeout=5)
+
+        # manifest ownership은 이번 수정으로 정확하다 — 그러나 file resolver는
+        # 여전히 owner_id를 받지 않으므로 업로드를 찾지 못해 build 자체는 실패한다
+        # (#498 async limitation, 그대로 유지).
+        manifest_data = json.loads(
+            (tmp_path / "run1" / "manifest.json").read_text(encoding="utf-8")
+        )
+        assert manifest_data["owner_id"] == "oidc:owner-a"
+        assert manifest_data["errors"], "file resolver가 owner_id 없이 업로드를 찾지 못해야 한다"
+
+        status = dispatch(service, "GET", "/builds/run1", None)
+        assert status.body["status"] == "failed"
+
+    def test_completed_run_build_index_records_stable_owner_id(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """manifest뿐 아니라 BuildIndex(#505 SSOT, ``GET /builds`` 목록이 우선
+        조회하는 경로)도 같은 stable owner_id를 가져야 한다 — 두 저장소가
+        서로 다른 값을 갖는 SSOT 불일치를 만들지 않는다."""
+        completed = threading.Event()
+        service = _ObservedAsyncService(
+            output_root=tmp_path,
+            client_factory=lambda: _FakeClient({"datago.air_quality": [{"id": "1", "v": 10}]}),
+            completed=completed,
+        )
+        principal_a = Principal(kind="oidc", identifier="same", owner_id="oidc:owner-A")
+        monkeypatch.setattr(app_module, "authenticate", lambda **_kwargs: principal_a)
+
+        submitted = self._submit(service, "run1")
+        assert submitted.status_code == 202
+        assert completed.wait(timeout=5)
+
+        manifest_data = json.loads(
+            (tmp_path / "run1" / "manifest.json").read_text(encoding="utf-8")
+        )
+        index_entry = service._build_index.get("run1")
+        assert index_entry is not None
+        assert index_entry.owner_id == "oidc:owner-A"
+        assert index_entry.owner_id == manifest_data["owner_id"]
+
+    def test_build_list_hides_completed_run_from_different_owner_with_same_label(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """BuildIndex를 사용하는 persisted ownership 경로(``GET /builds`` 목록)도
+        같은 label의 다른 owner_id principal을 통과시키지 않는다."""
+        monkeypatch.setenv(_OWNERSHIP_ENV, "true")
+        completed = threading.Event()
+        service = _ObservedAsyncService(
+            output_root=tmp_path,
+            client_factory=lambda: _FakeClient({"datago.air_quality": [{"id": "1", "v": 10}]}),
+            completed=completed,
+        )
+        principal_a = Principal(kind="oidc", identifier="same", owner_id="oidc:owner-A")
+        principal_b = Principal(kind="oidc", identifier="same", owner_id="oidc:owner-B")
+        assert principal_a.label == principal_b.label
+
+        monkeypatch.setattr(app_module, "authenticate", lambda **_kwargs: principal_a)
+        submitted = self._submit(service, "run1")
+        assert submitted.status_code == 202
+        assert completed.wait(timeout=5)
+
+        list_as_owner = dispatch(service, "GET", "/builds", None)
+        assert list_as_owner.status_code == 200
+        owner_run_ids = [
+            b["run_id"] for b in cast(list[dict[str, object]], list_as_owner.body["builds"])
+        ]
+        assert "run1" in owner_run_ids
+
+        monkeypatch.setattr(app_module, "authenticate", lambda **_kwargs: principal_b)
+        list_as_other = dispatch(service, "GET", "/builds", None)
+        assert list_as_other.status_code == 200
+        other_run_ids = [
+            b["run_id"] for b in cast(list[dict[str, object]], list_as_other.body["builds"])
+        ]
+        assert "run1" not in other_run_ids
+        assert "owner_id" not in json.dumps(list_as_other.body)

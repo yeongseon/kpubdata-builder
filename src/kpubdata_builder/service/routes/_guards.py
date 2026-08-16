@@ -71,10 +71,12 @@ def check_active_run_access(
            ``ownership_allows``에 그대로 넘겨 우선순위 판단을 위임한다).
         3. 둘 다 없으면 404.
 
-    snapshot의 ``owner_id``는 ``BuilderService.submit_build``가 registry
-    저장 목적으로만 전달한다 - wire 응답이나 run_build/source resolver에는
-    전달되지 않는다(#498 async owner propagation 한계 유지, snapshot 자체에는
-    이 필드가 있지만 ``BuildJobSnapshot.to_body()``가 절대 노출하지 않는다).
+    snapshot의 ``owner_id``는 ``BuilderService.submit_build``가 registry에
+    보존해 둔 값이다 - wire 응답에는 노출되지 않는다(``BuildJobSnapshot.to_body()``
+    가 절대 내보내지 않는다). ``_run_build_job``이 이 값을 persisted
+    manifest/BuildIndex(#505 SSOT) 기록에도 재사용하지만, ``kind="file"``
+    source resolver(#498)에는 여전히 전달하지 않는다 - async file-backed
+    source owner propagation 한계는 그대로 유지된다.
 
     ``/manifest``, ``/stages`` 등 다른 route는 여전히 persisted run만 다루므로
     이 함수를 쓰지 않는다 - 영향 범위를 events endpoint로 좁게 유지한다.

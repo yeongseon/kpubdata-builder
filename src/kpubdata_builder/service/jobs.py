@@ -37,9 +37,11 @@ class BuildJobSnapshot:
     ``owner_id``는 active/terminal async run의 ownership 판정용 internal
     필드다(#496 follow-up, #505 canonical stable identity) — ``created_by``
     (Principal.label, display/legacy fallback)와 달리 신규 ownership 판정에
-    우선 쓰이는 값이지만, ``to_body()``가 wire로 절대 내보내지 않는다(#498
-    async owner propagation 한계를 그대로 유지 — run_build/source resolver에는
-    전달하지 않는다).
+    우선 쓰이는 값이고, ``BuilderService._run_build_job``이 persisted
+    manifest/BuildIndex(#505 SSOT) 기록용으로도 그대로 재사용한다. 다만
+    ``to_body()``가 wire로 절대 내보내지 않고, ``kind="file"`` source
+    resolver(#498)에는 여전히 전달되지 않는다 — async file-backed source
+    owner propagation 한계는 그대로 유지된다.
     """
 
     run_id: str

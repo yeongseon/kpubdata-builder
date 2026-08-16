@@ -535,6 +535,7 @@ def run_build(
     run_id: str | None = None,
     created_by: str | None = None,
     owner_id: str | None = None,
+    manifest_owner_id: str | None = None,
     upload_repository: UploadRepository | None = None,
     event_store: BuildEventStore | None = None,
 ) -> BuildResult:
@@ -546,11 +547,21 @@ def run_build(
         output_root: 실행 워크스페이스 루트.
         run_id: 실행 식별자. 생략 시 타임스탬프 기반으로 생성.
         created_by: 빌드를 요청한 principal의 display/legacy 라벨(#388).
-        owner_id: canonical stable persistent owner identity (#505). manifest에
-            created_by와 함께 additive로 기록된다. ``kind="file"`` source가
-            있으면 업로드 소유권 확인에도 이 값을 그대로 재사용한다(#498) —
-            "이 run을 요청한 principal"과 "이 run이 참조하는 업로드의 소유자"는
-            항상 같은 사람이어야 한다.
+        owner_id: ``kind="file"`` source resolver가 업로드 소유권 확인에
+            쓰는 canonical stable owner identity(#505/#498) — "이 run이
+            참조하는 업로드의 소유자"다. sync ``/build``는 언제나 제출
+            principal 본인이 곧 그 소유자이므로 그대로 재사용해도 안전하지만,
+            async ``/builds``는 지금까지처럼 ``None``으로 남겨 file-backed
+            source resolver에 stable identity를 노출하지 않는다(#498 async
+            limitation, 그대로 유지).
+        manifest_owner_id: persisted run manifest(및 그 manifest를 그대로
+            읽어 채우는 BuildIndex, #505 SSOT)에 기록할 canonical stable
+            owner identity — "이 run을 제출한 principal"이다. 생략(``None``)
+            하면 ``owner_id``를 그대로 쓴다(기존 sync 호출자와 100% 동일하게
+            동작). async 호출자는 file resolver용 ``owner_id``는 ``None``으로
+            둔 채 이 필드만 채워, "누가 이 run을 제출했는가"(persisted
+            ownership)와 "file resolver가 무엇을 소유권 확인에 쓸 수
+            있는가"를 서로 다른 값으로 분리한다.
         upload_repository: ``kind="file"`` source의 업로드 content를 조회할
             저장소 (#498). None이면 file source가 있는 build는 실패한다.
         event_store: structured run event timeline 저장소 (#496). None이면
@@ -564,6 +575,7 @@ def run_build(
         ValidationError: spec이 최소 실행 요건을 만족하지 못한 경우.
         ValueError: run_id에 안전하지 않은 문자가 포함된 경우.
     """
+    effective_manifest_owner_id = owner_id if manifest_owner_id is None else manifest_owner_id
     # 진입점에서 spec을 먼저 검증한다(fail-fast). 검증을 호출자에게만 맡기면 잘못된
     # spec이 단계 깊숙이 들어가 cryptic 에러로 터지므로, 단계 진입 전에 막는다 (#212).
     validate_spec(spec)
@@ -652,7 +664,7 @@ def run_build(
         build_environment=capture_build_environment(),
         inputs_fingerprint=compute_inputs_fingerprint(provenance),
         created_by=created_by,
-        owner_id=owner_id,
+        owner_id=effective_manifest_owner_id,
         quality_results=quality_results,
         schema_drift=schema_drift,
     )

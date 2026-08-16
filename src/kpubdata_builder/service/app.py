@@ -837,6 +837,7 @@ class BuilderService:
         run_id: str | None = None,
         created_by: str | None = None,
         owner_id: str | None = None,
+        manifest_owner_id: str | None = None,
         principal: Principal | None = None,
     ) -> ServiceResponse:
         """파이프라인을 실행하고 결과를 반환한다.
@@ -850,6 +851,14 @@ class BuilderService:
         ``owner_id``는 canonical stable owner identity다(#505). ``created_by``는
         기존(#388) display/legacy 라벨로 계속 함께 기록된다 — wire 계약은 바뀌지
         않는다.
+
+        ``manifest_owner_id``는 persisted manifest ownership(및 그 manifest를
+        읽어 채우는 BuildIndex, #505 SSOT)에만 쓰이는 별도 값이다 — ``owner_id``
+        (kind="file" source resolver의 업로드 소유권 확인용, #498)와 분리하기
+        위한 것으로, 생략하면 ``owner_id``를 그대로 쓴다(기존 동작과 동일).
+        async run(``_run_build_job``)이 이 필드로 submitting principal의
+        owner_id를 manifest/BuildIndex에는 기록하면서도 file resolver에는
+        여전히 owner_id를 넘기지 않는 데 쓴다(#496 follow-up).
         """
         spec_or_error = self._load_validated(spec_yaml)
         if isinstance(spec_or_error, ServiceResponse):
@@ -883,6 +892,7 @@ class BuilderService:
                 run_id=run_id,
                 created_by=created_by,
                 owner_id=owner_id,
+                manifest_owner_id=manifest_owner_id,
                 upload_repository=self._upload_repository_for(spec_or_error),
                 event_store=self._event_store,
             )
@@ -959,10 +969,14 @@ class BuilderService:
     ) -> ServiceResponse:
         """비동기 build job을 큐에 넣고 초기 상태를 반환한다 (#482).
 
-        ``owner_id``는 active run ownership 판정(``check_active_run_access``,
-        #496 follow-up)을 위해 job registry snapshot까지만 전달된다 — wire
-        응답(``to_body()``)에는 노출되지 않고, ``_run_build_job``/build
-        pipeline에도 전달하지 않는다(#498 async owner propagation 한계 유지).
+        ``owner_id``는 job registry snapshot에 보존된다 — wire 응답
+        (``to_body()``)에는 노출되지 않는다. registry에 남은 이 값은 두 곳에
+        쓰인다: (1) active run(``check_active_run_access``, #496 follow-up)
+        ownership 판정, (2) ``_run_build_job``이 이를 ``build()``의
+        ``manifest_owner_id``로 넘겨 persisted manifest/BuildIndex(#505 SSOT)
+        에 정확한 owner_id를 기록. ``build()``의 ``owner_id``(``kind="file"``
+        source resolver용, #498)에는 여전히 전달하지 않는다 — async
+        file-backed source owner propagation 한계는 그대로 유지된다.
         """
         resolved_run_id = run_id or generate_run_id()
         if self._build_index.get(resolved_run_id) is not None:
@@ -1071,7 +1085,22 @@ class BuilderService:
     def _run_build_job(
         self, spec_yaml: str, run_id: str, created_by: str | None
     ) -> ServiceResponse:
-        return self.build(spec_yaml, run_id=run_id, created_by=created_by)
+        """async job registry가 부르는 실제 실행 진입점 (#482, #496 follow-up).
+
+        ``build()``에 ``owner_id``는 전달하지 않는다(``None`` 그대로) —
+        ``kind="file"`` source resolver는 async 경로에서 여전히 stable owner
+        identity를 알지 못한다(#498 async limitation 유지). 대신
+        ``manifest_owner_id``로 registry snapshot에 이미 보존된(``submit_build``
+        가 채운) submitting principal의 owner_id를 넘긴다 — persisted manifest
+        (및 그 manifest를 그대로 읽어 채우는 BuildIndex, #505 SSOT)는
+        ``build()`` 내부에서 단 한 번의 write로 정확한 owner_id를 갖게 되고,
+        build 종료 후 manifest를 별도로 사후 수정할 필요가 없다.
+        """
+        snapshot = self._async_builds.get(run_id)
+        manifest_owner_id = snapshot.owner_id if snapshot is not None else None
+        return self.build(
+            spec_yaml, run_id=run_id, created_by=created_by, manifest_owner_id=manifest_owner_id
+        )
 
     def artifacts(self, run_id: str) -> ServiceResponse:
         """실행 워크스페이스의 산출물 파일 목록을 반환한다."""

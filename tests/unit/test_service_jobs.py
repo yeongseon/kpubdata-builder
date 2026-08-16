@@ -10,6 +10,7 @@ import pytest
 
 from kpubdata_builder.events import BuildEvent
 from kpubdata_builder.service import BuilderService, ServiceResponse, dispatch
+from kpubdata_builder.service.auth import Principal
 from kpubdata_builder.spec import JsonValue
 
 VALID_SPEC_YAML = (
@@ -75,10 +76,24 @@ class _ObservedBuildService(BuilderService):
         self._completed = completed
 
     def build(
-        self, spec_yaml: str, *, run_id: str | None = None, created_by: str | None = None
+        self,
+        spec_yaml: str,
+        *,
+        run_id: str | None = None,
+        created_by: str | None = None,
+        owner_id: str | None = None,
+        manifest_owner_id: str | None = None,
+        principal: Principal | None = None,
     ) -> ServiceResponse:
         try:
-            return super().build(spec_yaml, run_id=run_id, created_by=created_by)
+            return super().build(
+                spec_yaml,
+                run_id=run_id,
+                created_by=created_by,
+                owner_id=owner_id,
+                manifest_owner_id=manifest_owner_id,
+                principal=principal,
+            )
         finally:
             self._completed.set()
 
