@@ -296,9 +296,7 @@ class TestRunSubmittedEventFailure:
         # 실제 파이프라인이 전혀 실행되지 않았다 — run 디렉터리조차 생기지 않는다.
         assert not (tmp_path / "run1").exists()
 
-    def test_unrelated_run_id_is_unaffected_by_a_prior_failure(
-        self, tmp_path: Path
-    ) -> None:
+    def test_unrelated_run_id_is_unaffected_by_a_prior_failure(self, tmp_path: Path) -> None:
         """이 run_id 하나만 겪은 실패가 다른 run_id의 정상 submission을 막지 않는다."""
         completed = threading.Event()
         service = _ObservedBuildService(
