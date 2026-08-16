@@ -33,7 +33,9 @@ def route(
         run_id = optional_run_id(body)
         if isinstance(run_id, ServiceResponse):
             return run_id
-        return service.submit_build(spec, run_id=run_id, created_by=principal.label)
+        return service.submit_build(
+            spec, run_id=run_id, created_by=principal.label, owner_id=principal.owner_id
+        )
 
     if method == "GET" and path.startswith("/builds/") and "/" not in path[len("/builds/") :]:
         return service.build_status(path[len("/builds/") :])

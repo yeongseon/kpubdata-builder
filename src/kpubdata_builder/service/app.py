@@ -950,9 +950,20 @@ class BuilderService:
         return ServiceResponse(status_code, body)
 
     def submit_build(
-        self, spec_yaml: str, *, run_id: str | None = None, created_by: str | None = None
+        self,
+        spec_yaml: str,
+        *,
+        run_id: str | None = None,
+        created_by: str | None = None,
+        owner_id: str | None = None,
     ) -> ServiceResponse:
-        """비동기 build job을 큐에 넣고 초기 상태를 반환한다 (#482)."""
+        """비동기 build job을 큐에 넣고 초기 상태를 반환한다 (#482).
+
+        ``owner_id``는 active run ownership 판정(``check_active_run_access``,
+        #496 follow-up)을 위해 job registry snapshot까지만 전달된다 — wire
+        응답(``to_body()``)에는 노출되지 않고, ``_run_build_job``/build
+        pipeline에도 전달하지 않는다(#498 async owner propagation 한계 유지).
+        """
         resolved_run_id = run_id or generate_run_id()
         if self._build_index.get(resolved_run_id) is not None:
             return ServiceResponse(
@@ -1016,6 +1027,7 @@ class BuilderService:
                 spec_yaml=spec_yaml,
                 run_id=resolved_run_id,
                 created_by=created_by,
+                owner_id=owner_id,
                 runner=self._run_build_job,
                 on_accept=_record_run_submitted,
                 on_enqueue_failure=_record_enqueue_failure,

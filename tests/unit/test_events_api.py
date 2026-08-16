@@ -9,13 +9,14 @@ ownership/bounded query(limit/tail)/secret 비노출 — 을 실제
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from typing import cast
 
 import pytest
 
 import kpubdata_builder.service.app as app_module
-from kpubdata_builder.service import BuilderService, dispatch
+from kpubdata_builder.service import BuilderService, ServiceResponse, dispatch
 from kpubdata_builder.service.auth import Principal
 from kpubdata_builder.service.ownership import _OWNERSHIP_ENV
 from kpubdata_builder.spec import JsonValue
@@ -77,6 +78,51 @@ def _service(tmp_path: Path, *, rows: int = 2) -> BuilderService:
 def _build(service: BuilderService, run_id: str, spec_yaml: str = VALID_SPEC_YAML) -> int:
     resp = dispatch(service, "POST", "/build", {"spec": spec_yaml, "run_id": run_id})
     return resp.status_code
+
+
+class _BlockingAsyncService(BuilderService):
+    """async worker를 ``release``까지 붙잡아둔다.
+
+    ``_run_build_job``(worker pool의 실제 실행 진입점)이 ``entered``를 set한
+    뒤 ``release``를 기다린다 — 그 사이 registry 상태는 이미 "running"이지만
+    (``AsyncBuildExecutor._run``이 runner 호출 *전에* ``mark_running``한다)
+    run directory/manifest는 아직 만들어지지 않는다(``BuilderService.build()``
+    가 아직 호출되지 않았으므로). ``release`` 이후에는 실제 ``build()``를
+    그대로 호출해 정상적으로 완료시키고 ``completed``를 set한다 — active
+    상태와 완료 상태 둘 다 이 클래스 하나로 결정론적으로 재현한다(#496
+    follow-up).
+    """
+
+    def __init__(
+        self,
+        *,
+        output_root: Path,
+        client_factory: object,
+        entered: threading.Event,
+        release: threading.Event,
+        completed: threading.Event,
+        async_max_workers: int = 1,
+        async_max_queue_size: int = 10,
+    ) -> None:
+        super().__init__(
+            output_root=output_root,
+            client_factory=client_factory,  # type: ignore[arg-type]
+            async_max_workers=async_max_workers,
+            async_max_queue_size=async_max_queue_size,
+        )
+        self._entered = entered
+        self._release = release
+        self._completed = completed
+
+    def _run_build_job(
+        self, spec_yaml: str, run_id: str, created_by: str | None
+    ) -> ServiceResponse:
+        self._entered.set()
+        self._release.wait(timeout=5)
+        try:
+            return super()._run_build_job(spec_yaml, run_id, created_by)
+        finally:
+            self._completed.set()
 
 
 class TestGetBuildEventsRouting:
@@ -316,3 +362,316 @@ class TestSecurityNoSecretLeak:
         body_text = json.dumps(resp.body)
         assert "SUPER-SECRET-API-KEY" not in body_text
         assert "SUPER-SECRET-EXPORT-KEY" not in body_text
+
+
+class TestActiveAsyncRunEvents:
+    """``POST /builds``(비동기)로 제출된 run의 events를 실행 중에도 조회할 수
+    있는지 검증한다 (#496 follow-up: BLOCKER).
+
+    ``check_run_exists``/``check_ownership``은 run directory·manifest.json이
+    이미 있다고 가정하지만, async run은 worker가 시작하기 전까지 run
+    directory조차 없고 manifest는 run이 끝나야 생긴다. 그 구간(queued/running)
+    에도 event store에는 이미 ``run_submitted``(및 이후 event)가 쌓여있으므로
+    이 endpoint가 404/403을 내면 안 된다.
+    """
+
+    def _submit(
+        self, service: BuilderService, run_id: str, spec_yaml: str = VALID_SPEC_YAML
+    ) -> ServiceResponse:
+        resp = dispatch(service, "POST", "/builds", {"spec": spec_yaml, "run_id": run_id})
+        assert isinstance(resp, ServiceResponse)
+        return resp
+
+    def test_queued_run_returns_200_with_run_submitted(self, tmp_path: Path) -> None:
+        """단일 worker가 다른 run으로 이미 바쁠 때 큐잉된 run도 조회 가능해야 한다."""
+        entered = threading.Event()
+        release = threading.Event()
+        completed = threading.Event()
+        service = _BlockingAsyncService(
+            output_root=tmp_path,
+            client_factory=lambda: _FakeClient({"datago.air_quality": [{"id": "1", "v": 10}]}),
+            entered=entered,
+            release=release,
+            completed=completed,
+            async_max_workers=1,
+        )
+        first = self._submit(service, "run1")
+        assert first.status_code == 202
+        assert entered.wait(timeout=5)  # worker가 run1을 붙잡고 있다.
+
+        second = self._submit(service, "run2")
+        assert second.status_code == 202
+        assert second.body["status"] == "queued"
+        # run2는 아직 run directory조차 없다 — 기존 check_run_exists라면 404.
+        assert not (tmp_path / "run2").exists()
+
+        resp = dispatch(service, "GET", "/builds/run2/events", None)
+        release.set()
+        assert resp.status_code == 200
+        events = cast(list[dict[str, object]], resp.body["events"])
+        assert [e["event"] for e in events] == ["run_submitted"]
+        assert completed.wait(timeout=5)
+
+    def test_running_run_returns_200_before_manifest_exists(self, tmp_path: Path) -> None:
+        entered = threading.Event()
+        release = threading.Event()
+        completed = threading.Event()
+        service = _BlockingAsyncService(
+            output_root=tmp_path,
+            client_factory=lambda: _FakeClient({"datago.air_quality": [{"id": "1", "v": 10}]}),
+            entered=entered,
+            release=release,
+            completed=completed,
+        )
+        submitted = self._submit(service, "run1")
+        assert submitted.status_code == 202
+        assert entered.wait(timeout=5)
+        assert not (tmp_path / "run1" / "manifest.json").exists()
+
+        resp = dispatch(service, "GET", "/builds/run1/events", None)
+        release.set()
+        assert resp.status_code == 200
+        events = cast(list[dict[str, object]], resp.body["events"])
+        assert [e["event"] for e in events] == ["run_submitted"]
+        assert completed.wait(timeout=5)
+
+    def test_ownership_enforced_active_owner_can_read(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(_OWNERSHIP_ENV, "true")
+        entered = threading.Event()
+        release = threading.Event()
+        completed = threading.Event()
+        service = _BlockingAsyncService(
+            output_root=tmp_path,
+            client_factory=lambda: _FakeClient({"datago.air_quality": [{"id": "1", "v": 10}]}),
+            entered=entered,
+            release=release,
+            completed=completed,
+        )
+        monkeypatch.setattr(
+            app_module, "authenticate", lambda **_kwargs: Principal(kind="oidc", identifier="a")
+        )
+        submitted = self._submit(service, "run1")
+        assert submitted.status_code == 202
+        assert entered.wait(timeout=5)
+
+        resp = dispatch(service, "GET", "/builds/run1/events", None)
+        release.set()
+        assert resp.status_code == 200
+        assert completed.wait(timeout=5)
+
+    def test_ownership_enforced_other_principal_gets_403(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(_OWNERSHIP_ENV, "true")
+        entered = threading.Event()
+        release = threading.Event()
+        completed = threading.Event()
+        service = _BlockingAsyncService(
+            output_root=tmp_path,
+            client_factory=lambda: _FakeClient({"datago.air_quality": [{"id": "1", "v": 10}]}),
+            entered=entered,
+            release=release,
+            completed=completed,
+        )
+        monkeypatch.setattr(
+            app_module, "authenticate", lambda **_kwargs: Principal(kind="oidc", identifier="a")
+        )
+        submitted = self._submit(service, "run1")
+        assert submitted.status_code == 202
+        assert entered.wait(timeout=5)
+
+        monkeypatch.setattr(
+            app_module, "authenticate", lambda **_kwargs: Principal(kind="oidc", identifier="b")
+        )
+        resp = dispatch(service, "GET", "/builds/run1/events", None)
+        release.set()
+        assert resp.status_code == 403
+        assert completed.wait(timeout=5)
+
+    def test_unknown_run_still_404_when_not_in_async_registry(self, tmp_path: Path) -> None:
+        """async registry에도 persisted run에도 없으면 여전히 404다."""
+        service = _service(tmp_path)
+        resp = dispatch(service, "GET", "/builds/nope/events", None)
+        assert resp.status_code == 404
+
+    def test_completed_async_run_still_uses_manifest_ownership_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """완료된 run은 async registry에 terminal entry로 남아있어도, 기존
+        completed persisted run 조회(#496 원래 API)가 계속 정상 동작해야 한다."""
+        monkeypatch.setenv(_OWNERSHIP_ENV, "true")
+        entered = threading.Event()
+        release = threading.Event()
+        completed = threading.Event()
+        service = _BlockingAsyncService(
+            output_root=tmp_path,
+            client_factory=lambda: _FakeClient({"datago.air_quality": [{"id": "1", "v": 10}]}),
+            entered=entered,
+            release=release,
+            completed=completed,
+        )
+        monkeypatch.setattr(
+            app_module, "authenticate", lambda **_kwargs: Principal(kind="oidc", identifier="a")
+        )
+        submitted = self._submit(service, "run1")
+        assert submitted.status_code == 202
+        assert entered.wait(timeout=5)
+        release.set()
+        assert completed.wait(timeout=5)
+
+        assert (tmp_path / "run1" / "manifest.json").exists()
+
+        resp = dispatch(service, "GET", "/builds/run1/events", None)
+        assert resp.status_code == 200
+        events = cast(list[dict[str, object]], resp.body["events"])
+        event_names = [e["event"] for e in events]
+        assert "run_submitted" in event_names
+        assert "run_finished" in event_names
+
+    def test_same_label_different_owner_id_active_run_returns_403(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """created_by/label(legacy)이 같아도 stable owner_id(#505)가 다르면
+        거부해야 한다 — active run access가 owner_id를 우선 비교해야 하는
+        핵심 사례."""
+        monkeypatch.setenv(_OWNERSHIP_ENV, "true")
+        entered = threading.Event()
+        release = threading.Event()
+        completed = threading.Event()
+        service = _BlockingAsyncService(
+            output_root=tmp_path,
+            client_factory=lambda: _FakeClient({"datago.air_quality": [{"id": "1", "v": 10}]}),
+            entered=entered,
+            release=release,
+            completed=completed,
+        )
+        monkeypatch.setattr(
+            app_module,
+            "authenticate",
+            lambda **_kwargs: Principal(kind="oidc", identifier="same", owner_id="oidc:owner-a"),
+        )
+        submitted = self._submit(service, "run1")
+        assert submitted.status_code == 202
+        assert entered.wait(timeout=5)
+
+        # label("oidc:same")은 앞의 principal과 동일하지만 owner_id는 다르다.
+        monkeypatch.setattr(
+            app_module,
+            "authenticate",
+            lambda **_kwargs: Principal(kind="oidc", identifier="same", owner_id="oidc:owner-b"),
+        )
+        resp = dispatch(service, "GET", "/builds/run1/events", None)
+        release.set()
+        assert resp.status_code == 403
+        assert completed.wait(timeout=5)
+
+    def test_matching_owner_id_active_run_returns_200(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(_OWNERSHIP_ENV, "true")
+        entered = threading.Event()
+        release = threading.Event()
+        completed = threading.Event()
+        service = _BlockingAsyncService(
+            output_root=tmp_path,
+            client_factory=lambda: _FakeClient({"datago.air_quality": [{"id": "1", "v": 10}]}),
+            entered=entered,
+            release=release,
+            completed=completed,
+        )
+        monkeypatch.setattr(
+            app_module,
+            "authenticate",
+            lambda **_kwargs: Principal(kind="oidc", identifier="a", owner_id="oidc:owner-a"),
+        )
+        submitted = self._submit(service, "run1")
+        assert submitted.status_code == 202
+        assert entered.wait(timeout=5)
+
+        resp = dispatch(service, "GET", "/builds/run1/events", None)
+        release.set()
+        assert resp.status_code == 200
+        assert completed.wait(timeout=5)
+
+    def test_owner_id_never_leaks_into_build_status_or_events_wire(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        entered = threading.Event()
+        release = threading.Event()
+        completed = threading.Event()
+        service = _BlockingAsyncService(
+            output_root=tmp_path,
+            client_factory=lambda: _FakeClient({"datago.air_quality": [{"id": "1", "v": 10}]}),
+            entered=entered,
+            release=release,
+            completed=completed,
+        )
+        secret_owner_id = "oidc:super-secret-owner-hash"
+        monkeypatch.setattr(
+            app_module,
+            "authenticate",
+            lambda **_kwargs: Principal(kind="oidc", identifier="a", owner_id=secret_owner_id),
+        )
+        submitted = self._submit(service, "run1")
+        assert submitted.status_code == 202
+        assert "owner_id" not in submitted.body
+        assert secret_owner_id not in json.dumps(submitted.body)
+        assert entered.wait(timeout=5)
+
+        status = dispatch(service, "GET", "/builds/run1", None)
+        assert "owner_id" not in status.body
+        assert secret_owner_id not in json.dumps(status.body)
+
+        resp = dispatch(service, "GET", "/builds/run1/events", None)
+        release.set()
+        assert resp.status_code == 200
+        assert "owner_id" not in json.dumps(resp.body)
+        assert secret_owner_id not in json.dumps(resp.body)
+        assert completed.wait(timeout=5)
+
+    def test_enqueue_failed_terminal_without_manifest_only_owner_can_read(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """worker pool enqueue 자체가 실패해 manifest 없이 종결된 terminal job도
+        (build()가 전혀 호출되지 않아 run directory조차 없다) 소유자만
+        조회할 수 있어야 한다 — registry snapshot의 owner_id가 유일한
+        판정 근거다."""
+        monkeypatch.setenv(_OWNERSHIP_ENV, "true")
+        service = BuilderService(
+            output_root=tmp_path,
+            client_factory=lambda: _FakeClient({"datago.air_quality": [{"id": "1", "v": 10}]}),
+        )
+
+        def _broken_executor_submit(*_args: object, **_kwargs: object) -> object:
+            raise RuntimeError("simulated worker pool rejection")
+
+        monkeypatch.setattr(service._async_builds._executor, "submit", _broken_executor_submit)
+
+        owner = Principal(kind="oidc", identifier="a", owner_id="oidc:owner-a")
+        response = service.submit_build(
+            VALID_SPEC_YAML, run_id="run1", created_by=owner.label, owner_id=owner.owner_id
+        )
+        assert response.status_code >= 500
+        assert not (tmp_path / "run1").exists()
+
+        monkeypatch.setattr(app_module, "authenticate", lambda **_kwargs: owner)
+        resp_owner = dispatch(service, "GET", "/builds/run1/events", None)
+        assert resp_owner.status_code == 200
+        events = cast(list[dict[str, object]], resp_owner.body["events"])
+        assert [e["event"] for e in events] == ["run_submitted", "run_failed"]
+
+        monkeypatch.setattr(
+            app_module,
+            "authenticate",
+            lambda **_kwargs: Principal(kind="oidc", identifier="b", owner_id="oidc:owner-b"),
+        )
+        resp_other = dispatch(service, "GET", "/builds/run1/events", None)
+        assert resp_other.status_code == 403
+
+        monkeypatch.setattr(
+            app_module, "authenticate", lambda **_kwargs: Principal(kind="oidc", identifier="b")
+        )
+        resp2 = dispatch(service, "GET", "/builds/run1/events", None)
+        assert resp2.status_code == 403

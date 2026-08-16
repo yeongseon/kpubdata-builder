@@ -11,7 +11,7 @@ from ...stages._path_safety import validate_path_segment
 from .. import events as events_service
 from ..auth import Principal
 from ..responses import ServiceResponse
-from ._guards import check_ownership, check_run_exists
+from ._guards import check_active_run_access
 from ._types import RouteResponse
 
 if TYPE_CHECKING:
@@ -54,13 +54,17 @@ def route(
         return tail_or_error
 
     # 순서는 다른 /builds/{run_id}/* route와 동일하다(#488 관례, #496도 따른다):
-    # run_id 검증 -> 존재 확인 -> ownership -> 실제 조회. cross-owner 접근이
+    # run_id 검증 -> 존재/ownership 확인 -> 실제 조회. cross-owner 접근이
     # events 조회 로직에 도달하기 전에 403으로 막혀야 run 존재 여부가 이
     # endpoint로 새어나가지 않는다.
-    error = check_run_exists(service, run_id)
-    if error is not None:
-        return error
-    error = check_ownership(service, run_id, principal)
+    #
+    # 존재/ownership 판정 자체는 check_active_run_access(#496 follow-up)가
+    # 맡는다 — persisted run(manifest 기반)뿐 아니라 아직 run
+    # directory/manifest가 없는 active async job(queued/running)도 async job
+    # registry로 인지해야 events polling이 그 구간에서 404/403으로 막히지
+    # 않는다. 다른 /builds/{run_id}/* route(manifest, stages 등)는 여전히
+    # persisted run만 다루므로 이 helper를 쓰지 않는다.
+    error = check_active_run_access(service, run_id, principal)
     return error or service.get_build_events(run_id, limit=limit_or_error, tail=tail_or_error)
 
 

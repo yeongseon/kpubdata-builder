@@ -32,13 +32,22 @@ SubmitStatus = Literal["accepted", "existing", "queue_full"]
 
 @dataclass(frozen=True, slots=True)
 class BuildJobSnapshot:
-    """외부에 노출 가능한 build job 상태 스냅샷."""
+    """build job 상태 스냅샷.
+
+    ``owner_id``는 active/terminal async run의 ownership 판정용 internal
+    필드다(#496 follow-up, #505 canonical stable identity) — ``created_by``
+    (Principal.label, display/legacy fallback)와 달리 신규 ownership 판정에
+    우선 쓰이는 값이지만, ``to_body()``가 wire로 절대 내보내지 않는다(#498
+    async owner propagation 한계를 그대로 유지 — run_build/source resolver에는
+    전달하지 않는다).
+    """
 
     run_id: str
     status: BuildJobStatus
     created_at: str
     updated_at: str
     created_by: str | None = None
+    owner_id: str | None = None
     response: dict[str, JsonValue] | None = None
     error: str | None = None
 
@@ -79,7 +88,9 @@ class AsyncBuildJobRegistry:
         self._lock = Lock()
         self._jobs: dict[str, BuildJobSnapshot] = {}
 
-    def create(self, *, run_id: str, created_by: str | None) -> BuildJobSnapshot:
+    def create(
+        self, *, run_id: str, created_by: str | None, owner_id: str | None = None
+    ) -> BuildJobSnapshot:
         now = _utc_now_text()
         snapshot = BuildJobSnapshot(
             run_id=run_id,
@@ -87,6 +98,7 @@ class AsyncBuildJobRegistry:
             created_at=now,
             updated_at=now,
             created_by=created_by,
+            owner_id=owner_id,
         )
         with self._lock:
             self._jobs[run_id] = snapshot
@@ -148,6 +160,7 @@ class AsyncBuildJobRegistry:
                 created_at=current.created_at,
                 updated_at=_utc_now_text(),
                 created_by=current.created_by,
+                owner_id=current.owner_id,
                 response=response,
                 error=error,
             )
@@ -201,11 +214,19 @@ class AsyncBuildExecutor:
         run_id: str,
         created_by: str | None,
         runner: BuildJobRunner,
+        owner_id: str | None = None,
         on_accept: Callable[[], None] | None = None,
         on_enqueue_failure: Callable[[], None] | None = None,
     ) -> BuildJobSubmitResult:
         """job을 큐잉한다. ``existing``/``queue_full``이면 새 submission이 아니므로
         ``on_accept``를 호출하지 않는다.
+
+        ``owner_id``는 ``registry.create()``까지만 전달되어 snapshot에
+        보존된다(#496 follow-up, active run ownership 판정용) — ``runner``
+        호출(아래 ``self._executor.submit(self._run, spec_yaml, run_id,
+        created_by, runner)``)에는 전달하지 않는다. run_build/source resolver
+        쪽 owner propagation은 #498에서 이미 별도 한계로 남겨졌고, 이번
+        변경에서 그 범위를 넓히지 않는다.
 
         ``on_accept``는 job이 실제로 worker pool에 큐잉되기(``self._executor.submit``)
         *전*에 호출된다(#496). 호출자(``BuilderService.submit_build``)는 이 hook으로
@@ -240,7 +261,7 @@ class AsyncBuildExecutor:
             return BuildJobSubmitResult(status="queue_full")
         if on_accept is not None:
             on_accept()
-        snapshot = self.registry.create(run_id=run_id, created_by=created_by)
+        snapshot = self.registry.create(run_id=run_id, created_by=created_by, owner_id=owner_id)
         try:
             self._executor.submit(self._run, spec_yaml, run_id, created_by, runner)
         except Exception:
