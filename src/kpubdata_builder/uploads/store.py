@@ -148,9 +148,7 @@ class SQLiteUploadRepository:
     ) -> UploadMetadata:
         self._validate_owner_id(owner_id)
         if format not in SOURCE_FILE_FORMATS:
-            raise ValueError(
-                f"format must be one of {SOURCE_FILE_FORMATS}, got {format!r}"
-            )
+            raise ValueError(f"format must be one of {SOURCE_FILE_FORMATS}, got {format!r}")
         if not content:
             raise ValueError("upload content must not be empty")
         limit = max_bytes if max_bytes is not None else self._max_bytes

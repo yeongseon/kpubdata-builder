@@ -77,9 +77,7 @@ def test_file_source_parses_required_fields() -> None:
 
 
 def test_file_source_encoding_defaults_to_utf8() -> None:
-    spec = parse_spec(
-        _payload({"kind": "file", "upload_id": "upl_" + "a" * 32, "format": "csv"})
-    )
+    spec = parse_spec(_payload({"kind": "file", "upload_id": "upl_" + "a" * 32, "format": "csv"}))
 
     assert spec.sources[0].encoding == "utf-8"
 
@@ -175,6 +173,22 @@ def test_validate_spec_accepts_valid_url_source() -> None:
     validate_spec(spec)  # raises on failure
 
 
+def test_validate_spec_rejects_unknown_kind_from_directly_constructed_sourceref() -> None:
+    """loader를 거치지 않고 SourceRef를 직접 구성해도 unknown kind는 거부된다.
+
+    loader(YAML 경로)는 이미 unknown kind를 거부하지만(``test_unknown_kind_is_rejected``),
+    ``SourceRef(kind="ftp", ...)``처럼 programmatic하게 BuildSpec을 구성하면
+    loader를 거치지 않는다 — validate_spec이 canonical kind 계약
+    (public_api|file|url)의 fail-closed 원칙을 지키는 유일한 방어선이다(#538 review).
+    """
+    spec = _spec(SourceRef(kind="ftp", provider="datago", dataset="air_quality"))
+
+    with pytest.raises(ValidationError) as exc_info:
+        validate_spec(spec)
+    codes = {p.code for p in exc_info.value.structured_problems or []}
+    assert "unsupported_source_kind" in codes
+
+
 def test_validate_spec_rejects_malformed_upload_id() -> None:
     spec = _spec(SourceRef(kind="file", upload_id="../../etc/passwd", format="csv"))
 
@@ -251,9 +265,7 @@ def test_validate_spec_rejects_non_get_method() -> None:
 
 
 def test_validate_spec_rejects_unsupported_url_format() -> None:
-    spec = _spec(
-        SourceRef(kind="url", endpoint="https://example.org/data", format="parquet")
-    )
+    spec = _spec(SourceRef(kind="url", endpoint="https://example.org/data", format="parquet"))
 
     with pytest.raises(ValidationError) as exc_info:
         validate_spec(spec)

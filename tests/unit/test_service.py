@@ -1302,9 +1302,7 @@ class TestHttpUploads:
         assert fetched["upload_id"] == upload_id
         assert "content" not in fetched
 
-        delete_req = urllib.request.Request(
-            f"{base_url}/uploads/{upload_id}", method="DELETE"
-        )
+        delete_req = urllib.request.Request(f"{base_url}/uploads/{upload_id}", method="DELETE")
         with urllib.request.urlopen(delete_req, timeout=2.0) as response:
             assert response.status == 200
             deleted = cast(dict[str, object], json.loads(response.read()))

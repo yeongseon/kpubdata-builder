@@ -85,16 +85,32 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
     시점 사이에 DNS 응답이 바뀌면(DNS rebinding) private IP로 연결될 수 있다.
     이 클래스는 미리 검증한 ``pinned_ip`` 로만 소켓을 열고, TLS SNI/인증서
     검증에는 원본 ``host`` 를 그대로 쓴다(가상 호스팅·인증서 검증 정합성 유지).
+
+    ``connect_timeout``과 ``read_timeout``을 분리해 적용한다: TCP+TLS
+    connect에는 ``connect_timeout``을, 연결이 성립한 뒤 socket read에는
+    ``read_timeout``을 쓴다(#538 review) — ``connect()``가 실제 connect 전에
+    ``self.timeout``이 이미 read_timeout으로 덮어써지면 connect_timeout이
+    사실상 쓰이지 않게 되므로, connect가 끝난 뒤에만 timeout을 전환한다.
     """
 
-    def __init__(self, host: str, pinned_ip: str, port: int, *, timeout: float) -> None:
-        super().__init__(host, port, timeout=timeout)
+    def __init__(
+        self,
+        host: str,
+        pinned_ip: str,
+        port: int,
+        *,
+        connect_timeout: float,
+        read_timeout: float,
+    ) -> None:
+        super().__init__(host, port, timeout=connect_timeout)
         self._pinned_ip = pinned_ip
+        self._read_timeout = read_timeout
 
     def connect(self) -> None:  # noqa: D102 - http.client 시그니처 오버라이드
         sock = socket.create_connection((self._pinned_ip, self.port), timeout=self.timeout)
         context = ssl.create_default_context()
         self.sock = context.wrap_socket(sock, server_hostname=self.host)
+        self.sock.settimeout(self._read_timeout)
 
 
 def _validate_url_shape(url: str) -> tuple[str, str, int, str]:
@@ -193,9 +209,10 @@ def safe_fetch_get(
     for _ in range(max_redirects + 1):
         _scheme, host, port, path = _validate_url_shape(current_url)
         pinned_ip = _resolve_and_validate(host, port)
-        connection = _PinnedHTTPSConnection(host, pinned_ip, port, timeout=connect_timeout)
+        connection = _PinnedHTTPSConnection(
+            host, pinned_ip, port, connect_timeout=connect_timeout, read_timeout=read_timeout
+        )
         try:
-            connection.timeout = read_timeout
             # 사용자 정의 header는 절대 전달하지 않는다 — arbitrary header 금지(#498).
             connection.request(
                 "GET",
@@ -208,7 +225,11 @@ def safe_fetch_get(
             response = connection.getresponse()
             if response.status in _REDIRECT_STATUSES:
                 location = response.getheader("Location")
-                _ = response.read()  # 연결 재사용을 위해 body를 비운다.
+                # redirect body는 읽지 않는다 — 매 hop마다 connection을
+                # finally에서 close()하므로 "연결 재사용을 위해 비운다"는 이유가
+                # 성립하지 않고, 여기서 amt 없이 read()하면 최종 200 응답만
+                # bound하는 _read_bounded()의 max_bytes cap을 우회하는 unbounded
+                # read가 된다(BLOCKER, #538 review).
                 if not location:
                     raise IngestionError("redirect response is missing a Location header")
                 current_url = urljoin(current_url, location)

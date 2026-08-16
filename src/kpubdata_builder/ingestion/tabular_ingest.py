@@ -24,7 +24,10 @@ _TEXT_FORMATS = frozenset({"csv", "json", "jsonl"})
 
 
 def parse_tabular_bytes(
-    raw: bytes, *, format: str, encoding: str = "utf-8"  # noqa: A002 - 계약 필드명과 맞춘다
+    raw: bytes,
+    *,
+    format: str,
+    encoding: str = "utf-8",  # noqa: A002 - 계약 필드명과 맞춘다
 ) -> tuple[dict[str, JsonValue], ...]:
     """원시 bytes를 ``format`` 규칙으로 파싱해 레코드 튜플로 반환한다.
 
@@ -89,8 +92,7 @@ def _parse_json(text: str) -> tuple[dict[str, JsonValue], ...]:
         # 허용한다 — 이 코드베이스가 quality.compare_columns 등에서 이미 지키는
         # "자유형 eval/추측 금지" 원칙과 동일하다.
         raise IngestionError(
-            "json content must be a top-level array of objects "
-            '(e.g. [{"col": "value"}, ...])'
+            'json content must be a top-level array of objects (e.g. [{"col": "value"}, ...])'
         )
     return tuple(cast(list[dict[str, JsonValue]], data))
 

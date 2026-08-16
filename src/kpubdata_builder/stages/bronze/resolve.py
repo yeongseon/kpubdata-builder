@@ -30,6 +30,7 @@ from urllib.parse import urlsplit, urlunsplit
 from ...ingestion import IngestionError, parse_tabular_bytes, safe_fetch_get
 from ...ingestion.url_fetch import default_max_fetch_bytes
 from ...spec import JsonValue, SourceRef
+from ...spec.models import SOURCE_KINDS
 from ...uploads import UploadRepository
 from .build import SourceClient, build_bronze_artifact
 from .models import BronzeArtifact, ProvenanceEvent, require_timezone_aware, utc_now
@@ -103,7 +104,8 @@ def build_bronze_artifact_for_source(
         BronzeArtifact: kind와 무관하게 동일한 모양의 산출물.
 
     예외:
-        IngestionError: file/url fetch·파싱 실패, 소유권 없음, 저장소 미설정.
+        IngestionError: file/url fetch·파싱 실패, 소유권 없음, 저장소 미설정,
+            알 수 없는 source.kind(fail-closed, #538 review).
     """
     if source.kind == "file":
         return _build_from_upload(
@@ -111,12 +113,20 @@ def build_bronze_artifact_for_source(
         )
     if source.kind == "url":
         return _build_from_url(source, fetched_at=fetched_at)
-    provider, dataset = source_identity(source)
-    return build_bronze_artifact(
-        client,
-        source_key=f"{provider}.{dataset}",
-        fetch_params=dict(source.params),
-        fetched_at=fetched_at,
+    if source.kind == "public_api":
+        provider, dataset = source_identity(source)
+        return build_bronze_artifact(
+            client,
+            source_key=f"{provider}.{dataset}",
+            fetch_params=dict(source.params),
+            fetched_at=fetched_at,
+        )
+    # validate_spec이 loader를 거치지 않은 BuildSpec(직접 SourceRef 구성)도
+    # 이미 거부하지만, resolver 스스로도 "그 외는 public_api"라는 implicit
+    # fallback을 두지 않는다 — canonical kind 계약(public_api|file|url) 밖의
+    # 값은 여기서도 fail-closed로 막는다(BLOCKER, #538 review).
+    raise IngestionError(
+        f"unsupported source kind: {source.kind!r} (canonical kinds: {SOURCE_KINDS})"
     )
 
 

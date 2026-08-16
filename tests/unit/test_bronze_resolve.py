@@ -69,9 +69,7 @@ def test_source_identity_for_url_is_a_safe_path_segment() -> None:
     쓰이므로(orchestrator._fetch_source_key), colon/slash가 남으면
     validate_path_segment가 거부한다(#498).
     """
-    source = SourceRef(
-        kind="url", endpoint="https://example.org:8443/data?token=secret&x=1#frag"
-    )
+    source = SourceRef(kind="url", endpoint="https://example.org:8443/data?token=secret&x=1#frag")
 
     provider, dataset = source_identity(source)
 
@@ -114,6 +112,20 @@ def test_public_api_source_delegates_to_existing_client_path() -> None:
     assert artifact.source_key == "datago.air_quality"
     assert artifact.raw_records == ({"id": "1"},)
     assert artifact.fetch_params == {"page": 1}
+
+
+def test_unknown_source_kind_is_rejected_fail_closed() -> None:
+    """알 수 없는 kind를 public_api처럼 암묵적으로 처리하지 않는다 (#538 review).
+
+    validate_spec이 loader를 거치지 않은 BuildSpec도 이미 거부하지만, resolver
+    자신도 "그 외는 public_api" implicit fallback을 두지 않고 독립적으로
+    fail-closed해야 한다 — resolver를 직접 호출하는 다른 경로(테스트, 향후
+    호출자)가 validate_spec을 우회해도 안전하도록.
+    """
+    source = SourceRef(kind="ftp", provider="datago", dataset="air_quality")
+
+    with pytest.raises(IngestionError, match="unsupported source kind"):
+        build_bronze_artifact_for_source(source, client=_FakeClient({}))
 
 
 # --- build_bronze_artifact_for_source: file ---------------------------------------
@@ -227,9 +239,7 @@ def test_url_source_uses_safe_fetch_and_declared_format(monkeypatch: pytest.Monk
 
     def _fake_fetch(url: str, *, max_bytes: int) -> FetchResult:
         assert url == "https://example.org/data.json"
-        return FetchResult(
-            content=b'[{"id": 1}]', content_type="application/json", final_url=url
-        )
+        return FetchResult(content=b'[{"id": 1}]', content_type="application/json", final_url=url)
 
     monkeypatch.setattr(resolve_module, "safe_fetch_get", _fake_fetch)
     source = SourceRef(kind="url", endpoint="https://example.org/data.json", format="json")

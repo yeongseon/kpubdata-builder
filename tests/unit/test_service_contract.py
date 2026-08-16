@@ -1225,9 +1225,7 @@ class TestResponseConformance:
         _assert_conforms(resp, "/uploads/{upload_id}", "GET")
 
     def test_get_upload_404_missing(self, tmp_path: Path) -> None:
-        resp = dispatch(
-            _conform_service(tmp_path), "GET", f"/uploads/upl_{'0' * 32}", None
-        )
+        resp = dispatch(_conform_service(tmp_path), "GET", f"/uploads/upl_{'0' * 32}", None)
         assert resp.status_code == 404
         _assert_conforms(resp, "/uploads/{upload_id}", "GET")
 
@@ -1242,8 +1240,6 @@ class TestResponseConformance:
         _assert_conforms(resp, "/uploads/{upload_id}", "DELETE")
 
     def test_delete_upload_404_missing(self, tmp_path: Path) -> None:
-        resp = dispatch(
-            _conform_service(tmp_path), "DELETE", f"/uploads/upl_{'0' * 32}", None
-        )
+        resp = dispatch(_conform_service(tmp_path), "DELETE", f"/uploads/upl_{'0' * 32}", None)
         assert resp.status_code == 404
         _assert_conforms(resp, "/uploads/{upload_id}", "DELETE")

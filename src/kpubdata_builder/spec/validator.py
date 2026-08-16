@@ -23,6 +23,7 @@ from ..exporters import EXPORTER_REGISTRY
 from ..tabular.polars_helpers import _NAMED_DTYPES
 from .models import (
     SOURCE_FILE_FORMATS,
+    SOURCE_KINDS,
     SOURCE_URL_FORMATS,
     SOURCE_URL_METHODS,
     UPLOAD_ID_PATTERN,
@@ -260,19 +261,34 @@ def _schema_problems(spec: BuildSpec) -> list[ValidationProblem]:
 
 
 def _source_kind_problems(spec: BuildSpec) -> list[ValidationProblem]:
-    """kind='file'/'url' source의 값 vocabulary와 SSRF 관련 형태를 검증한다 (#498).
+    """kind vocabulary와 kind='file'/'url' source의 값·SSRF 관련 형태를 검증한다 (#498).
 
-    field 구조(서로 다른 kind의 field 혼입 금지)는 loader가 이미 거부한다. 여기서는
-    loader가 검사하지 않는 의미 규칙(허용 format/encoding/method vocabulary, URL
-    scheme/userinfo, upload_id 형태)만 다룬다. 실제 네트워크 SSRF 방어(DNS
-    resolve·redirect 재검증)는 fetch 시점(ingestion.url_fetch)의 책임이다 — 여기서는
-    명백히 안전하지 않은 선언(scheme=http, userinfo 포함 등)을 build 실행 전에
-    빠르게 거부한다.
+    ``kind`` 자체가 ``SOURCE_KINDS``(public_api/file/url) 밖이면 여기서
+    거부한다 — loader(YAML 경로)는 이미 거부하지만, ``SourceRef(kind="ftp",
+    ...)``처럼 loader를 거치지 않고 BuildSpec을 직접 구성하면 이 검사가 유일한
+    방어선이다(fail-closed, #538 review). canonical source kind 계약은
+    public_api | file | url 세 가지뿐이며, 알 수 없는 kind를 암묵적으로
+    public_api처럼 처리하지 않는다.
+
+    나머지는 loader가 검사하지 않는 의미 규칙(허용 format/encoding/method
+    vocabulary, URL scheme/userinfo, upload_id 형태)만 다룬다. 실제 네트워크
+    SSRF 방어(DNS resolve·redirect 재검증)는 fetch 시점(ingestion.url_fetch)의
+    책임이다 — 여기서는 명백히 안전하지 않은 선언(scheme=http, userinfo 포함
+    등)을 build 실행 전에 빠르게 거부한다.
     """
     problems: list[ValidationProblem] = []
     for i, source in enumerate(spec.sources):
         prefix = f"sources[{i}]"
-        if source.kind == "file":
+        if source.kind not in SOURCE_KINDS:
+            problems.append(
+                _p(
+                    "unsupported_source_kind",
+                    f"{prefix}.kind",
+                    f"{prefix}.kind {source.kind!r} is not supported; "
+                    f"use one of {SOURCE_KINDS} (#498)",
+                )
+            )
+        elif source.kind == "file":
             problems.extend(_file_source_problems(source, prefix))
         elif source.kind == "url":
             problems.extend(_url_source_problems(source, prefix))
@@ -327,8 +343,7 @@ def _url_source_problems(source: SourceRef, prefix: str) -> list[ValidationProbl
             _p(
                 "unsupported_source_method",
                 f"{prefix}.method",
-                f"{prefix}.method {source.method!r} is not supported "
-                "(P0 supports GET only, #498)",
+                f"{prefix}.method {source.method!r} is not supported (P0 supports GET only, #498)",
                 hint=f"Use one of: {', '.join(SOURCE_URL_METHODS)}",
             )
         )

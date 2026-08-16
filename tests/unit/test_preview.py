@@ -652,9 +652,7 @@ class TestSourceKinds:
             )
 
         monkeypatch.setattr(resolve_module, "safe_fetch_get", _fake_fetch)
-        spec = _spec(
-            SourceRef(kind="url", endpoint="https://example.org/data.json", alias="feed")
-        )
+        spec = _spec(SourceRef(kind="url", endpoint="https://example.org/data.json", alias="feed"))
 
         result = preview_build(spec, client=_FakeClient({}))
 

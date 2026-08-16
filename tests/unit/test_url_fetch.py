@@ -14,6 +14,9 @@
 
 from __future__ import annotations
 
+import http.client
+import socket
+import ssl
 import threading
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -22,6 +25,7 @@ import pytest
 
 from kpubdata_builder.ingestion import IngestionError
 from kpubdata_builder.ingestion.url_fetch import (
+    _PinnedHTTPSConnection,
     _read_bounded,
     _resolve_and_validate,
     _validate_url_shape,
@@ -148,6 +152,24 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Location", "/ok")
             self.send_header("Content-Length", "0")
             self.end_headers()
+        elif self.path == "/redirect-with-body":
+            # redirect(3xx)에도 body가 실릴 수 있다 — 이 body를 amt 없이
+            # read()하면 max_bytes cap을 우회하는 unbounded read가 된다는
+            # BLOCKER(#538 review)를 재현하기 위한 non-empty body.
+            body = b"ignored redirect body " * 10
+            self.send_response(302)
+            self.send_header("Location", "/ok")
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        elif self.path == "/redirect-to-private":
+            # redirect target이 private 주소면 hop마다 처음부터 SSRF 검증을
+            # 다시 해야 한다(회귀 방지, #538 review).
+            self.send_response(302)
+            self.send_header("Location", "https://10.0.0.1/private")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
         elif self.path == "/redirect-loop":
             self.send_response(302)
             self.send_header("Location", "/redirect-loop")
@@ -190,11 +212,18 @@ class _LoopbackHTTPConnection:
     나머지 로직은 실제 코드 그대로 실행되게 한다.
     """
 
-    def __init__(self, host: str, pinned_ip: str, port: int, *, timeout: float) -> None:
-        import http.client
-
-        self._delegate = http.client.HTTPConnection(pinned_ip, port, timeout=timeout)
+    def __init__(
+        self,
+        host: str,
+        pinned_ip: str,
+        port: int,
+        *,
+        connect_timeout: float,
+        read_timeout: float,
+    ) -> None:
+        self._delegate = http.client.HTTPConnection(pinned_ip, port, timeout=connect_timeout)
         self.host = host
+        self._read_timeout = read_timeout
 
     def request(self, method: str, path: str, headers: dict[str, str]) -> None:
         self._delegate.request(method, path, headers=headers)
@@ -221,14 +250,12 @@ def local_server(
     import kpubdata_builder.ingestion.url_fetch as url_fetch_module
 
     port = _raw_local_server.server_address[1]
-    monkeypatch.setattr(
-        url_fetch_module, "_resolve_and_validate", lambda host, _port: "127.0.0.1"
-    )
+    monkeypatch.setattr(url_fetch_module, "_resolve_and_validate", lambda host, _port: "127.0.0.1")
     monkeypatch.setattr(
         url_fetch_module,
         "_PinnedHTTPSConnection",
-        lambda host, pinned_ip, _port, *, timeout: _LoopbackHTTPConnection(
-            host, pinned_ip, port, timeout=timeout
+        lambda host, pinned_ip, _port, *, connect_timeout, read_timeout: _LoopbackHTTPConnection(
+            host, pinned_ip, port, connect_timeout=connect_timeout, read_timeout=read_timeout
         ),
     )
     yield _raw_local_server
@@ -270,3 +297,171 @@ def test_safe_fetch_get_rejects_non_200_status(local_server: HTTPServer) -> None
 def test_safe_fetch_get_rejects_non_https_before_any_connection() -> None:
     with pytest.raises(IngestionError, match="https"):
         safe_fetch_get("http://example.org/ok")
+
+
+# --- redirect body read는 절대 unbounded여선 안 된다 (BLOCKER, #538 review) ------
+
+
+def test_safe_fetch_get_does_not_perform_unbounded_read_on_redirect_body(
+    local_server: HTTPServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """redirect(3xx) 응답 body를 amt 없이 read()해 전체를 무제한으로 읽지 않는다.
+
+    무제한 read는 최종 200 응답에만 적용되는 ``_read_bounded()``의 max_bytes
+    cap을 redirect hop에서 우회하는 경로가 된다.
+    """
+    del local_server
+    calls: list[int | None] = []
+    original_read = http.client.HTTPResponse.read
+
+    def tracking_read(self: http.client.HTTPResponse, amt: int | None = None) -> bytes:
+        calls.append(amt)
+        return original_read(self, amt)
+
+    monkeypatch.setattr(http.client.HTTPResponse, "read", tracking_read)
+
+    result = safe_fetch_get("https://example.org/redirect-with-body")
+
+    assert result.content == b'[{"id": 1}]'  # 기존 정상 redirect 동작 유지.
+    # redirect hop을 포함해 어떤 read() 호출도 amt=None(무제한)이 아니어야
+    # 한다 — 마지막 200 응답만 _read_bounded()가 명시적 chunk size로 읽는다.
+    assert all(amt is not None for amt in calls)
+
+
+def test_safe_fetch_get_rejects_redirect_to_private_address(
+    _raw_local_server: HTTPServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """redirect target이 private 주소면 hop마다 검증을 처음부터 다시 해 거부한다.
+
+    redirect body 처리 방식을 바꾸는 것과 무관하게 SSRF 방어(hop별 재검증)에
+    회귀가 없어야 한다 — ``local_server`` fixture는 모든 host를 강제로
+    127.0.0.1로 바꾸므로 여기서는 첫 hop(example.org)만 로컬 서버로 우회하고
+    redirect target(10.0.0.1)은 실제 ``_resolve_and_validate``를 그대로
+    거치게 한다.
+    """
+    import kpubdata_builder.ingestion.url_fetch as url_fetch_module
+
+    port = _raw_local_server.server_address[1]
+    real_resolve_and_validate = url_fetch_module._resolve_and_validate
+
+    def fake_resolve(host: str, resolve_port: int) -> str:
+        if host == "example.org":
+            return "127.0.0.1"
+        return real_resolve_and_validate(host, resolve_port)
+
+    monkeypatch.setattr(url_fetch_module, "_resolve_and_validate", fake_resolve)
+    monkeypatch.setattr(
+        url_fetch_module,
+        "_PinnedHTTPSConnection",
+        lambda host, pinned_ip, _port, *, connect_timeout, read_timeout: _LoopbackHTTPConnection(
+            host, pinned_ip, port, connect_timeout=connect_timeout, read_timeout=read_timeout
+        ),
+    )
+
+    with pytest.raises(IngestionError, match="SSRF policy"):
+        safe_fetch_get("https://example.org/redirect-to-private")
+
+
+# --- connect/read timeout 분리 (SHOULD FIX, #538 review) -------------------------
+
+
+class _FakeTLSSocket:
+    """``ssl.SSLSocket``을 대체해 ``settimeout`` 호출만 기록하는 test double."""
+
+    def __init__(self) -> None:
+        self.settimeout_calls: list[float] = []
+
+    def settimeout(self, value: float) -> None:
+        self.settimeout_calls.append(value)
+
+
+def test_pinned_https_connection_uses_connect_timeout_for_connect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TCP connect에는 connect_timeout이 쓰이고, DNS를 다시 resolve하지 않는다."""
+    captured_addresses: list[tuple[str, int]] = []
+    captured_timeouts: list[float] = []
+    fake_raw_socket = object()
+    fake_tls_socket = _FakeTLSSocket()
+
+    def fake_create_connection(address: tuple[str, int], timeout: float) -> object:
+        captured_addresses.append(address)
+        captured_timeouts.append(timeout)
+        return fake_raw_socket
+
+    def fake_wrap_socket(
+        self: ssl.SSLContext, sock: object, *, server_hostname: str
+    ) -> _FakeTLSSocket:
+        assert sock is fake_raw_socket
+        assert server_hostname == "example.org"
+        return fake_tls_socket
+
+    monkeypatch.setattr(socket, "create_connection", fake_create_connection)
+    monkeypatch.setattr(ssl.SSLContext, "wrap_socket", fake_wrap_socket)
+
+    connection = _PinnedHTTPSConnection(
+        "example.org", "8.8.8.8", 443, connect_timeout=1.5, read_timeout=9.0
+    )
+    connection.connect()
+
+    # 검증된 IP에만 직접 연결한다 — hostname을 다시 resolve하지 않는다(DNS
+    # rebinding 방어 유지).
+    assert captured_addresses == [("8.8.8.8", 443)]
+    assert captured_timeouts == [1.5]
+
+
+def test_pinned_https_connection_switches_to_read_timeout_after_connect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """connect가 끝난 뒤 socket read timeout은 read_timeout으로 전환된다."""
+    fake_tls_socket = _FakeTLSSocket()
+
+    monkeypatch.setattr(socket, "create_connection", lambda address, timeout: object())
+    monkeypatch.setattr(
+        ssl.SSLContext,
+        "wrap_socket",
+        lambda self, sock, *, server_hostname: fake_tls_socket,
+    )
+
+    connection = _PinnedHTTPSConnection(
+        "example.org", "8.8.8.8", 443, connect_timeout=1.5, read_timeout=9.0
+    )
+    connection.connect()
+
+    assert fake_tls_socket.settimeout_calls == [9.0]
+
+
+class _TimeoutHTTPConnection:
+    """connect 단계에서 항상 timeout을 일으키는 ``_PinnedHTTPSConnection`` test double."""
+
+    def __init__(
+        self,
+        host: str,
+        pinned_ip: str,
+        port: int,
+        *,
+        connect_timeout: float,
+        read_timeout: float,
+    ) -> None:
+        del host, pinned_ip, port, connect_timeout, read_timeout
+
+    def request(self, method: str, path: str, headers: dict[str, str]) -> None:
+        del method, path, headers
+        raise TimeoutError("simulated connect timeout")
+
+    def getresponse(self) -> object:
+        raise AssertionError("must not be reached after a connect timeout")
+
+    def close(self) -> None:
+        return
+
+
+def test_safe_fetch_get_maps_timeout_to_ingestion_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """connect/read timeout은 원문 예외가 아니라 IngestionError로 안전하게 mapping된다."""
+    import kpubdata_builder.ingestion.url_fetch as url_fetch_module
+
+    monkeypatch.setattr(url_fetch_module, "_resolve_and_validate", lambda host, _port: "8.8.8.8")
+    monkeypatch.setattr(url_fetch_module, "_PinnedHTTPSConnection", _TimeoutHTTPConnection)
+
+    with pytest.raises(IngestionError, match="failed to fetch"):
+        safe_fetch_get("https://example.org/ok")
