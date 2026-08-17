@@ -276,7 +276,11 @@ def _strip_internal_fields(entries: list[_BuildListEntry]) -> list[_BuildListEnt
 # 1.14.0 -> 1.15.0: /catalog 응답(CatalogDataset)에 탐색용 metadata(description/
 # tags/source_url/representation/operations/query_support)를 추가한다(#490,
 # additive — 기존 필드는 유지되며 raw_metadata는 노출하지 않는다).
-API_CONTRACT_VERSION = "1.15.0"
+# 1.15.0 -> 1.16.0: async build job 표면을 계약에 문서화한다 — POST /builds(202/200
+# idempotent/409/429)와 GET /builds/{run_id}(잡 상태 polling) 추가(#480). 잡 상태
+# 조회에 ownership 게이트를 적용해 cross-owner의 build 출력(response) 노출을
+# 차단한다(behavioral tightening — 이전에는 미검사).
+API_CONTRACT_VERSION = "1.16.0"
 
 
 def _quality_result_to_json(r: QualityCheckResult) -> dict[str, JsonValue]:

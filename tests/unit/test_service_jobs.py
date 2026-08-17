@@ -8,9 +8,11 @@ from pathlib import Path
 
 import pytest
 
+import kpubdata_builder.service.app as app_module
 from kpubdata_builder.events import BuildEvent
 from kpubdata_builder.service import BuilderService, ServiceResponse, dispatch
 from kpubdata_builder.service.auth import Principal
+from kpubdata_builder.service.ownership import _OWNERSHIP_ENV
 from kpubdata_builder.spec import JsonValue
 
 VALID_SPEC_YAML = (
@@ -404,3 +406,95 @@ class TestExecutorEnqueueFailure:
         assert second.status_code == 200
         assert second.body["run_id"] == "run1"
         assert second.body["status"] == "failed"
+
+
+class TestBuildJobStatusOwnership:
+    """GET /builds/{run_id} 잡 상태 polling의 ownership 게이트 (#480).
+
+    잡 상태 응답은 성공 잡의 최종 build 출력(``response``) 전체를 포함하므로,
+    events와 동일하게 active async job(completed run 포함)에 대한 cross-owner
+    접근이 상태 조회로 출력을 가져가지 못하게 차단한다.
+    """
+
+    def test_cross_owner_cannot_poll_active_job_status(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(_OWNERSHIP_ENV, "true")
+        entered = threading.Event()
+        release = threading.Event()
+        service = _BlockingBuildService(output_root=tmp_path, entered=entered, release=release)
+        monkeypatch.setattr(
+            app_module,
+            "authenticate",
+            lambda **_kwargs: Principal(kind="oidc", identifier="a", owner_id="oidc:owner-a"),
+        )
+        submitted = dispatch(
+            service, "POST", "/builds", {"spec": VALID_SPEC_YAML, "run_id": "run1"}
+        )
+        assert submitted.status_code == 202
+        assert entered.wait(timeout=5)
+
+        monkeypatch.setattr(
+            app_module,
+            "authenticate",
+            lambda **_kwargs: Principal(kind="oidc", identifier="b", owner_id="oidc:owner-b"),
+        )
+        resp = dispatch(service, "GET", "/builds/run1", None)
+        assert resp.status_code == 403
+
+        release.set()
+
+    def test_owner_and_admin_can_poll_active_job_status(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(_OWNERSHIP_ENV, "true")
+        entered = threading.Event()
+        release = threading.Event()
+        service = _BlockingBuildService(output_root=tmp_path, entered=entered, release=release)
+        owner = Principal(kind="oidc", identifier="a", owner_id="oidc:owner-a")
+        monkeypatch.setattr(app_module, "authenticate", lambda **_kwargs: owner)
+        assert (
+            dispatch(
+                service, "POST", "/builds", {"spec": VALID_SPEC_YAML, "run_id": "run1"}
+            ).status_code
+            == 202
+        )
+        assert entered.wait(timeout=5)
+
+        resp = dispatch(service, "GET", "/builds/run1", None)
+        assert resp.status_code == 200
+        assert resp.body["status"] == "running"
+
+        monkeypatch.setattr(
+            app_module,
+            "authenticate",
+            lambda **_kwargs: Principal(kind="dev", owner_id="dev:local"),
+        )
+        admin_resp = dispatch(service, "GET", "/builds/run1", None)
+        assert admin_resp.status_code == 200
+
+        release.set()
+
+    def test_unknown_run_status_still_404_after_gate(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(_OWNERSHIP_ENV, "true")
+        service = _service(tmp_path, threading.Event())
+        monkeypatch.setattr(
+            app_module,
+            "authenticate",
+            lambda **_kwargs: Principal(kind="oidc", identifier="a", owner_id="oidc:owner-a"),
+        )
+
+        resp = dispatch(service, "GET", "/builds/never-submitted", None)
+
+        assert resp.status_code == 404
+
+    def test_unsafe_run_id_rejected_in_status_route(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        service = _service(tmp_path, threading.Event())
+
+        resp = dispatch(service, "GET", "/builds/..%2Fescape", None)
+
+        assert resp.status_code == 400
