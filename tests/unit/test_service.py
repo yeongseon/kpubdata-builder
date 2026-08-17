@@ -1895,17 +1895,43 @@ class TestStableOwnerIdOwnership:
 
 
 class _FakeCatalogRef:
-    """DatasetRef 흉내 — catalog() 가 접근하는 속성만 노출."""
+    """DatasetRef 흉내 — catalog() 가 접근하는 속성만 노출.
+
+    기본값은 실제 DatasetRef의 기본값과 같다(metadata 없는 dataset — #490
+    null/empty 직렬화 규칙 검증에 그대로 쓴다).
+    """
 
     def __init__(
-        self, provider: str, dataset_key: str, name: str, *, service_key: bool = False
+        self,
+        provider: str,
+        dataset_key: str,
+        name: str,
+        *,
+        service_key: bool = False,
+        description: str | None = None,
+        tags: tuple[str, ...] = (),
+        source_url: str | None = None,
+        representation: object = None,
+        operations: frozenset[object] = frozenset(),
+        query_support: object = None,
+        raw_metadata_extra: dict[str, object] | None = None,
     ) -> None:
+        from kpubdata.core.models import Representation
+
         self.provider = provider
         self.dataset_key = dataset_key
         self.name = name
+        self.description = description
+        self.tags = tags
+        self.source_url = source_url
+        self.representation = representation or Representation.API_JSON
+        self.operations = operations
+        self.query_support = query_support
         self.raw_metadata: dict[str, object] = (
             {"service_key_param": "serviceKey"} if service_key else {}
         )
+        if raw_metadata_extra:
+            self.raw_metadata.update(raw_metadata_extra)
 
 
 class TestCatalog:
@@ -1965,6 +1991,103 @@ class TestCatalog:
         resp = self._service_with_catalog(tmp_path, []).catalog()
         assert resp.status_code == 200
         assert resp.body["providers"] == []
+
+    def test_catalog_serializes_discovery_metadata(self, tmp_path: Path) -> None:
+        """DatasetRef의 탐색용 metadata가 allowlist로 직렬화된다 (#490)."""
+        from kpubdata.core.capability import PaginationMode, QuerySupport
+        from kpubdata.core.models import Operation, Representation
+
+        ref = _FakeCatalogRef(
+            "datago",
+            "air_quality",
+            "대기오염",
+            description="측정소별 대기오염 물질 농도",
+            tags=("environment", "air"),
+            source_url="https://www.data.go.kr/data/15073861/openapi",
+            representation=Representation.API_JSON,
+            operations=frozenset({Operation.GET, Operation.LIST}),
+            query_support=QuerySupport(
+                pagination=PaginationMode.OFFSET,
+                filterable_fields=frozenset({"station_name"}),
+                sortable_fields=frozenset(),
+                time_range=True,
+                max_page_size=1000,
+            ),
+        )
+        resp = self._service_with_catalog(tmp_path, [ref]).catalog()
+
+        assert resp.status_code == 200
+        providers = cast(list[dict[str, object]], resp.body["providers"])
+        dataset = cast(dict[str, object], providers[0]["datasets"][0])
+        assert dataset["description"] == "측정소별 대기오염 물질 농도"
+        assert dataset["tags"] == ["air", "environment"]
+        assert dataset["source_url"] == "https://www.data.go.kr/data/15073861/openapi"
+        assert dataset["representation"] == "api_json"
+        assert dataset["operations"] == ["get", "list"]
+        query_support = cast(dict[str, object], dataset["query_support"])
+        assert query_support["pagination"] == "offset"
+        assert query_support["filterable_fields"] == ["station_name"]
+        assert query_support["sortable_fields"] == []
+        assert query_support["time_range"] is True
+        assert query_support["max_page_size"] == 1000
+
+    def test_catalog_metadata_less_dataset_serializes_null_and_empty(self, tmp_path: Path) -> None:
+        """metadata 없는 dataset은 null/empty로 직렬화되고 응답이 깨지지 않는다 (#490)."""
+        resp = self._service_with_catalog(
+            tmp_path, [_FakeCatalogRef("datago", "air_quality", "대기오염")]
+        ).catalog()
+
+        assert resp.status_code == 200
+        providers = cast(list[dict[str, object]], resp.body["providers"])
+        dataset = cast(dict[str, object], providers[0]["datasets"][0])
+        assert dataset["description"] is None
+        assert dataset["tags"] == []
+        assert dataset["source_url"] is None
+        assert dataset["representation"] == "api_json"
+        assert dataset["operations"] == []
+        assert dataset["query_support"] is None
+        assert dataset["requires_service_key"] is False
+
+    def test_catalog_never_exposes_raw_metadata_or_secrets(self, tmp_path: Path) -> None:
+        """raw_metadata와 secret-like 값은 응답에 절대 노출되지 않는다 (#490)."""
+        ref = _FakeCatalogRef(
+            "datago",
+            "air_quality",
+            "대기오염",
+            service_key=True,
+            raw_metadata_extra={
+                "internal_note": "provider private",
+                "api_key": "sk-secret-value",
+                "service_key": "raw-secret",
+                "endpoint_template": "/openapi/{serviceKey}",
+            },
+        )
+        resp = self._service_with_catalog(tmp_path, [ref]).catalog()
+
+        assert resp.status_code == 200
+        serialized = json.dumps(resp.body, ensure_ascii=False)
+        assert "internal_note" not in serialized
+        assert "provider private" not in serialized
+        assert "sk-secret-value" not in serialized
+        assert "raw-secret" not in serialized
+        assert "endpoint_template" not in serialized
+        # allowlist 필드만 존재한다.
+        providers = cast(list[dict[str, object]], resp.body["providers"])
+        dataset = cast(dict[str, object], providers[0]["datasets"][0])
+        assert set(dataset) == {
+            "name",
+            "title",
+            "description",
+            "tags",
+            "source_url",
+            "representation",
+            "operations",
+            "query_support",
+            "requires_service_key",
+        }
+        # service_key_param 존재 여부는 requires_service_key 불리언으로만 전달된다.
+        assert dataset["requires_service_key"] is True
+        assert "service_key_param" not in serialized
 
     def test_catalog_closes_request_client(self, tmp_path: Path) -> None:
         client = _CloseTrackingClient(

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: KPubData Builder Service API
-  version: "1.14.0"
+  version: "1.15.0"
   description: >-
     Builder 중심 서비스 계약. BuildSpec 검증, preview, build 실행, artifact 조회,
     계약 버전 조회를 제공한다. CLI와 HTTP service mode(#36)가 동일한 도메인 계약을
@@ -64,7 +64,10 @@ info:
     값이라 병렬 source 간 실제 append 순서를 손실 없이 보존한다. Monitoring
     (#516, `GET /monitoring/summary`·`GET /monitoring/builds`)은 시스템/집계
     observability를 다루고, 이 endpoint는 단일 run의 event만 다룬다 — 역할이
-    분리되어 있다.
+    분리되어 있다. v1.15.0은 `/catalog` 응답(CatalogDataset)에 탐색용
+    metadata(`description`/`tags`/`source_url`/`representation`/`operations`/
+    `query_support`)를 추가한다(#490, additive — 기존 필드는 유지되며
+    raw_metadata는 노출하지 않는다).
 servers:
   - url: http://localhost:8000
     description: 로컬 builder 개발 서버
@@ -114,21 +117,44 @@ paths:
                 $ref: "#/components/schemas/CatalogResponse"
               examples:
                 PublicDataCatalog:
-                  summary: 인증 필요 여부를 포함한 공공데이터 카탈로그
+                  summary: 탐색용 metadata를 포함한 공공데이터 카탈로그
                   value:
                     providers:
                       - name: datago
                         datasets:
                           - name: air_quality
                             title: 대기오염정보
+                            description: 측정소별 대기오염 물질 농도 조회
+                            tags: [environment, air]
+                            source_url: https://www.data.go.kr/data/15073861/openapi
+                            representation: api_json
+                            operations: [get, list]
+                            query_support:
+                              pagination: offset
+                              filterable_fields: [station_name]
+                              sortable_fields: []
+                              time_range: true
+                              max_page_size: 1000
                             requires_service_key: true
                           - name: village_fcst
                             title: 단기예보
+                            description: null
+                            tags: []
+                            source_url: null
+                            representation: api_json
+                            operations: [list]
+                            query_support: null
                             requires_service_key: true
                       - name: ecos
                         datasets:
                           - name: key_statistic_list
                             title: 주요 경제지표
+                            description: 한국은행 주요 경제지표 시계열
+                            tags: [economy]
+                            source_url: null
+                            representation: api_json
+                            operations: [list]
+                            query_support: null
                             requires_service_key: false
         "401":
           $ref: "#/components/responses/Unauthorized"
@@ -2338,14 +2364,76 @@ components:
 
     CatalogDataset:
       type: object
-      required: [name, title, requires_service_key]
+      required:
+        [
+          name,
+          title,
+          description,
+          tags,
+          source_url,
+          representation,
+          operations,
+          query_support,
+          requires_service_key,
+        ]
+      description: >
+        DatasetRef의 public/canonical metadata를 allowlist로 직렬화한다 (#490).
+        raw_metadata는 provider 내부 정보/secret이 섞일 수 있어 노출하지 않는다.
+        metadata가 없는 dataset은 description/source_url/query_support가 null,
+        tags/operations가 빈 배열이다.
       properties:
         name:
           type: string
         title:
           type: string
+        description:
+          type: [string, "null"]
+          description: 사람이 읽는 데이터셋 설명 (없으면 null)
+        tags:
+          type: array
+          items:
+            type: string
+          description: 탐색용 분류 태그 (정렬된 문자열 배열, 없으면 빈 배열)
+        source_url:
+          type: [string, "null"]
+          description: 원본 API 문서/데이터 포털 URL (없으면 null)
+        representation:
+          type: string
+          enum: [api_json, api_xml, file_csv, file_excel, sheet, other]
+        operations:
+          type: array
+          items:
+            type: string
+            enum: [list, get, schema, raw, download]
+          description: 지원 작업 (정렬된 문자열 배열, 없으면 빈 배열)
+        query_support:
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/CatalogQuerySupport"
+          description: 목록 질의 capability (알려진 경우만, 없으면 null)
         requires_service_key:
           type: boolean
+
+    CatalogQuerySupport:
+      type: object
+      required: [pagination, filterable_fields, sortable_fields, time_range, max_page_size]
+      properties:
+        pagination:
+          type: string
+          enum: [offset, index, cursor, none]
+        filterable_fields:
+          type: array
+          items:
+            type: string
+        sortable_fields:
+          type: array
+          items:
+            type: string
+        time_range:
+          type: boolean
+        max_page_size:
+          type: [integer, "null"]
+          minimum: 1
 
     ProviderListResponse:
       type: object
