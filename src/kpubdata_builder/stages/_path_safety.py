@@ -40,6 +40,26 @@ def validate_path_segment(value: str, *, field_name: str) -> None:
         )
 
 
+def _strip_windows_extended_prefix(path: Path) -> Path:
+    """Windows ``\\\\?\\`` 확장 경로 프리픽스를 제거해 일관되게 비교할 수 있게 한다.
+
+    Windows에서 ``Path.resolve()``는 대상에 대한 파일 핸들을 열 수 있으면
+    ``\\\\?\\`` 프리픽스가 붙은 확장 경로를 돌려주고, 동시 디스크 I/O로 핸들
+    열기가 일시적으로 실패하면 프리픽스 없는 수동 정규화 경로로 폴백한다.
+    같은 실제 경로인데도 어느 쪽이 폴백을 탔는지에 따라 문자열이 달라져,
+    여러 source를 스레드 풀에서 동시에 쓰는 상황(#247)에서
+    ``is_relative_to`` 비교가 간헐적으로 잘못된 traversal 오탐을 냈다(#506
+    composition 작업 중 재현·확인). POSIX에서는 경로가 이 프리픽스로
+    시작할 수 없으므로 no-op이다.
+    """
+    text = str(path)
+    if text.startswith("\\\\?\\UNC\\"):
+        return Path("\\\\" + text[len("\\\\?\\UNC\\") :])
+    if text.startswith("\\\\?\\"):
+        return Path(text[len("\\\\?\\") :])
+    return path
+
+
 def ensure_within(root: Path, target: Path, *, label: str) -> None:
     """target(해석 후)이 root(해석 후) 아래에 포함되는지 검증한다.
 
@@ -54,8 +74,8 @@ def ensure_within(root: Path, target: Path, *, label: str) -> None:
     예외:
         ValueError: target이 root 밖으로 벗어나는 경우.
     """
-    resolved_root = root.resolve()
-    resolved_target = target.resolve()
+    resolved_root = _strip_windows_extended_prefix(root.resolve())
+    resolved_target = _strip_windows_extended_prefix(target.resolve())
     if not resolved_target.is_relative_to(resolved_root):
         raise ValueError(f"Resolved {label} {resolved_target} escapes output_root {resolved_root}")
 
@@ -79,8 +99,8 @@ def safe_output_path(base_dir: Path, relative_path: str | os.PathLike[str]) -> P
         PathTraversalError: 결합·해석된 경로가 base_dir를 벗어나는 경우.
     """
     candidate = base_dir / relative_path
-    resolved_base = base_dir.resolve()
-    resolved_target = candidate.resolve()
+    resolved_base = _strip_windows_extended_prefix(base_dir.resolve())
+    resolved_target = _strip_windows_extended_prefix(candidate.resolve())
     if not resolved_target.is_relative_to(resolved_base):
         raise PathTraversalError(
             f"output path {os.fspath(relative_path)!r} escapes base directory "

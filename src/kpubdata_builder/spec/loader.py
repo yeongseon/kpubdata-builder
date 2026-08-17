@@ -20,7 +20,9 @@ from ..errors import SpecLoadError
 from .models import (
     BuildSpec,
     CompareColumnsRule,
+    CompositionSpec,
     ExportTarget,
+    JoinSpec,
     JsonValue,
     PiiPolicy,
     QualityPolicy,
@@ -29,6 +31,12 @@ from .models import (
     SourceRef,
     SplitSpec,
 )
+
+# JoinSpec.type 허용 어휘 (#506). 초기 범위는 equi-join inner/left로 제한한다.
+_JOIN_TYPES = ("inner", "left")
+
+# JoinSpec.on_duplicate_key 허용 어휘 (#506). quality의 severity 관례를 재사용한다.
+_JOIN_DUPLICATE_KEY_SEVERITIES = ("warn", "fail")
 
 # quality.*_severity 값의 허용 어휘 (#486). 기존 threshold 위반은 "warn"이 기본이며,
 # 명시적으로 "fail"을 선언해야 Gold 진입 전 소스가 실패한다.
@@ -71,6 +79,7 @@ def parse_spec(data: dict[str, object]) -> BuildSpec:
         if license_obj is not None and not isinstance(license_obj, str):
             raise TypeError("license must be a string")
         quality = _parse_quality(data.get("quality"))
+        composition = _parse_composition(data.get("composition"))
     except (KeyError, TypeError, ValueError) as exc:
         raise SpecLoadError(f"Failed to parse build spec: {exc}") from exc
 
@@ -86,6 +95,7 @@ def parse_spec(data: dict[str, object]) -> BuildSpec:
         pii=pii,
         license=license_obj,
         quality=quality,
+        composition=composition,
     )
 
 
@@ -481,6 +491,54 @@ def _parse_quality(value: object) -> QualityPolicy | None:
         range=range_rules,
         compare_columns=compare_columns_rules,
     )
+
+
+def _parse_join(value: object) -> JoinSpec:
+    """composition.join 매핑을 JoinSpec으로 변환한다 (#506).
+
+    left/right/left_key/right_key는 필수 문자열이다. type/on_duplicate_key는
+    고정 어휘 필드라 pii.mode와 동일하게 여기서 즉시 검증한다 — left/right가
+    실제 sources[].alias와 대응하는지, join key가 실제로 존재/호환되는지는
+    구조가 아니라 값 검증이라 validator/orchestrator가 각각 담당한다.
+    """
+    mapping = _ensure_mapping(value, field_name="composition.join")
+    left = _require_string(mapping, "left", prefix="composition.join")
+    right = _require_string(mapping, "right", prefix="composition.join")
+    left_key = _require_string(mapping, "left_key", prefix="composition.join")
+    right_key = _require_string(mapping, "right_key", prefix="composition.join")
+
+    join_type = mapping.get("type", "inner")
+    if not isinstance(join_type, str) or join_type not in _JOIN_TYPES:
+        raise ValueError(f"composition.join.type must be one of {_JOIN_TYPES}, got {join_type!r}")
+
+    on_duplicate_key = mapping.get("on_duplicate_key", "warn")
+    if (
+        not isinstance(on_duplicate_key, str)
+        or on_duplicate_key not in _JOIN_DUPLICATE_KEY_SEVERITIES
+    ):
+        raise ValueError(
+            "composition.join.on_duplicate_key must be one of "
+            f"{_JOIN_DUPLICATE_KEY_SEVERITIES}, got {on_duplicate_key!r}"
+        )
+
+    return JoinSpec(
+        left=left,
+        right=right,
+        left_key=left_key,
+        right_key=right_key,
+        type=join_type,
+        on_duplicate_key=on_duplicate_key,
+    )
+
+
+def _parse_composition(value: object) -> CompositionSpec | None:
+    """composition 매핑을 CompositionSpec으로 변환한다 (없으면 None, #506)."""
+    if value is None:
+        return None
+    mapping = _ensure_mapping(value, field_name="composition")
+    name = _require_string(mapping, "name", prefix="composition")
+    join = _parse_join(_require_present(mapping, "join"))
+    return CompositionSpec(name=name, join=join)
 
 
 __all__ = [

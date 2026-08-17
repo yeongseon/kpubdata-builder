@@ -37,8 +37,14 @@ class GoldPackage:
         dataset_name: 데이터셋 이름 (출력 디렉터리 세그먼트로도 사용).
         table: export용 최종 Polars 테이블.
         export_plan: 내보내기 계획.
-        source_silver: 원천 SilverDataset의 source 참조.
+        source_silver: 원천 SilverDataset의 source 참조 (사람이 읽는 단일 라벨).
         metadata: 패키지에 실을 임의 메타데이터.
+        source_refs: 조립에 사용된 실제 source 식별자 목록 (#506). 단일 소스
+            패키지는 None(생략)이며, 이때 export/카드 렌더링은 source_silver 하나를
+            provenance 항목으로 쓴다. composition으로 만든 패키지는 여기에
+            (left_alias, right_alias)를 담아 각 항목이 개별 provenance로 노출되게
+            한다 — source_silver를 "join:a+b" 같은 합성 문자열로 오버로딩하지
+            않기 위한 필드다.
     """
 
     dataset_name: str
@@ -47,3 +53,4 @@ class GoldPackage:
     source_silver: str
     metadata: dict[str, str] = field(default_factory=dict)
     splits: dict[str, pl.DataFrame] | None = None
+    source_refs: tuple[str, ...] | None = None

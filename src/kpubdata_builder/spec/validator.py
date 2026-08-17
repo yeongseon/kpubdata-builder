@@ -118,6 +118,7 @@ def validate_spec(spec: BuildSpec) -> None:
     problems.extend(_pii_problems(spec))
     problems.extend(_license_problems(spec))
     problems.extend(_quality_problems(spec))
+    problems.extend(_composition_problems(spec))
     if problems:
         raise ValidationError([str(p) for p in problems], structured=problems)
 
@@ -326,6 +327,102 @@ def _license_problems(spec: BuildSpec) -> list[ValidationProblem]:
                 "license is required when publish=true (재배포 가능성 명시, #443)",
             )
         )
+    return problems
+
+
+def _composition_problems(spec: BuildSpec) -> list[ValidationProblem]:
+    """composition의 alias 참조/구조적 일관성을 검증한다 (#506).
+
+    composition이 None이면 아무 것도 검사하지 않는다 — composition 없는 기존
+    multi-source BuildSpec은 이 검증의 영향을 받지 않는다. join key 존재 여부와
+    dtype 호환성은 Silver 스키마가 나와야 알 수 있으므로(파싱/구조 검증 시점엔
+    미지) 여기서 다루지 않는다 — orchestrator의 빌드 파이프라인 검증 게이트가
+    런타임에 담당한다.
+    """
+    problems: list[ValidationProblem] = []
+    composition = spec.composition
+    if composition is None:
+        return problems
+
+    if not composition.name.strip():
+        problems.append(
+            _p("empty_field", "composition.name", "composition.name must be a non-empty string")
+        )
+    else:
+        existing_output_keys = {
+            source.alias if source.alias else f"{source.provider}.{source.dataset}"
+            for source in spec.sources
+        }
+        if composition.name in existing_output_keys:
+            problems.append(
+                _p(
+                    "composition_name_collision",
+                    "composition.name",
+                    f"composition.name {composition.name!r} collides with an existing source "
+                    "output key (alias or provider.dataset)",
+                )
+            )
+
+    join = composition.join
+    aliases = [source.alias for source in spec.sources if source.alias]
+    duplicate_aliases = sorted({a for a in aliases if aliases.count(a) > 1})
+    if duplicate_aliases:
+        problems.append(
+            _p(
+                "duplicate_source_alias",
+                "sources",
+                "sources[].alias must be unique when composition is used; "
+                f"duplicates: {duplicate_aliases}",
+            )
+        )
+
+    if join.left and join.left == join.right:
+        problems.append(
+            _p(
+                "self_join",
+                "composition.join",
+                "composition.join.left and right must reference different sources, "
+                f"both are {join.left!r}",
+            )
+        )
+
+    for side_name, alias in (("left", join.left), ("right", join.right)):
+        if not alias.strip():
+            problems.append(
+                _p(
+                    "empty_field",
+                    f"composition.join.{side_name}",
+                    f"composition.join.{side_name} must be a non-empty string",
+                )
+            )
+            continue
+        if not any(source.alias == alias for source in spec.sources):
+            problems.append(
+                _p(
+                    "unknown_composition_source",
+                    f"composition.join.{side_name}",
+                    f"composition.join.{side_name} {alias!r} does not match any sources[].alias "
+                    "(a source referenced by composition must declare a non-empty alias)",
+                )
+            )
+
+    if not join.left_key.strip():
+        problems.append(
+            _p(
+                "empty_field",
+                "composition.join.left_key",
+                "composition.join.left_key must be a non-empty string",
+            )
+        )
+    if not join.right_key.strip():
+        problems.append(
+            _p(
+                "empty_field",
+                "composition.join.right_key",
+                "composition.join.right_key must be a non-empty string",
+            )
+        )
+
     return problems
 
 

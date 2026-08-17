@@ -6,8 +6,14 @@ BuildSpec의 각 소스를 Bronze → Silver → Gold 순서로 실행하고, �
 부분 성공 정책(BUILD_STATE.md): 소스 중 하나라도 실패하면 전체 상태는 failed로
 기록하되, 성공한 소스의 산출물과 실패 정보를 매니페스트에 함께 남긴다.
 
+BuildSpec.composition이 있으면(#506) 모든 source가 Bronze/Silver/Gold를 마친 뒤,
+composition이 참조하는 두 source의 검증된 Silver를 join해 별도 결합 Gold
+dataset(gold/{composition.name}/)을 추가로 만든다. 기존 source별 독립 Gold는
+그대로 유지된다 — composition은 부가 산출물이지 대체가 아니다.
+
 주요 구성:
     - SourceBuildOutcome: 소스별 실행 결과
+    - CompositionOutcome: composition(join) 실행 결과 (#506)
     - BuildResult: 전체 실행 결과
     - run_build: 파이프라인 진입점
 """
@@ -15,7 +21,7 @@ BuildSpec의 각 소스를 Bronze → Silver → Gold 순서로 실행하고, �
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +31,7 @@ from ..errors import DatasetValidationError, ValidationError
 from ..exporters import get_exporter
 from ..manifest import (
     BuildManifest,
+    CompositionProvenance,
     SchemaSummary,
     SourceProvenance,
     build_schema_summary,
@@ -34,18 +41,22 @@ from ..manifest import (
     manifest_writer,
 )
 from ..quality import QualityCheckResult, SchemaDriftFinding, evaluate_quality
-from ..spec import BuildSpec, ExportTarget, SourceRef, write_buildspec_snapshot
+from ..spec import BuildSpec, CompositionSpec, ExportTarget, SourceRef, write_buildspec_snapshot
 from ..spec.validator import validate_spec
 from ..stages.bronze.build import SourceClient, build_bronze_artifact
 from ..stages.bronze.models import BronzeArtifact, utc_now
 from ..stages.bronze.persist import persist_bronze_artifact
 from ..stages.gold.build import build_gold_package
 from ..stages.gold.card import build_dataset_card, render_dataset_card
+from ..stages.gold.compose import CompositionError, build_composed_gold_package
 from ..stages.gold.persist import persist_gold_package
 from ..stages.silver.build import build_silver_dataset
 from ..stages.silver.drift import DriftFinding, detect_drift, find_previous_silver
+from ..stages.silver.models import SilverDataset
 from ..stages.silver.persist import persist_silver_dataset
 from ..stages.silver.pii import scan_pii
+from ..stages.silver.summarize import build_schema
+from ..tabular import DEFAULT_PREVIEW_LIMIT
 from .context import BuildContext
 from .export import export_gold_package
 
@@ -95,6 +106,26 @@ class SourceBuildOutcome:
 
 
 @dataclass(frozen=True)
+class CompositionOutcome:
+    """composition(join) 실행 결과 (#506).
+
+    SourceBuildOutcome과 별도 타입으로 둔다 — composition에는 bronze/silver/gold
+    stage 개념이 적용되지 않고(두 source의 Silver를 결합할 뿐), manifest에서도
+    "combined result"로 명확히 구분되어야 하기 때문이다.
+
+    속성:
+        name: 결합 Gold dataset 이름 (CompositionSpec.name).
+        status: "ok" | "failed"(join 자체 실행 실패) | "skipped"(참조한 source가
+            실패해 join을 시도조차 못함).
+        error: 실패/스킵 사유.
+    """
+
+    name: str
+    status: str
+    error: str | None = None
+
+
+@dataclass(frozen=True)
 class BuildResult:
     """전체 빌드 실행 결과.
 
@@ -103,6 +134,8 @@ class BuildResult:
         status: 전체 상태 ("ok" 또는 "failed").
         outcomes: 소스별 실행 결과.
         manifest_path: 기록된 빌드 매니페스트 경로.
+        composition_outcome: composition 실행 결과. BuildSpec.composition이
+            없으면 None(#506).
     """
 
     context: BuildContext
@@ -110,6 +143,7 @@ class BuildResult:
     outcomes: tuple[SourceBuildOutcome, ...]
     manifest_path: Path
     spec_digest: str
+    composition_outcome: CompositionOutcome | None = None
 
 
 def _fetch_source_key(source: SourceRef) -> str:
@@ -206,6 +240,7 @@ class _SourcePipelineResult:
     quality_results: tuple[QualityCheckResult, ...] = ()
     quality_evaluated: bool = False
     schema_drift: tuple[SchemaDriftFinding, ...] = ()
+    silver: SilverDataset | None = None
 
 
 def _run_source_pipeline(
@@ -213,11 +248,17 @@ def _run_source_pipeline(
     *,
     client: SourceClient,
     context: BuildContext,
+    capture_silver: bool = False,
 ) -> _SourcePipelineResult:
     """한 소스를 Bronze → Silver → Gold로 실행하고 산출물을 저장한다.
 
     공유 가변 컨테이너를 인자로 받는 대신 결과를 로컬로 모아 반환하므로,
     여러 소스에 대해 동시에(스레드 풀에서) 안전하게 호출할 수 있다 (#247).
+
+    매개변수:
+        capture_silver: True면 검증을 통과한 SilverDataset을 결과에 함께 담는다.
+            composition(#506)이 이 소스를 참조할 때만 켜서, composition을 쓰지
+            않는 일반 빌드는 Silver 테이블을 불필요하게 오래 들고 있지 않는다.
     """
     fetch_key = _fetch_source_key(source)
     output_key = _output_source_key(source)
@@ -225,6 +266,7 @@ def _run_source_pipeline(
     outputs: list[str] = []
     provenance_entry: SourceProvenance | None = None
     evaluated_row_count: int | None = None
+    captured_silver: SilverDataset | None = None
     # 예외가 발생해도(schema 검증 실패, quality FAIL 등) 이미 계산된 구조화된
     # 결과는 살아남아 실패 outcome에도 실린다 (#486) — quality_results가 예외
     # 때문에 사라지지 않는다.
@@ -332,6 +374,10 @@ def _run_source_pipeline(
             silver, output_root=context.output_root, run_id=context.run_id
         )
         completed.append("silver")
+        # Silver 게이트(schema/PII/quality)를 모두 통과한 시점에만 담는다 — composition(#506)이
+        # 이 값을 join에 그대로 쓰므로, 검증 실패한 데이터가 흘러들면 안 된다.
+        if capture_silver:
+            captured_silver = silver
         _record_output_paths(
             outputs,
             silver_paths.table_path,
@@ -404,6 +450,7 @@ def _run_source_pipeline(
             quality_results=quality_results,
             quality_evaluated=quality_evaluated,
             schema_drift=schema_drift,
+            silver=captured_silver,
         )
     except Exception as exc:  # stage 실패를 결과로 변환하여 매니페스트에 기록
         # 검증 오류(ValidationError, DatasetValidationError)는 파일시스템 경로를
@@ -434,7 +481,145 @@ def _run_source_pipeline(
             quality_results=quality_results,
             quality_evaluated=quality_evaluated,
             schema_drift=schema_drift,
+            silver=captured_silver,
         )
+
+
+@dataclass(frozen=True)
+class _CompositionPipelineResult:
+    """composition 실행의 로컬 결과 (#506). _SourcePipelineResult와 동일한 이유로
+    분리한다 — 모든 source 스레드가 끝난 뒤 단일 스레드에서만 실행되지만, 반환값을
+    바로 매니페스트 병합 루프에 꽂을 수 있게 같은 모양을 유지한다."""
+
+    outcome: CompositionOutcome
+    output_paths: tuple[str, ...] = ()
+    row_count: int | None = None
+    schema_summary: SchemaSummary | None = None
+    provenance: CompositionProvenance | None = None
+
+
+def _run_composition(
+    composition: CompositionSpec,
+    *,
+    silver_by_key: Mapping[str, SilverDataset],
+    context: BuildContext,
+) -> _CompositionPipelineResult:
+    """composition(join)을 실행하고 결합 Gold 산출물을 저장한다 (#506).
+
+    join key 존재/dtype 호환성 검증과 duplicate-key explosion 감지는 여기서
+    호출하는 ``build_composed_gold_package``(빌드 파이프라인의 런타임 검증
+    게이트)가 담당한다 — spec.validator는 alias 참조 같은 구조만 검증한다.
+
+    참조된 source 중 하나라도 Silver를 통과하지 못했으면(``silver_by_key``에
+    없으면) join을 시도하지 않고 "skipped"로 반환한다.
+    """
+    join = composition.join
+    missing = [alias for alias in (join.left, join.right) if alias not in silver_by_key]
+    if missing:
+        return _CompositionPipelineResult(
+            outcome=CompositionOutcome(
+                name=composition.name,
+                status="skipped",
+                error=(
+                    f"source(s) {missing} did not complete Silver successfully; "
+                    "composition was not attempted"
+                ),
+            )
+        )
+
+    try:
+        package, stats = build_composed_gold_package(
+            left_silver=silver_by_key[join.left],
+            right_silver=silver_by_key[join.right],
+            join=join,
+            dataset_name=composition.name,
+            exports=context.spec.exports,
+            metadata={"title": context.spec.title, "description": context.spec.description},
+        )
+    except CompositionError as exc:
+        return _CompositionPipelineResult(
+            outcome=CompositionOutcome(name=composition.name, status="failed", error=str(exc))
+        )
+
+    if stats.duplicate_key_warning:
+        # on_duplicate_key="fail"이었다면 build_composed_gold_package가 이미 CompositionError를
+        # 던졌으므로 여기 도달했다는 건 severity="warn"(기본)이라는 뜻이다 — 로그만 남기고 진행.
+        logger.warning(
+            "composition %r: duplicate join keys on both sides may have multiplied rows "
+            "(left=%s distinct_keys=%d/%d rows, right=%s distinct_keys=%d/%d rows, "
+            "output_rows=%d) (#506)",
+            composition.name,
+            join.left,
+            stats.left_distinct_key_count,
+            stats.left_row_count,
+            join.right,
+            stats.right_distinct_key_count,
+            stats.right_row_count,
+            stats.output_row_count,
+        )
+
+    outputs: list[str] = []
+    gold_paths = persist_gold_package(
+        package, output_root=context.output_root, run_id=context.run_id
+    )
+    _record_output_paths(
+        outputs,
+        gold_paths.table_path,
+        gold_paths.package_path,
+        *gold_paths.splits_paths.values(),
+    )
+    export_paths = export_gold_package(package, output_dir=gold_paths.gold_dir)
+    _record_output_paths(outputs, *export_paths)
+
+    combined_schema = build_schema(package.table)
+    card = build_dataset_card(
+        title=context.spec.title,
+        description=context.spec.description,
+        sources=(join.left, join.right),
+        fields=((col.name, col.dtype, col.nullable) for col in combined_schema.columns),
+        sample_rows=package.table.head(DEFAULT_PREVIEW_LIMIT).to_dicts(),
+        license=_dataset_card_license(context.spec),
+        version=_dataset_card_version(context.spec),
+    )
+    card_path = gold_paths.gold_dir / "README.md"
+    _ = card_path.write_text(render_dataset_card(card), encoding="utf-8")
+    _record_output_paths(outputs, card_path)
+
+    export_artifact = ArtifactDataset(
+        records=tuple(package.table.iter_rows(named=True)),
+        metadata={"title": context.spec.title, "description": context.spec.description},
+        statistics={"row_count": package.table.height},
+        provenance=(join.left, join.right),
+    )
+    buildspec_export_paths = _execute_exports(
+        gold_paths.gold_dir, export_artifact, context.spec.exports
+    )
+    _record_output_paths(outputs, *buildspec_export_paths)
+
+    schema_summary = build_schema_summary(
+        (col.name, col.dtype, col.nullable) for col in combined_schema.columns
+    )
+    provenance = CompositionProvenance(
+        name=composition.name,
+        left=join.left,
+        right=join.right,
+        join_type=join.type,
+        left_key=join.left_key,
+        right_key=join.right_key,
+        left_row_count=stats.left_row_count,
+        left_distinct_key_count=stats.left_distinct_key_count,
+        right_row_count=stats.right_row_count,
+        right_distinct_key_count=stats.right_distinct_key_count,
+        output_row_count=stats.output_row_count,
+        duplicate_key_warning=stats.duplicate_key_warning,
+    )
+    return _CompositionPipelineResult(
+        outcome=CompositionOutcome(name=composition.name, status="ok"),
+        output_paths=tuple(outputs),
+        row_count=stats.output_row_count,
+        schema_summary=schema_summary,
+        provenance=provenance,
+    )
 
 
 def run_build(
@@ -474,8 +659,21 @@ def run_build(
         spec, output_root=context.output_root, run_id=context.run_id
     )
 
+    # composition(#506)이 참조하는 alias의 Silver만 스레드 결과에 담아 살려둔다 —
+    # composition을 쓰지 않는 빌드는 기존과 동일하게 아무 것도 추가로 보존하지 않는다.
+    composition_aliases: frozenset[str] = (
+        frozenset({spec.composition.join.left, spec.composition.join.right})
+        if spec.composition is not None
+        else frozenset()
+    )
+
     def _worker(source: SourceRef) -> _SourcePipelineResult:
-        return _run_source_pipeline(source, client=client, context=context)
+        return _run_source_pipeline(
+            source,
+            client=client,
+            context=context,
+            capture_silver=_output_source_key(source) in composition_aliases,
+        )
 
     # 소스별 fetch/stage는 대부분 네트워크 I/O 대기이므로 스레드 풀로 동시에 실행해
     # 총 소요 시간을 줄인다 (#247). executor.map은 완료 순서가 아니라 spec.sources
@@ -494,6 +692,7 @@ def run_build(
     provenance: list[SourceProvenance] = []
     quality_results: dict[str, tuple[QualityCheckResult, ...]] = {}
     schema_drift: dict[str, tuple[SchemaDriftFinding, ...]] = {}
+    silver_by_key: dict[str, SilverDataset] = {}
     for result in results:
         outputs.extend(result.output_paths)
         if result.row_count is not None:
@@ -510,12 +709,32 @@ def run_build(
             quality_results[result.outcome.source_key] = result.quality_results
         if result.schema_drift:
             schema_drift[result.outcome.source_key] = result.schema_drift
+        if result.silver is not None:
+            silver_by_key[result.outcome.source_key] = result.silver
+
+    # composition(#506)은 모든 source가 끝난 뒤, 참조된 두 source의 검증된 Silver를
+    # 가지고 단일 스레드에서 실행한다 — join 자체는 병렬화 대상이 아니다.
+    composition_outcome: CompositionOutcome | None = None
+    composition_provenance: CompositionProvenance | None = None
+    if spec.composition is not None:
+        composition_result = _run_composition(
+            spec.composition, silver_by_key=silver_by_key, context=context
+        )
+        composition_outcome = composition_result.outcome
+        composition_provenance = composition_result.provenance
+        outputs.extend(composition_result.output_paths)
+        if composition_result.row_count is not None:
+            row_counts[composition_result.outcome.name] = composition_result.row_count
+        if composition_result.schema_summary is not None:
+            schema_summaries[composition_result.outcome.name] = composition_result.schema_summary
 
     errors = tuple(
         f"{outcome.source_key}: {outcome.error}"
         for outcome in outcomes
         if outcome.status == "failed" and outcome.error is not None
     )
+    if composition_outcome is not None and composition_outcome.status != "ok":
+        errors = (*errors, f"{composition_outcome.name}: {composition_outcome.error}")
     status = "ok" if not errors else "failed"
 
     manifest = BuildManifest(
@@ -534,6 +753,7 @@ def run_build(
         owner_id=owner_id,
         quality_results=quality_results,
         schema_drift=schema_drift,
+        composition=composition_provenance,
     )
     manifest_path = context.output_root / context.run_id / "manifest.json"
     manifest_writer(manifest, manifest_path)
@@ -544,4 +764,5 @@ def run_build(
         outcomes=outcomes,
         manifest_path=manifest_path,
         spec_digest=spec_digest,
+        composition_outcome=composition_outcome,
     )
