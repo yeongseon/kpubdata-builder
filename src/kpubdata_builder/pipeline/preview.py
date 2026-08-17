@@ -41,10 +41,12 @@ from ..quality import QualityCheckResult, evaluate_quality
 from ..spec import BuildSpec, JsonValue, SourceRef
 from ..spec.models import QualityPolicy
 from ..spec.validator import validate_spec
-from ..stages.bronze.build import SourceClient, build_bronze_artifact
+from ..stages.bronze.build import SourceClient
+from ..stages.bronze.resolve import build_bronze_artifact_for_source, source_identity
 from ..stages.silver.build import build_silver_dataset
 from ..stages.silver.preview import select_preview_rows
 from ..tabular import DEFAULT_PREVIEW_LIMIT, PreviewSlice, SchemaInfo, TableStatistics
+from ..uploads import UploadRepository
 
 SampleMode = Literal["first", "random"]
 _SAMPLE_MODES: tuple[SampleMode, ...] = ("first", "random")
@@ -156,8 +158,9 @@ class PreviewResult:
 
 
 def _fetch_key(source: SourceRef) -> str:
-    """kpubdata Client.dataset()에 전달할 정규 fetch 키 (provider.dataset)."""
-    return f"{source.provider}.{source.dataset}"
+    """Bronze fetch identity 키를 반환한다 (kind별 canonical identity, #498)."""
+    provider, dataset = source_identity(source)
+    return f"{provider}.{dataset}"
 
 
 def _output_key(source: SourceRef) -> str:
@@ -251,17 +254,26 @@ def _preview_source(
     quality_policy: QualityPolicy | None,
     sample_mode: SampleMode,
     seed: int,
+    upload_repository: UploadRepository | None = None,
+    owner_id: str | None = None,
 ) -> SourcePreview:
-    """한 소스를 fetch → Silver(메모리)로 만들어 스키마/샘플/diff/quality 결과를 추출한다."""
-    # fetch_key는 항상 provider.dataset (kpubdata.Client 계약). 표면 키는 alias 우선.
-    fetch_key = _fetch_key(source)
+    """한 소스를 fetch → Silver(메모리)로 만들어 스키마/샘플/diff/quality 결과를 추출한다.
+
+    ``upload_repository``/``owner_id`` 는 ``kind="file"`` source에서만 쓰인다(#498).
+    """
     out_key = _output_key(source)
     try:
         required_columns = source.schema.required if source.schema else ()
         column_dtypes = source.schema.dtypes if source.schema else None
         casts = source.schema.casts if source.schema else None
-        bronze = build_bronze_artifact(
-            client, source_key=fetch_key, fetch_params=dict(source.params)
+        # kind(public_api/file/url)에 맞는 resolver로 원시 레코드를 가져온다
+        # (#498) — Build와 동일한 resolver를 공유해 preview와 build가 같은
+        # source에 대해 항상 같은 데이터를 본다.
+        bronze = build_bronze_artifact_for_source(
+            source,
+            client=client,
+            upload_repository=upload_repository,
+            owner_id=owner_id,
         )
         silver = build_silver_dataset(
             bronze,
@@ -358,6 +370,8 @@ def preview_build(
     limit: int = DEFAULT_PREVIEW_LIMIT,
     sample_mode: SampleMode = "first",
     seed: int = DEFAULT_PREVIEW_SEED,
+    upload_repository: UploadRepository | None = None,
+    owner_id: str | None = None,
 ) -> PreviewResult:
     """각 소스의 스키마와 샘플 행, Source↔Silver diff를 산출한다 (파일 미기록).
 
@@ -368,6 +382,9 @@ def preview_build(
         sample_mode: "first"(상위 N행, 기본값) 또는 "random"(결정적 무작위 N행).
         seed: sample_mode="random"일 때 쓰는 시드. 동일 입력+동일 seed는 항상
             동일 sample을 반환한다. sample_mode="first"에서는 쓰이지 않는다.
+        upload_repository: ``kind="file"`` source의 업로드 content를 조회할
+            저장소 (#498). None이면 file source가 있는 preview는 실패한다.
+        owner_id: 업로드 소유권 확인에 쓰이는 stable principal id (#498).
 
     반환값:
         PreviewResult: 소스별 스키마/샘플/diff.
@@ -394,6 +411,8 @@ def preview_build(
             quality_policy=spec.quality,
             sample_mode=sample_mode,
             seed=seed,
+            upload_repository=upload_repository,
+            owner_id=owner_id,
         )
         for source in spec.sources
     )

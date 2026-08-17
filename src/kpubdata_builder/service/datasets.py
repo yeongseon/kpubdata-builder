@@ -28,6 +28,7 @@ import yaml
 from ..spec import BuildSpec, JsonValue, parse_spec
 from ..spec.serializer import BUILDSPEC_SNAPSHOT_FILENAME
 from ..stages._path_safety import ensure_within
+from ..stages.bronze.resolve import source_identity
 from ..store import BuildEntry, BuildIndex
 from .auth import Principal
 from .ownership import ownership_allows
@@ -360,10 +361,14 @@ def build_dataset_summary(output_root: Path, record: RunRecord) -> dict[str, Jso
         return None
     manifest = read_manifest(output_root, record.run_id) or {}
 
-    sources: list[JsonValue] = [
-        {"provider": source.provider, "dataset": source.dataset, "alias": source.alias}
-        for source in spec.sources
-    ]
+    # file/url kind(#498)는 provider/dataset이 항상 빈 문자열이므로
+    # source_identity()로 kind별 canonical identity("file"/upload_id,
+    # "url"/query 없는 endpoint)를 채운다 — public_api는 기존과 동일하게
+    # source.provider/source.dataset 그대로다.
+    sources: list[JsonValue] = []
+    for source in spec.sources:
+        provider, dataset = source_identity(source)
+        sources.append({"provider": provider, "dataset": dataset, "alias": source.alias})
 
     row_counts: dict[str, JsonValue] = {}
     total_row_count = 0

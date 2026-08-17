@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TypeAlias
@@ -41,23 +42,69 @@ class SchemaContract:
     casts: dict[str, str] = field(default_factory=dict)
 
 
+#: 지원하는 SourceRef.kind 값 (#498). 알 수 없는 kind는 loader가 즉시 거부한다.
+SOURCE_KINDS: tuple[str, ...] = ("public_api", "file", "url")
+
+#: url kind에서 허용하는 HTTP method (#498 P0 — GET, Auth=None만 지원).
+SOURCE_URL_METHODS: tuple[str, ...] = ("GET",)
+
+#: file kind에서 허용하는 업로드 포맷 (#498 P0). Excel/ZIP은 범위 밖이다.
+SOURCE_FILE_FORMATS: tuple[str, ...] = ("csv", "json", "jsonl", "parquet")
+
+#: url kind에서 허용하는 응답 포맷 (#498 P0). 지정하지 않으면 Content-Type로 추론한다.
+SOURCE_URL_FORMATS: tuple[str, ...] = ("json", "jsonl", "csv")
+
+#: 서버가 발급하는 upload_id 형태 (#498). ``POST /uploads`` 만 이 형태의 id를
+#: 만든다 — 사용자가 임의 문자열을 upload_id로 넣어 filesystem/조회를 조작할 수
+#: 없도록 loader/validator가 이 패턴으로 형태를 고정한다.
+UPLOAD_ID_PATTERN: re.Pattern[str] = re.compile(r"^upl_[a-f0-9]{32}$")
+
+
 @dataclass(frozen=True)
 class SourceRef:
-    """kpubdata의 정규화된 소스 쿼리를 가리키는 참조.
+    """Canonical 소스 참조 — Public API / File / URL 세 kind를 표현한다 (#498).
+
+    ``kind`` 로 세 가지 소스를 구분한다. 세 kind는 서로 다른 field 조합을 쓰지만
+    ``alias``/``schema`` 는 공통이다(공통 alias/schema 정책, #498).
+
+    - ``"public_api"``(기본값, 하위 호환): 기존 kpubdata provider/dataset 참조.
+      ``provider``/``dataset``/``params`` 를 쓴다. kind를 생략한 기존 BuildSpec은
+      항상 이 kind로 해석된다 — 기존 Public API BuildSpec 동작은 그대로 유지된다.
+    - ``"file"``: 사전에 ``POST /uploads`` 로 업로드된 파일을 가리킨다. 로컬
+      파일시스템 경로 대신 서버가 발급한 불투명한 ``upload_id`` 만 참조한다 —
+      filename/path를 직접 참조하지 않는다(경로 주입 방지).
+    - ``"url"``: 안전한 GET(Auth=None) HTTP(S) 소스를 가리킨다. arbitrary header나
+      POST/PUT/PATCH는 계약에 없다 — 필드 자체가 없어 표현할 수 없다.
 
     속성:
-        provider: provider 식별자.
-        dataset: dataset 식별자.
-        params: list 호출에 전달할 원시 파라미터.
-        alias: 조립 단계에서 사용할 사용자 정의 소스 이름.
-        schema: 소스 스키마 계약. None 이면 Silver 검증을 생략한다 (하위 호환, #437).
+        provider: provider 식별자. ``kind="public_api"`` 에서만 사용.
+        dataset: dataset 식별자. ``kind="public_api"`` 에서만 사용.
+        params: list 호출에 전달할 원시 파라미터. ``kind="public_api"`` 에서만 사용.
+        alias: 조립 단계에서 사용할 사용자 정의 소스 이름 (모든 kind 공통).
+        schema: 소스 스키마 계약. None 이면 Silver 검증을 생략한다 (모든 kind 공통,
+            하위 호환, #437).
+        kind: ``"public_api"``(기본) | ``"file"`` | ``"url"``.
+        upload_id: 업로드된 파일의 서버 발급 식별자. ``kind="file"`` 에서만 사용.
+        format: 파일/응답 파싱 포맷. ``kind="file"`` 은 필수(csv/json/jsonl/parquet),
+            ``kind="url"`` 은 선택(json/jsonl/csv, 생략 시 Content-Type로 추론).
+        encoding: 텍스트 디코딩에 쓸 인코딩. ``kind="file"`` 에서만 의미가 있다
+            (parquet 제외 — 바이너리 포맷이라 인코딩이 없다). 기본값 ``"utf-8"``.
+        endpoint: 안전하게 fetch할 절대 URL. ``kind="url"`` 에서만 사용.
+        method: HTTP method. ``kind="url"`` 에서만 사용하며 P0는 ``"GET"`` 만
+            허용한다.
     """
 
-    provider: str
-    dataset: str
+    provider: str = ""
+    dataset: str = ""
     params: dict[str, JsonValue] = field(default_factory=dict)
     alias: str = ""
     schema: SchemaContract | None = None
+    kind: str = "public_api"
+    upload_id: str = ""
+    format: str = ""
+    encoding: str = "utf-8"
+    endpoint: str = ""
+    method: str = "GET"
 
 
 @dataclass(frozen=True)
@@ -302,6 +349,11 @@ __all__ = [
     "JoinSpec",
     "JsonPrimitive",
     "JsonValue",
+    "SOURCE_FILE_FORMATS",
+    "SOURCE_KINDS",
+    "SOURCE_URL_FORMATS",
+    "SOURCE_URL_METHODS",
     "SourceRef",
     "SplitSpec",
+    "UPLOAD_ID_PATTERN",
 ]

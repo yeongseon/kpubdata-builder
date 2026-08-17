@@ -62,6 +62,9 @@ _DISPATCH_ROUTES: dict[tuple[str, str], str] = {
     ("/builds/{run_id}/quality", "GET"): "getBuildQuality",
     ("/monitoring/summary", "GET"): "getMonitoringSummary",
     ("/monitoring/builds", "GET"): "getMonitoringBuilds",
+    ("/uploads", "POST"): "createUpload",
+    ("/uploads/{upload_id}", "GET"): "getUpload",
+    ("/uploads/{upload_id}", "DELETE"): "deleteUpload",
 }
 
 # (path, method) 형태의 계약 필수 오퍼레이션. BuilderService.dispatch가 실제로
@@ -93,6 +96,9 @@ _REQUIRED_OPERATIONS = [
     ("/builds/{run_id}/quality", "get"),
     ("/monitoring/summary", "get"),
     ("/monitoring/builds", "get"),
+    ("/uploads", "post"),
+    ("/uploads/{upload_id}", "get"),
+    ("/uploads/{upload_id}", "delete"),
 ]
 
 
@@ -380,6 +386,9 @@ _IMPLEMENTED_OPERATIONS = {
     "getBuildQuality",
     "getMonitoringSummary",
     "getMonitoringBuilds",
+    "createUpload",
+    "getUpload",
+    "deleteUpload",
 }
 
 
@@ -599,6 +608,9 @@ _OPERATION_STATUS_CODES: dict[str, set[int]] = {
     "getBuildQuality": {200, 400, 403, 404},
     "getMonitoringSummary": {200},
     "getMonitoringBuilds": {200, 400},
+    "createUpload": {200, 400, 403, 413},
+    "getUpload": {200, 403, 404},
+    "deleteUpload": {200, 403, 404},
 }
 
 
@@ -1182,3 +1194,52 @@ class TestResponseConformance:
         )
         assert resp.status_code == 400
         _assert_conforms(resp, "/monitoring/builds", "GET")
+
+    def test_create_upload_200(self, tmp_path: Path) -> None:
+        resp = dispatch(
+            _conform_service(tmp_path),
+            "POST",
+            "/uploads",
+            None,
+            query="format=csv&filename=trades.csv",
+            raw_body=b"a,b\n1,2\n",
+        )
+        assert resp.status_code == 200
+        _assert_conforms(resp, "/uploads", "POST")
+
+    def test_create_upload_400_missing_format(self, tmp_path: Path) -> None:
+        resp = dispatch(
+            _conform_service(tmp_path), "POST", "/uploads", None, raw_body=b"a,b\n1,2\n"
+        )
+        assert resp.status_code == 400
+        _assert_conforms(resp, "/uploads", "POST")
+
+    def test_get_upload_200(self, tmp_path: Path) -> None:
+        service = _conform_service(tmp_path)
+        created = dispatch(
+            service, "POST", "/uploads", None, query="format=csv", raw_body=b"a,b\n1,2\n"
+        )
+        upload_id = cast(str, created.body["upload_id"])
+        resp = dispatch(service, "GET", f"/uploads/{upload_id}", None)
+        assert resp.status_code == 200
+        _assert_conforms(resp, "/uploads/{upload_id}", "GET")
+
+    def test_get_upload_404_missing(self, tmp_path: Path) -> None:
+        resp = dispatch(_conform_service(tmp_path), "GET", f"/uploads/upl_{'0' * 32}", None)
+        assert resp.status_code == 404
+        _assert_conforms(resp, "/uploads/{upload_id}", "GET")
+
+    def test_delete_upload_200(self, tmp_path: Path) -> None:
+        service = _conform_service(tmp_path)
+        created = dispatch(
+            service, "POST", "/uploads", None, query="format=csv", raw_body=b"a,b\n1,2\n"
+        )
+        upload_id = cast(str, created.body["upload_id"])
+        resp = dispatch(service, "DELETE", f"/uploads/{upload_id}", None)
+        assert resp.status_code == 200
+        _assert_conforms(resp, "/uploads/{upload_id}", "DELETE")
+
+    def test_delete_upload_404_missing(self, tmp_path: Path) -> None:
+        resp = dispatch(_conform_service(tmp_path), "DELETE", f"/uploads/upl_{'0' * 32}", None)
+        assert resp.status_code == 404
+        _assert_conforms(resp, "/uploads/{upload_id}", "DELETE")

@@ -63,6 +63,7 @@ nav:
       - BuildSpec 어시스턴트 그라운딩(제안): adrs/0011-buildspec-assistant-grounding.md
       - Provider Credential 경계: adrs/0012-provider-credential-boundary.md
       - API 계약 릴리스 정책: adrs/0013-api-contract-release-policy.md
+      - Public API·File·URL Source 경계: adrs/0014-source-ingestion-file-url-boundary.md
 
 markdown_extensions:
   - admonition

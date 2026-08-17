@@ -343,6 +343,143 @@ class TestBuild:
         assert resp.status_code == 404
 
 
+def _file_source_spec_yaml(upload_id: str) -> str:
+    return (
+        f"""
+dataset_id: dataset.uploaded
+title: Uploaded Trades
+description: file source build (#498)
+sources:
+  - kind: file
+    upload_id: {upload_id}
+    format: csv
+    encoding: utf-8
+exports:
+  - kind: jsonl
+    output_path: out/data.jsonl
+""".strip()
+        + "\n"
+    )
+
+
+class TestUploads:
+    """kind="file" source(#498) — POST /uploads가 owner_id로 격리한 업로드를
+    BuildSpec이 참조해 build/preview까지 이어지는 end-to-end 흐름을 검증한다."""
+
+    def test_create_upload_then_build_end_to_end(self, tmp_path: Path) -> None:
+        service = _service(tmp_path)
+        principal = Principal(kind="oidc", identifier="u1", owner_id="oidc:owner-1")
+
+        created = service.create_upload(
+            b"id,amount\n1,1000\n2,2500\n",
+            format="csv",
+            encoding="utf-8",
+            original_filename="trades.csv",
+            principal=principal,
+        )
+        assert created.status_code == 200
+        upload_id = created.body["upload_id"]
+        assert isinstance(upload_id, str)
+
+        result = service.build(
+            _file_source_spec_yaml(upload_id),
+            run_id="upload-run",
+            owner_id=principal.owner_id,
+            principal=principal,
+        )
+
+        assert result.status_code == 200
+        assert result.body["status"] == "ok"
+
+    def test_build_rejects_upload_owned_by_another_principal(self, tmp_path: Path) -> None:
+        service = _service(tmp_path)
+        owner = Principal(kind="oidc", identifier="u1", owner_id="oidc:owner-1")
+        other = Principal(kind="oidc", identifier="u2", owner_id="oidc:owner-2")
+
+        created = service.create_upload(
+            b"id\n1\n", format="csv", encoding="utf-8", original_filename=None, principal=owner
+        )
+        upload_id = created.body["upload_id"]
+        assert isinstance(upload_id, str)
+
+        result = service.build(
+            _file_source_spec_yaml(upload_id),
+            run_id="run-other-owner",
+            owner_id=other.owner_id,
+            principal=other,
+        )
+
+        assert result.status_code == 502
+        outcomes = cast(list[dict[str, JsonValue]], result.body["outcomes"])
+        assert outcomes[0]["status"] == "failed"
+        assert "not found" in cast(str, outcomes[0]["error"])
+
+    def test_get_and_delete_upload_round_trip(self, tmp_path: Path) -> None:
+        service = _service(tmp_path)
+        principal = Principal(kind="oidc", identifier="u1", owner_id="oidc:owner-1")
+        created = service.create_upload(
+            b"id\n1\n", format="csv", encoding="utf-8", original_filename=None, principal=principal
+        )
+        upload_id = created.body["upload_id"]
+        assert isinstance(upload_id, str)
+
+        fetched = service.get_upload(upload_id, principal=principal)
+        assert fetched.status_code == 200
+        assert fetched.body["upload_id"] == upload_id
+        assert "content" not in fetched.body
+
+        deleted = service.delete_upload(upload_id, principal=principal)
+        assert deleted.status_code == 200
+        assert deleted.body == {"upload_id": upload_id, "deleted": True}
+
+        missing = service.get_upload(upload_id, principal=principal)
+        assert missing.status_code == 404
+
+    def test_get_upload_hides_existence_from_other_principal(self, tmp_path: Path) -> None:
+        service = _service(tmp_path)
+        owner = Principal(kind="oidc", identifier="u1", owner_id="oidc:owner-1")
+        other = Principal(kind="oidc", identifier="u2", owner_id="oidc:owner-2")
+        created = service.create_upload(
+            b"id\n1\n", format="csv", encoding="utf-8", original_filename=None, principal=owner
+        )
+        upload_id = created.body["upload_id"]
+        assert isinstance(upload_id, str)
+
+        resp = service.get_upload(upload_id, principal=other)
+
+        assert resp.status_code == 404
+
+    def test_create_upload_rejects_corrupt_content(self, tmp_path: Path) -> None:
+        service = _service(tmp_path)
+        principal = Principal(kind="oidc", identifier="u1", owner_id="oidc:owner-1")
+
+        resp = service.create_upload(
+            b"not json",
+            format="json",
+            encoding="utf-8",
+            original_filename=None,
+            principal=principal,
+        )
+
+        assert resp.status_code == 400
+
+    def test_create_upload_rejects_unsupported_format(self, tmp_path: Path) -> None:
+        service = _service(tmp_path)
+        principal = Principal(kind="oidc", identifier="u1", owner_id="oidc:owner-1")
+
+        resp = service.create_upload(
+            b"data", format="xlsx", encoding="utf-8", original_filename=None, principal=principal
+        )
+
+        assert resp.status_code == 400
+
+    def test_preview_without_file_source_never_touches_upload_store(self, tmp_path: Path) -> None:
+        """file source가 없는 preview는 uploads.sqlite3를 만들지 않는다(지연 생성)."""
+        _service(tmp_path).preview(VALID_SPEC_YAML)
+
+        assert not (tmp_path / ".service" / "uploads.sqlite3").exists()
+
+
 class TestArtifacts:
     def test_lists_artifacts_after_build(self, tmp_path: Path) -> None:
         service = _service(tmp_path)
@@ -1137,6 +1274,91 @@ class TestHttpAdapter:
         # 버전·서비스 메타 정보가 누출되지 않아야 한다.
         assert "api_version" not in body
         assert "service" not in body
+
+
+class TestHttpUploads:
+    """POST /uploads(#498)의 실제 소켓 왕복 — binary body 전송·query 파싱·상한."""
+
+    def test_create_get_delete_upload_round_trip_over_http(
+        self, http_server: tuple[str, HTTPServer, threading.Thread]
+    ) -> None:
+        base_url, _, _ = http_server
+        req = urllib.request.Request(
+            f"{base_url}/uploads?format=csv&filename=trades.csv",
+            data=b"id,amount\n1,1000\n",
+            headers={"Content-Type": "application/octet-stream"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=2.0) as response:
+            assert response.status == 200
+            created = cast(dict[str, object], json.loads(response.read()))
+        upload_id = created["upload_id"]
+        assert isinstance(upload_id, str) and upload_id.startswith("upl_")
+        assert created["original_filename"] == "trades.csv"
+
+        with urllib.request.urlopen(f"{base_url}/uploads/{upload_id}", timeout=2.0) as response:
+            assert response.status == 200
+            fetched = cast(dict[str, object], json.loads(response.read()))
+        assert fetched["upload_id"] == upload_id
+        assert "content" not in fetched
+
+        delete_req = urllib.request.Request(f"{base_url}/uploads/{upload_id}", method="DELETE")
+        with urllib.request.urlopen(delete_req, timeout=2.0) as response:
+            assert response.status == 200
+            deleted = cast(dict[str, object], json.loads(response.read()))
+        assert deleted["upload_id"] == upload_id
+        assert deleted["deleted"] is True
+
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            urllib.request.urlopen(f"{base_url}/uploads/{upload_id}", timeout=2.0)
+        assert exc_info.value.code == 404
+
+    def test_create_upload_over_configured_limit_returns_413(
+        self,
+        http_server: tuple[str, HTTPServer, threading.Thread],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("KPUBDATA_BUILDER_MAX_UPLOAD_BYTES", "10")
+        base_url, _, _ = http_server
+        req = urllib.request.Request(
+            f"{base_url}/uploads?format=csv",
+            data=b"a,b\n" * 10,
+            headers={"Content-Type": "application/octet-stream"},
+            method="POST",
+        )
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            urllib.request.urlopen(req, timeout=2.0)
+        assert exc_info.value.code == 413
+
+    def test_create_upload_missing_format_returns_400(
+        self, http_server: tuple[str, HTTPServer, threading.Thread]
+    ) -> None:
+        base_url, _, _ = http_server
+        req = urllib.request.Request(
+            f"{base_url}/uploads",
+            data=b"id,amount\n1,1000\n",
+            headers={"Content-Type": "application/octet-stream"},
+            method="POST",
+        )
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            urllib.request.urlopen(req, timeout=2.0)
+        assert exc_info.value.code == 400
+
+    def test_create_upload_body_is_not_parsed_as_json(
+        self, http_server: tuple[str, HTTPServer, threading.Thread]
+    ) -> None:
+        # POST /uploads의 body는 CSV/바이너리도 그대로 허용된다 — 다른 endpoint와
+        # 달리 JSON 파싱을 시도하지 않는다(#498). 이 body는 유효한 JSON이 아니지만
+        # (raw text) 유효한 CSV이므로 format=csv로 성공해야 한다.
+        base_url, _, _ = http_server
+        req = urllib.request.Request(
+            f"{base_url}/uploads?format=csv",
+            data=b"a,b\n1,2\n",
+            headers={"Content-Type": "application/octet-stream"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=2.0) as response:
+            assert response.status == 200
 
 
 class TestHttpRobustness:

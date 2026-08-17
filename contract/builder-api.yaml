@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: KPubData Builder Service API
-  version: "1.12.0"
+  version: "1.13.0"
   description: >-
     Builder 중심 서비스 계약. BuildSpec 검증, preview, build 실행, artifact 조회,
     계약 버전 조회를 제공한다. CLI와 HTTP service mode(#36)가 동일한 도메인 계약을
@@ -39,6 +39,20 @@ info:
     계산되는 deterministic aggregate이며 latency threshold는 사용하지 않는다.
     Provider 상태는 요청마다 네트워크 프로브를 유발하므로(#492) 이번
     버전에서는 응답에도, aggregate status 판정에도 포함하지 않는다.
+    v1.12.0은 BuildSpec.composition(JoinSpec)과 POST /build 응답의 composition
+    키, manifest.composition(CompositionProvenance)을 추가한다(#506, additive
+    — 기존 필드/엔드포인트는 변경되지 않는다). v1.13.0은 Public API·File·URL
+    source를 동일한 canonical contract와
+    Bronze→Silver→Gold pipeline으로 처리한다(#498, additive). BuildSpec
+    `sources[]`에 `kind`(`public_api`/`file`/`url`)를 추가하며, `kind`를 생략한
+    기존 source는 항상 `public_api`로 해석되어 기존 동작이 그대로 유지된다.
+    `kind="file"` source를 위해 `POST /uploads`, `GET /uploads/{upload_id}`,
+    `DELETE /uploads/{upload_id}`를 추가한다 — 업로드는 principal의 owner_id로
+    격리되고 서버가 즉시 파싱 가능성을 검증한다. `kind="url"` source는 P0
+    범위(GET, Auth=None, https만 허용)로 SSRF를 방어하는 safe fetch(DNS
+    재검증, redirect마다 재검증, 응답 크기 상한)를 거친다. 두 kind 모두 기존
+    Bronze artifact/provenance 계약을 그대로 재사용하며, provenance/manifest에
+    로컬 파일 경로나 쿼리스트링 secret을 남기지 않는다.
 servers:
   - url: http://localhost:8000
     description: 로컬 builder 개발 서버
@@ -325,6 +339,140 @@ paths:
           description: 런타임 Provider 카탈로그 조회 실패
         "503":
           description: encrypted credential store가 구성되지 않음
+
+  /uploads:
+    post:
+      operationId: createUpload
+      summary: kind="file" source(#498)용 파일 업로드
+      description: >-
+        요청 body는 JSON이 아니라 업로드할 파일의 raw bytes다(multipart 대신 동등한
+        binary upload, #498). `format`/`encoding`/`filename`은 query parameter로
+        전달한다. 서버가 즉시 파싱 가능성을 검증해(손상·빈 파일은 400) fail-fast하고,
+        성공하면 서버가 발급한 불투명한 `upload_id`를 반환한다 — 이 값을 BuildSpec의
+        `sources[].upload_id`로 참조한다(형식은 `sources[].format`/`encoding`과
+        정확히 일치해야 한다). content는 요청 principal의 owner_id로 격리되며,
+        원문 content를 다시 내려주는 API는 없다(메타데이터만 조회 가능).
+      parameters:
+        - name: format
+          in: query
+          required: true
+          description: 업로드 content의 파싱 포맷
+          schema:
+            type: string
+            enum: [csv, json, jsonl, parquet]
+        - name: encoding
+          in: query
+          required: false
+          description: 텍스트 포맷(csv/json/jsonl) 디코딩 인코딩. parquet은 무시된다.
+          schema:
+            type: string
+            default: utf-8
+        - name: filename
+          in: query
+          required: false
+          description: >-
+            표시 전용 원본 파일명. 파일시스템 경로로 쓰이지 않으며 응답의
+            original_filename에 basename만 반영된다.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: 업로드 저장 완료
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadMetadata"
+              examples:
+                Uploaded:
+                  summary: csv 업로드 성공
+                  value:
+                    upload_id: upl_0123456789abcdef0123456789abcdef
+                    format: csv
+                    encoding: utf-8
+                    size_bytes: 1024
+                    original_filename: trades.csv
+                    created_at: "2026-08-16T09:00:00+00:00"
+        "400":
+          description: 빈 body, 손상된 content, 지원하지 않는 format, 또는 크기 초과
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: stable principal을 확인할 수 없음
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "413":
+          description: 업로드 크기가 서버 상한을 초과함
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /uploads/{upload_id}:
+    get:
+      operationId: getUpload
+      summary: 업로드 메타데이터 조회 (#498, content는 응답에 포함하지 않음)
+      parameters:
+        - $ref: "#/components/parameters/UploadId"
+      responses:
+        "200":
+          description: 안전한(secret-free) 업로드 메타데이터
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadMetadata"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: stable principal을 확인할 수 없음
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: 존재하지 않거나 principal 소유가 아닌 upload_id (구분해 노출하지 않음)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      operationId: deleteUpload
+      summary: 현재 principal 소유 업로드 삭제 (#498)
+      parameters:
+        - $ref: "#/components/parameters/UploadId"
+      responses:
+        "200":
+          description: 삭제 완료
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadDeleteResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: stable principal을 확인할 수 없음
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: 존재하지 않거나 principal 소유가 아닌 upload_id (구분해 노출하지 않음)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /validate:
     post:
@@ -1522,6 +1670,16 @@ components:
         type: string
         pattern: "^[a-z0-9][a-z0-9_-]{0,63}$"
 
+    UploadId:
+      name: upload_id
+      in: path
+      required: true
+      description: >-
+        POST /uploads가 발급한 불투명한 식별자(#498). 사용자가 지정한 값이 아니다.
+      schema:
+        type: string
+        pattern: "^upl_[a-f0-9]{32}$"
+
   schemas:
     Error:
       type: object
@@ -1671,17 +1829,29 @@ components:
     SourceRef:
       type: object
       description: >-
-        kpubdata provider/dataset 참조. 제거된 normalization_mode 필드는 허용하지
-        않으며 정규화와 검증은 schema 계약으로 선언한다.
+        Canonical source 참조(#498). `kind`로 public_api(기본, 하위 호환)/file/url을
+        구분한다. `kind`를 생략한 source는 항상 `public_api`로 해석되며
+        provider/dataset이 필수다. `file`은 upload_id+format(+encoding)이,
+        `url`은 endpoint(+method+format)가 필수다 — kind별 조건부 필수/금지
+        조합은 OpenAPI object schema로 표현하지 않고(이 계약의 기존 패턴과 동일하게
+        `additionalProperties`로 열어두고) `spec/loader.py`·`validator.py`가
+        엄격히 강제한다. url source는 P0 범위(GET, Auth=None)의 SSRF-safe fetch만
+        허용하며 https가 아닌 scheme·userinfo가 포함된 endpoint는 거부된다.
+        제거된 normalization_mode 필드는 허용하지 않는다.
       additionalProperties: true
       not:
         required: [normalization_mode]
-      required: [provider, dataset]
       properties:
+        kind:
+          type: string
+          enum: [public_api, file, url]
+          default: public_api
         provider:
           type: string
+          description: kind="public_api"에서 필수.
         dataset:
           type: string
+          description: kind="public_api"에서 필수.
         params:
           type: object
           additionalProperties:
@@ -1693,6 +1863,30 @@ components:
           oneOf:
             - $ref: "#/components/schemas/SchemaContract"
             - type: "null"
+        upload_id:
+          type: string
+          pattern: "^upl_[a-f0-9]{32}$"
+          description: kind="file"에서 필수. POST /uploads가 발급한 식별자.
+        format:
+          type: string
+          enum: [csv, json, jsonl, parquet]
+          description: >-
+            kind="file"에서 필수(업로드 시 검증된 format과 정확히 일치해야 함).
+            kind="url"에서는 선택(json/jsonl/csv만 허용, 생략 시 응답
+            Content-Type로 추론).
+        encoding:
+          type: string
+          default: utf-8
+          description: kind="file"에서 텍스트(csv/json/jsonl) 디코딩에 쓰는 인코딩.
+        endpoint:
+          type: string
+          format: uri
+          description: kind="url"에서 필수. https만 허용한다(SSRF 정책, #498).
+        method:
+          type: string
+          enum: [GET]
+          default: GET
+          description: kind="url"에서만 쓰이며 P0는 GET만 허용한다.
 
     SchemaContract:
       type: object
@@ -1713,6 +1907,40 @@ components:
           additionalProperties:
             type: string
           default: {}
+
+    UploadMetadata:
+      type: object
+      description: >-
+        안전한(secret-free) 업로드 메타데이터(#498). content는 절대 포함하지
+        않으며, 이 API로는 원문 content를 다시 조회할 수 없다.
+      required: [upload_id, format, encoding, size_bytes, original_filename, created_at]
+      properties:
+        upload_id:
+          type: string
+          pattern: "^upl_[a-f0-9]{32}$"
+        format:
+          type: string
+          enum: [csv, json, jsonl, parquet]
+        encoding:
+          type: string
+        size_bytes:
+          type: integer
+          minimum: 0
+        original_filename:
+          type: [string, "null"]
+          description: 표시 전용 원본 파일명(파일시스템 경로 아님).
+        created_at:
+          type: string
+          format: date-time
+
+    UploadDeleteResponse:
+      type: object
+      required: [upload_id, deleted]
+      properties:
+        upload_id:
+          type: string
+        deleted:
+          type: boolean
 
     ExportTarget:
       type: object
