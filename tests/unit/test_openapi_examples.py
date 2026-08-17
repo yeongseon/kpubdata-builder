@@ -175,7 +175,7 @@ def test_extraction_script_emits_documented_json_shape() -> None:
         text=True,
     )
     payload = json.loads(completed.stdout)
-    assert payload["contract_version"] == "1.13.0"
+    assert payload["contract_version"] == "1.14.0"
     assert len(payload["examples"]) >= 50
     assert set(payload["examples"][0]) == {
         "path",

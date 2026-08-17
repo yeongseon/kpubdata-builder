@@ -28,6 +28,7 @@ from pathlib import Path
 
 from ..artifact import ArtifactDataset
 from ..errors import DatasetValidationError, ValidationError
+from ..events import BuildEventRecorder, BuildEventStore
 from ..exporters import get_exporter
 from ..ingestion import IngestionError
 from ..manifest import (
@@ -252,6 +253,7 @@ def _run_source_pipeline(
     *,
     client: SourceClient,
     context: BuildContext,
+    recorder: BuildEventRecorder,
     upload_repository: UploadRepository | None = None,
     owner_id: str | None = None,
     capture_silver: bool = False,
@@ -263,6 +265,13 @@ def _run_source_pipeline(
 
     ``upload_repository``/``owner_id`` 는 ``kind="file"`` source에서만 쓰인다
     (#498) — 업로드 소유권 확인에 필요한 stable principal id다.
+
+    ``recorder``는 이 소스의 실제 실행 boundary(fetch/stage/quality)에서만
+    structured event를 남긴다(#496) — 실행되지 않은 단계를 완료로 가장하지
+    않는다. 어느 단계까지 성공했는지는 기존 ``completed`` 목록으로 판정하고,
+    export처럼 ``completed``에 반영되지 않는 단계는 ``export_started`` 플래그로
+    별도 추적한다 — 기존 partial-run outcome 계약(``stages_completed``)은
+    바꾸지 않는다.
 
     매개변수:
         capture_silver: True면 검증을 통과한 SilverDataset을 결과에 함께 담는다.
@@ -281,20 +290,39 @@ def _run_source_pipeline(
     quality_results: tuple[QualityCheckResult, ...] = ()
     quality_evaluated = False
     schema_drift: tuple[SchemaDriftFinding, ...] = ()
+    # completed 목록에 없는 export 단계 진행 여부를 별도로 추적한다(#496) —
+    # export는 gold 완료 후 실행되지만 기존 outcome 모델(stages_completed)에는
+    # 반영되지 않는다. fetch_completed는 "bronze" not in completed만으로는
+    # source fetch 성공 여부와 bronze persist 성공 여부를 구분할 수 없어서
+    # (persist가 fetch *이후*에 실패할 수 있다) 별도로 추적한다.
+    export_started = False
+    fetch_completed = False
     try:
         # kind(public_api/file/url)에 맞는 resolver로 원시 레코드를 가져온다
-        # (#498) — 이후 Silver/Gold는 kind를 전혀 알 필요가 없다.
+        # (#498) — 이후 Silver/Gold는 kind를 전혀 알 필요가 없다. bronze stage와
+        # source fetch는 이 호출을 공유 경계로 삼는다(#496) — public_api/file/url
+        # 모두 동일한 event 어휘를 쓴다.
+        recorder.stage_started(output_key, "bronze")
+        recorder.source_fetch_started(output_key)
         bronze = build_bronze_artifact_for_source(
             source,
             client=client,
             upload_repository=upload_repository,
             owner_id=owner_id,
         )
+        recorder.source_fetch_completed(output_key, record_count=len(bronze.raw_records))
+        fetch_completed = True
         bronze = _retag_bronze_artifact(bronze, output_key=output_key)
         bronze_paths = persist_bronze_artifact(
             bronze, output_root=context.output_root, run_id=context.run_id
         )
         completed.append("bronze")
+        recorder.stage_completed(
+            output_key,
+            "bronze",
+            message="Bronze written",
+            metrics={"records": len(bronze.raw_records)},
+        )
         _record_output_paths(outputs, bronze_paths.records_path, bronze_paths.metadata_path)
         # bronze 성공 직후 확정한다: 이후 단계가 실패해도(부분 실패) provenance는 남는다
         # (병렬화 이전 shared list에 즉시 append하던 것과 동일한 동작을 유지) (#247).
@@ -311,6 +339,7 @@ def _run_source_pipeline(
             params=bronze.fetch_params,
         )
 
+        recorder.stage_started(output_key, "silver")
         required_columns = source.schema.required if source.schema else ()
         column_dtypes = source.schema.dtypes if source.schema else None
         silver = build_silver_dataset(
@@ -332,6 +361,10 @@ def _run_source_pipeline(
             column_dtypes=column_dtypes,
         )
         quality_evaluated = True
+        # quality checkpoint event(#496)는 #486 판정 결과를 그대로 반영한다 —
+        # 이 아래에서 FAIL로 소스가 실패해도(quality gate) 평가가 실제로
+        # 일어났다는 사실과 그 결과는 이미 기록된다(partial run 가시성).
+        recorder.quality_evaluated(output_key, quality_results)
 
         # 검증에 실패한 Silver 데이터셋이 Gold/패키징으로 흘러가지 않도록 소스를
         # 실패 처리한다. 검증은 더 이상 권고용이 아니라 게이트다 (#189). 기존 오류
@@ -392,6 +425,12 @@ def _run_source_pipeline(
             silver, output_root=context.output_root, run_id=context.run_id
         )
         completed.append("silver")
+        recorder.stage_completed(
+            output_key,
+            "silver",
+            message="Silver written",
+            metrics={"row_count": evaluated_row_count},
+        )
         # Silver 게이트(schema/PII/quality)를 모두 통과한 시점에만 담는다 — composition(#506)이
         # 이 값을 join에 그대로 쓰므로, 검증 실패한 데이터가 흘러들면 안 된다.
         if capture_silver:
@@ -405,6 +444,7 @@ def _run_source_pipeline(
             silver_paths.validation_path,
         )
 
+        recorder.stage_started(output_key, "gold")
         gold = build_gold_package(
             silver,
             dataset_name=output_key,
@@ -416,12 +456,21 @@ def _run_source_pipeline(
             gold, output_root=context.output_root, run_id=context.run_id
         )
         completed.append("gold")
+        recorder.stage_completed(
+            output_key, "gold", message="Gold written", metrics={"row_count": len(gold.table)}
+        )
         _record_output_paths(
             outputs,
             gold_paths.table_path,
             gold_paths.package_path,
             *gold_paths.splits_paths.values(),
         )
+
+        # export 단계(#496): SourceBuildOutcome.stages_completed에는 반영되지
+        # 않는 기존 모델을 유지하되(#488 stage API와 동일 계약), 실제 export
+        # 실행 boundary에서 started/completed/failed를 별도로 기록한다.
+        export_started = True
+        recorder.stage_started(output_key, "export")
         export_paths = export_gold_package(gold, output_dir=gold_paths.gold_dir)
         _record_output_paths(outputs, *export_paths)
 
@@ -453,6 +502,12 @@ def _run_source_pipeline(
             context.spec.exports,
         )
         _record_output_paths(outputs, *buildspec_export_paths)
+        recorder.stage_completed(
+            output_key,
+            "export",
+            message="Export written",
+            metrics={"file_count": len(export_paths) + len(buildspec_export_paths)},
+        )
 
         schema_summary = build_schema_summary(
             (column.name, column.dtype, column.nullable) for column in silver.schema.columns
@@ -489,6 +544,20 @@ def _run_source_pipeline(
                 exc_info=exc,
             )
             error_msg = f"pipeline failed for source {output_key!r}"
+        # 실제로 도달한 마지막 boundary 기준으로 실패 event를 남긴다(#496) —
+        # completed 목록이 이미 "어느 stage까지 성공했는지"의 정본이므로, 그
+        # 다음 stage가 실패한 stage다. 시도조차 되지 않은 stage는 실패로
+        # 가장하지 않는다(이벤트를 아예 남기지 않는다).
+        if "bronze" not in completed:
+            if not fetch_completed:
+                recorder.source_fetch_failed(output_key, message=error_msg)
+            recorder.stage_failed(output_key, "bronze", message=error_msg)
+        elif "silver" not in completed:
+            recorder.stage_failed(output_key, "silver", message=error_msg)
+        elif "gold" not in completed:
+            recorder.stage_failed(output_key, "gold", message=error_msg)
+        elif export_started:
+            recorder.stage_failed(output_key, "export", message=error_msg)
         return _SourcePipelineResult(
             outcome=SourceBuildOutcome(
                 source_key=output_key,
@@ -651,7 +720,9 @@ def run_build(
     run_id: str | None = None,
     created_by: str | None = None,
     owner_id: str | None = None,
+    manifest_owner_id: str | None = None,
     upload_repository: UploadRepository | None = None,
+    event_store: BuildEventStore | None = None,
 ) -> BuildResult:
     """BuildSpec을 Medallion 파이프라인으로 실행한다.
 
@@ -661,13 +732,26 @@ def run_build(
         output_root: 실행 워크스페이스 루트.
         run_id: 실행 식별자. 생략 시 타임스탬프 기반으로 생성.
         created_by: 빌드를 요청한 principal의 display/legacy 라벨(#388).
-        owner_id: canonical stable persistent owner identity (#505). manifest에
-            created_by와 함께 additive로 기록된다. ``kind="file"`` source가
-            있으면 업로드 소유권 확인에도 이 값을 그대로 재사용한다(#498) —
-            "이 run을 요청한 principal"과 "이 run이 참조하는 업로드의 소유자"는
-            항상 같은 사람이어야 한다.
+        owner_id: ``kind="file"`` source resolver가 업로드 소유권 확인에
+            쓰는 canonical stable owner identity(#505/#498) — "이 run이
+            참조하는 업로드의 소유자"다. sync ``/build``는 언제나 제출
+            principal 본인이 곧 그 소유자이므로 그대로 재사용해도 안전하지만,
+            async ``/builds``는 지금까지처럼 ``None``으로 남겨 file-backed
+            source resolver에 stable identity를 노출하지 않는다(#498 async
+            limitation, 그대로 유지).
+        manifest_owner_id: persisted run manifest(및 그 manifest를 그대로
+            읽어 채우는 BuildIndex, #505 SSOT)에 기록할 canonical stable
+            owner identity — "이 run을 제출한 principal"이다. 생략(``None``)
+            하면 ``owner_id``를 그대로 쓴다(기존 sync 호출자와 100% 동일하게
+            동작). async 호출자는 file resolver용 ``owner_id``는 ``None``으로
+            둔 채 이 필드만 채워, "누가 이 run을 제출했는가"(persisted
+            ownership)와 "file resolver가 무엇을 소유권 확인에 쓸 수
+            있는가"를 서로 다른 값으로 분리한다.
         upload_repository: ``kind="file"`` source의 업로드 content를 조회할
             저장소 (#498). None이면 file source가 있는 build는 실패한다.
+        event_store: structured run event timeline 저장소 (#496). None이면
+            (CLI 직접 호출 등) event를 전혀 기록하지 않는다 — 기존 호출자는
+            아무 것도 바꾸지 않아도 된다.
 
     반환값:
         BuildResult: 전체 상태, 소스별 결과, 매니페스트 경로.
@@ -676,10 +760,17 @@ def run_build(
         ValidationError: spec이 최소 실행 요건을 만족하지 못한 경우.
         ValueError: run_id에 안전하지 않은 문자가 포함된 경우.
     """
+    effective_manifest_owner_id = owner_id if manifest_owner_id is None else manifest_owner_id
     # 진입점에서 spec을 먼저 검증한다(fail-fast). 검증을 호출자에게만 맡기면 잘못된
     # spec이 단계 깊숙이 들어가 cryptic 에러로 터지므로, 단계 진입 전에 막는다 (#212).
     validate_spec(spec)
     context = BuildContext.create(spec, output_root=output_root, run_id=run_id)
+    # run_id가 확정된(BuildContext.create가 생략 시 생성) 직후에만 recorder를
+    # 만들 수 있다 — "started"는 실제로 실행이 시작되는 이 지점의 실제 semantics다
+    # (#496). validate_spec 실패는 run_id/워크스페이스가 아예 없으므로 event를
+    # 남기지 않는다 — 기존에도 그 실패에 대해서는 워크스페이스가 만들어지지 않는다.
+    recorder = BuildEventRecorder(event_store, run_id=context.run_id)
+    recorder.run_started()
     # 검증된 실제 실행 입력을 pipeline보다 먼저 고정한다. 이후 source 단계가 실패해도
     # run 감사 정보는 남고, validation 실패 입력은 snapshot으로 기록되지 않는다.
     _, spec_digest = write_buildspec_snapshot(
@@ -699,6 +790,7 @@ def run_build(
             source,
             client=client,
             context=context,
+            recorder=recorder,
             upload_repository=upload_repository,
             owner_id=owner_id,
             capture_silver=_output_source_key(source) in composition_aliases,
@@ -765,6 +857,10 @@ def run_build(
     if composition_outcome is not None and composition_outcome.status != "ok":
         errors = (*errors, f"{composition_outcome.name}: {composition_outcome.error}")
     status = "ok" if not errors else "failed"
+    if status == "ok":
+        recorder.run_finished()
+    else:
+        recorder.run_failed(failed_source_count=len(errors))
 
     manifest = BuildManifest(
         build_id=context.run_id,
@@ -772,6 +868,10 @@ def run_build(
         finished_at=utc_now(),
         inputs=tuple(_output_source_key(source) for source in spec.sources),
         outputs=tuple(outputs),
+        # recorder가 흡수한 event 기록 실패(#496)를 여기 싣는다 — 새 API 필드를
+        # 추가하지 않고 기존 authoritative warnings 채널을 재사용해, event
+        # timeline에 실제로 구멍이 있었는지 API 소비자가 알 수 있게 한다.
+        warnings=recorder.dropped_events(),
         errors=errors,
         row_counts=row_counts,
         schema_summaries=schema_summaries,
@@ -779,7 +879,7 @@ def run_build(
         build_environment=capture_build_environment(),
         inputs_fingerprint=compute_inputs_fingerprint(provenance),
         created_by=created_by,
-        owner_id=owner_id,
+        owner_id=effective_manifest_owner_id,
         quality_results=quality_results,
         schema_drift=schema_drift,
         composition=composition_provenance,

@@ -32,13 +32,24 @@ SubmitStatus = Literal["accepted", "existing", "queue_full"]
 
 @dataclass(frozen=True, slots=True)
 class BuildJobSnapshot:
-    """외부에 노출 가능한 build job 상태 스냅샷."""
+    """build job 상태 스냅샷.
+
+    ``owner_id``는 active/terminal async run의 ownership 판정용 internal
+    필드다(#496 follow-up, #505 canonical stable identity) — ``created_by``
+    (Principal.label, display/legacy fallback)와 달리 신규 ownership 판정에
+    우선 쓰이는 값이고, ``BuilderService._run_build_job``이 persisted
+    manifest/BuildIndex(#505 SSOT) 기록용으로도 그대로 재사용한다. 다만
+    ``to_body()``가 wire로 절대 내보내지 않고, ``kind="file"`` source
+    resolver(#498)에는 여전히 전달되지 않는다 — async file-backed source
+    owner propagation 한계는 그대로 유지된다.
+    """
 
     run_id: str
     status: BuildJobStatus
     created_at: str
     updated_at: str
     created_by: str | None = None
+    owner_id: str | None = None
     response: dict[str, JsonValue] | None = None
     error: str | None = None
 
@@ -79,7 +90,9 @@ class AsyncBuildJobRegistry:
         self._lock = Lock()
         self._jobs: dict[str, BuildJobSnapshot] = {}
 
-    def create(self, *, run_id: str, created_by: str | None) -> BuildJobSnapshot:
+    def create(
+        self, *, run_id: str, created_by: str | None, owner_id: str | None = None
+    ) -> BuildJobSnapshot:
         now = _utc_now_text()
         snapshot = BuildJobSnapshot(
             run_id=run_id,
@@ -87,6 +100,7 @@ class AsyncBuildJobRegistry:
             created_at=now,
             updated_at=now,
             created_by=created_by,
+            owner_id=owner_id,
         )
         with self._lock:
             self._jobs[run_id] = snapshot
@@ -148,6 +162,7 @@ class AsyncBuildJobRegistry:
                 created_at=current.created_at,
                 updated_at=_utc_now_text(),
                 created_by=current.created_by,
+                owner_id=current.owner_id,
                 response=response,
                 error=error,
             )
@@ -201,14 +216,61 @@ class AsyncBuildExecutor:
         run_id: str,
         created_by: str | None,
         runner: BuildJobRunner,
+        owner_id: str | None = None,
+        on_accept: Callable[[], None] | None = None,
+        on_enqueue_failure: Callable[[], None] | None = None,
     ) -> BuildJobSubmitResult:
+        """job을 큐잉한다. ``existing``/``queue_full``이면 새 submission이 아니므로
+        ``on_accept``를 호출하지 않는다.
+
+        ``owner_id``는 ``registry.create()``까지만 전달되어 snapshot에
+        보존된다(#496 follow-up, active run ownership 판정용) — ``runner``
+        호출(아래 ``self._executor.submit(self._run, spec_yaml, run_id,
+        created_by, runner)``)에는 전달하지 않는다. run_build/source resolver
+        쪽 owner propagation은 #498에서 이미 별도 한계로 남겨졌고, 이번
+        변경에서 그 범위를 넓히지 않는다.
+
+        ``on_accept``는 job이 실제로 worker pool에 큐잉되기(``self._executor.submit``)
+        *전*에 호출된다(#496). 호출자(``BuilderService.submit_build``)는 이 hook으로
+        "run_submitted" event를 append한다 — 그 append가 여기서 실패해 예외를
+        전파하면, job은 registry에 만들어지지도 worker에 큐잉되지도 않은 채
+        그대로 끝난다. 이 순서 덕분에 "event는 유실됐는데 job은 이미 실행
+        중"이라는 모순이 구조적으로 생기지 않는다 — job의 "accepted" 여부 자체가
+        이 event 기록 성공에 달려 있다. ``on_accept``가 없는 호출자(기존
+        monitoring 테스트 등)는 이전과 동일하게 아무 gating 없이 그대로 큐잉된다.
+
+        반대 방향(#496 self-review): ``on_accept``가 성공해 event는 기록됐는데
+        ``self._executor.submit()``(실제 worker pool 큐잉) 자체가 실패하면,
+        ``registry.create()``가 이미 만든 "queued" 항목이 아무도 실행하지 않을
+        phantom으로 영원히 남는다 — event(``run_submitted``)는 append-only라
+        지울 수 없으므로(#496 원칙), 이 항목을 "queued"로 방치하지 않고 실제
+        job 실행 실패에 이미 쓰이는 것과 동일한 ``registry.mark_failed()``로
+        정리한 뒤 예외를 그대로 전파한다 — 새 상태값을 만들지 않고 기존
+        terminal mechanism을 재사용한다.
+
+        ``on_enqueue_failure``는 ``registry.mark_failed()`` 직후, 예외를
+        재전파하기 *전*에 호출된다(#496 lifecycle 계약: timeline 자체도 이
+        실패를 표현해야 한다) — 호출자는 이 hook으로 같은 run_id에 기존
+        ``run_failed`` event를 append한다. ``on_accept`` 실패 경로(event 자체가
+        전혀 기록되지 못한 경우)와는 구별된다 — 그 경로는 ``registry.create()``
+        까지 가지도 못하므로 여기 도달하지 않고, ``run_submitted``도
+        ``run_failed``도 남기지 않는다.
+        """
         existing = self.registry.get(run_id)
         if existing is not None:
             return BuildJobSubmitResult(status="existing", snapshot=existing)
         if self.registry.queued_count() >= self._max_queue_size:
             return BuildJobSubmitResult(status="queue_full")
-        snapshot = self.registry.create(run_id=run_id, created_by=created_by)
-        self._executor.submit(self._run, spec_yaml, run_id, created_by, runner)
+        if on_accept is not None:
+            on_accept()
+        snapshot = self.registry.create(run_id=run_id, created_by=created_by, owner_id=owner_id)
+        try:
+            self._executor.submit(self._run, spec_yaml, run_id, created_by, runner)
+        except Exception:
+            self.registry.mark_failed(run_id, error="failed to queue build job")
+            if on_enqueue_failure is not None:
+                on_enqueue_failure()
+            raise
         return BuildJobSubmitResult(status="accepted", snapshot=snapshot)
 
     def get(self, run_id: str) -> BuildJobSnapshot | None:
