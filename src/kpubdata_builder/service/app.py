@@ -178,8 +178,8 @@ def _catalog_dataset_body(dataset: DatasetRef, requires_service_key: bool) -> di
     if dataset.query_support is not None:
         query_support = {
             "pagination": dataset.query_support.pagination.value,
-            "filterable_fields": sorted(dataset.query_support.filterable_fields),
-            "sortable_fields": sorted(dataset.query_support.sortable_fields),
+            "filterable_fields": cast(JsonValue, sorted(dataset.query_support.filterable_fields)),
+            "sortable_fields": cast(JsonValue, sorted(dataset.query_support.sortable_fields)),
             "time_range": dataset.query_support.time_range,
             "max_page_size": dataset.query_support.max_page_size,
         }
@@ -187,10 +187,10 @@ def _catalog_dataset_body(dataset: DatasetRef, requires_service_key: bool) -> di
         "name": dataset.dataset_key,
         "title": dataset.name,
         "description": dataset.description,
-        "tags": sorted(dataset.tags),
+        "tags": cast(JsonValue, sorted(dataset.tags)),
         "source_url": dataset.source_url,
         "representation": dataset.representation.value,
-        "operations": sorted(op.value for op in dataset.operations),
+        "operations": cast(JsonValue, sorted(op.value for op in dataset.operations)),
         "query_support": query_support,
         "requires_service_key": requires_service_key,
     }
