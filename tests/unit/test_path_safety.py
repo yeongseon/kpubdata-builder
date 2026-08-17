@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import pytest
 
@@ -31,8 +31,10 @@ class TestStripWindowsExtendedPrefix:
     def test_strips_unc_extended_prefix(self) -> None:
         result = _strip_windows_extended_prefix(Path("\\\\?\\UNC\\server\\share"))
         # bare UNC share root은 pathlib이 anchor로 취급해 trailing backslash를
-        # 붙여 문자열화한다(drive root "C:\\"와 동일한 관례) — 버그가 아니다.
-        assert str(result) == "\\\\server\\share\\"
+        # 붙여 문자열화한다(drive root "C:\\"와 동일한 관례) — 이 anchor
+        # 정규화는 Windows pathlib에서만 일어나므로, POSIX CI에서도 동일하게
+        # 검증하도록 PureWindowsPath로 비교한다.
+        assert str(PureWindowsPath(str(result))) == "\\\\server\\share\\"
 
     def test_noop_without_prefix(self) -> None:
         plain = Path("C:\\a\\b")
