@@ -228,19 +228,22 @@ def _strip_internal_fields(entries: list[_BuildListEntry]) -> list[_BuildListEnt
 # MonitoringSummaryResponse.status(healthy/degraded)는 required subsystem
 # availability로부터 계산되는 deterministic aggregate다(latency threshold
 # 미사용).
-# 1.11.0 -> 1.12.0: BuildSpec sources[]에 kind="file"/"url"을 추가하고 (기존
+# 1.11.0 -> 1.12.0: BuildSpec.composition(JoinSpec)과 POST /build 응답의
+# composition 키, manifest.composition(CompositionProvenance) 추가 (#506,
+# additive — 기존 필드/엔드포인트는 변경되지 않는다).
+# 1.12.0 -> 1.13.0: BuildSpec sources[]에 kind="file"/"url"을 추가하고 (기존
 # provider/dataset source는 kind="public_api"로 additive 해석), POST /uploads,
 # GET /uploads/{upload_id}, DELETE /uploads/{upload_id}를 추가한다(#498,
 # additive — 기존 엔드포인트/kind 없는 source는 변경되지 않는다). url source는
 # P0 범위(GET, Auth=None, https만 허용)로 SSRF를 방어하는 safe fetch를 거친다.
-# 1.12.0 -> 1.13.0: GET /builds/{run_id}/events를 추가한다(#496, additive —
+# 1.13.0 -> 1.14.0: GET /builds/{run_id}/events를 추가한다(#496, additive —
 # 기존 엔드포인트는 변경되지 않는다). run/source fetch/medallion
 # stage(bronze/silver/gold/export)/quality checkpoint의 structured event
 # append-only timeline을 raw logger 파싱 없이 조회할 수 있다. limit/tail
 # query parameter는 bounded(기본 200, 상한 1000)이며 반환은 항상 chronological
 # ascending이다. Monitoring(#516)의 시스템 aggregate와는 역할이 분리된다 — 이
 # endpoint는 단일 run의 이벤트만 다룬다.
-API_CONTRACT_VERSION = "1.13.0"
+API_CONTRACT_VERSION = "1.14.0"
 
 
 def _quality_result_to_json(r: QualityCheckResult) -> dict[str, JsonValue]:
@@ -927,13 +930,27 @@ class BuilderService:
             "manifest": str(result.manifest_path),
             "api_version": API_CONTRACT_VERSION,
         }
+        # composition(#506) 결과는 outcomes(소스별)와 별도로 노출한다 — bronze/silver/gold
+        # stage 개념이 없고 "combined result"로 명확히 구분되어야 하기 때문이다.
+        # BuildSpec.composition이 없으면 null이다.
+        if result.composition_outcome is not None:
+            body["composition"] = {
+                "name": result.composition_outcome.name,
+                "status": result.composition_outcome.status,
+                "error": _redact_secret_text(result.composition_outcome.error, secret_values),
+            }
+        else:
+            body["composition"] = None
         # 실패한 빌드는 첫 번째 실패 outcome의 error를 최상위 `error` 요약으로 노출해,
         # Studio 같은 소비자가 outcomes 배열을 파싱하지 않고도 사람이 읽을 수 있는
-        # 사유를 즉시 표면화할 수 있게 한다 (#226).
+        # 사유를 즉시 표면화할 수 있게 한다 (#226). composition만 실패하고 모든 source가
+        # 성공한 경우도 놓치지 않도록 composition_outcome도 함께 살핀다 (#506).
         if result.status != "ok":
             first_error = next(
                 (o.error for o in result.outcomes if o.status != "ok" and o.error), None
             )
+            if first_error is None and result.composition_outcome is not None:
+                first_error = result.composition_outcome.error
             body["error"] = _redact_secret_text(first_error, secret_values) or "build failed"
 
         # ADR 0003: 빌드 완료 후 인덱스 갱신 (best-effort, 실패해도 빌드 성공 유지)

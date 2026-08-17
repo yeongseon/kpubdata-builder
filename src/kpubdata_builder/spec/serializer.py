@@ -143,6 +143,21 @@ def canonical_spec_mapping(spec: BuildSpec) -> dict[str, JsonValue]:
             ],
         }
 
+    composition: JsonValue = None
+    if spec.composition is not None:
+        join = spec.composition.join
+        composition = {
+            "name": spec.composition.name,
+            "join": {
+                "left": join.left,
+                "right": join.right,
+                "left_key": join.left_key,
+                "right_key": join.right_key,
+                "type": join.type,
+                "on_duplicate_key": join.on_duplicate_key,
+            },
+        }
+
     return {
         "dataset_id": spec.dataset_id,
         "title": spec.title,
@@ -155,6 +170,7 @@ def canonical_spec_mapping(spec: BuildSpec) -> dict[str, JsonValue]:
         "pii": pii,
         "license": spec.license,
         "quality": quality,
+        "composition": composition,
     }
 
 

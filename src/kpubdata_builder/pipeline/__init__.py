@@ -16,7 +16,7 @@ Bronze → Silver → Gold → (Export) → Manifest 흐름을 묶는 orchestrat
 from __future__ import annotations
 
 from .context import BuildContext
-from .orchestrator import BuildResult, SourceBuildOutcome, run_build
+from .orchestrator import BuildResult, CompositionOutcome, SourceBuildOutcome, run_build
 from .preview import (
     DEFAULT_PREVIEW_SEED,
     MAX_PREVIEW_DIFF_ITEMS,
@@ -33,6 +33,7 @@ __all__ = [
     "MAX_PREVIEW_DIFF_ITEMS",
     "BuildContext",
     "BuildResult",
+    "CompositionOutcome",
     "PreviewDiffItem",
     "PreviewResult",
     "PreviewTransformSummary",
