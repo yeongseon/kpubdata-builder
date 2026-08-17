@@ -3,6 +3,7 @@
 ## v0.4 (Unreleased)
 
 ### 추가됨
+- **Multi-source Join/Composition (#506)**: `BuildSpec.composition`(`CompositionSpec`/`JoinSpec`)으로 두 source의 검증된 Silver를 equi-join해 결합 Gold dataset(`gold/{composition.name}/`) 생성. alias 필수/중복 검증, join key 존재/dtype 일치 런타임 게이트, duplicate-key many-to-many 폭증 warn/fail 게이트, manifest `composition`(`CompositionProvenance`, additive)과 `POST /build` 응답 `composition` 키로 결합 결과를 source별 결과와 구분해 노출. API 계약 1.11.0 → 1.12.0
 - **Built Dataset Catalog·Detail·Stage Summary API (#488)**: `GET /datasets`, `GET /datasets/{dataset_id}`, `GET /datasets/{dataset_id}/runs`로 `BuildSpec.dataset_id` 단위 grouping/latest run/run history 조회. `GET /builds/{run_id}/stages`, `GET /builds/{run_id}/stages/{stage}`로 source별 Bronze/Silver/Gold 상태와 안전한 summary/preview 조회
 - **인증 시스템 (B2-B5)**: Principal 추상화(#384), Google OIDC Bearer 검증(#385), 허용 목록 게이트(#386), API 계약 bearerAuth(#387)
 - **인가 (C1/C2)**: manifest·BuildIndex에 principal 기록(#388), ENFORCE_OWNERSHIP 플래그(#389)
@@ -29,6 +30,9 @@
 - BuildManifest에 created_by 필드
 - ValidationError에 structured_problems 추가
 - README 인증 서술 fail-closed 정책에 맞게 수정 (#423)
+
+### 수정됨
+- `stages/_path_safety.ensure_within`이 Windows에서 여러 source를 병렬(ThreadPoolExecutor)로 빌드할 때 간헐적으로 traversal 오탐하던 버그 수정 — `root`/`target` 중 한쪽만 `Path.resolve()`의 `\\?\` 확장 프리픽스를 얻는 비대칭이 원인 (#506 조사 중 발견, composition과 무관한 기존 버그)
 
 ### 제거됨
 - .omc/state/sessions 추적 해제 (#380)

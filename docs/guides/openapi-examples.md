@@ -1,7 +1,7 @@
 # OpenAPI 예제 추출
 
 `contract/builder-api.yaml`의 각 JSON media type에는 Studio와 사람이 함께 사용할 수 있는
-named request/response example이 있다. 예제는 API 계약 `1.12.0`의 wire schema를 따르며,
+named request/response example이 있다. 예제는 API 계약 `1.13.0`의 wire schema를 따르며,
 credential 원문, 실제 secret, 내부 절대 경로를 포함하지 않는다.
 
 Studio 같은 소비자는 저장소 루트에서 다음 명령으로 예제를 단일 JSON 문서로 추출할 수 있다.

@@ -2,16 +2,47 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import pytest
 
 from kpubdata_builder.errors import PathTraversalError
 from kpubdata_builder.stages._path_safety import (
+    _strip_windows_extended_prefix,
     ensure_within,
     safe_output_path,
     validate_path_segment,
 )
+
+
+class TestStripWindowsExtendedPrefix:
+    """Windows ``\\\\?\\`` 확장 경로 프리픽스 제거 (#506).
+
+    멀티소스 병렬 빌드(#247)에서 ``Path.resolve()``가 root/target 중 한쪽에만
+    이 프리픽스를 붙이는 경우가 있어(핸들 열기 성공 여부에 따라 갈림)
+    ``ensure_within``이 간헐적으로 잘못된 traversal 오탐을 냈다. 순수 문자열
+    함수라 플랫폼과 무관하게 테스트한다.
+    """
+
+    def test_strips_extended_prefix(self) -> None:
+        result = _strip_windows_extended_prefix(Path("\\\\?\\C:\\a\\b"))
+        assert str(result) == "C:\\a\\b"
+
+    def test_strips_unc_extended_prefix(self) -> None:
+        result = _strip_windows_extended_prefix(Path("\\\\?\\UNC\\server\\share"))
+        # bare UNC share root은 pathlib이 anchor로 취급해 trailing backslash를
+        # 붙여 문자열화한다(drive root "C:\\"와 동일한 관례) — 이 anchor
+        # 정규화는 Windows pathlib에서만 일어나므로, POSIX CI에서도 동일하게
+        # 검증하도록 PureWindowsPath로 비교한다.
+        assert str(PureWindowsPath(str(result))) == "\\\\server\\share\\"
+
+    def test_noop_without_prefix(self) -> None:
+        plain = Path("C:\\a\\b")
+        assert _strip_windows_extended_prefix(plain) == plain
+
+    def test_noop_for_posix_path(self) -> None:
+        plain = Path("/a/b")
+        assert _strip_windows_extended_prefix(plain) == plain
 
 
 class TestValidatePathSegment:
@@ -46,6 +77,31 @@ class TestEnsureWithin:
 
         with pytest.raises(ValueError, match="escapes output_root"):
             ensure_within(root, root / ".." / "outside", label="dir")
+
+    def test_tolerates_inconsistent_extended_prefix_between_root_and_target(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """root/target 중 한쪽에만 확장 프리픽스가 붙어도 동일 경로로 인식해야 한다 (#506).
+
+        실제 Windows 환경에서는 ``root.resolve()``와 ``target.resolve()``가 서로 다른
+        시점에 호출되며, 동시 I/O로 한쪽만 핸들 기반 확장 경로(``\\\\?\\``)를 얻고
+        다른 쪽은 폴백하는 비대칭이 발생할 수 있다 — 이를 monkeypatch로 재현한다.
+        """
+        root = tmp_path / "root"
+        root.mkdir()
+        target = root / "run1" / "silver" / "sales"
+        target.mkdir(parents=True)
+        real_resolve = Path.resolve
+
+        def fake_resolve(self: Path, strict: bool = False) -> Path:
+            resolved = real_resolve(self, strict=strict)
+            if self == target:
+                return Path("\\\\?\\" + str(resolved))
+            return resolved
+
+        monkeypatch.setattr(Path, "resolve", fake_resolve)
+
+        ensure_within(root, target, label="silver directory")  # 예외 없음
 
     def test_rejects_escape_via_existing_symlink(self, tmp_path: Path) -> None:
         root = tmp_path / "root"

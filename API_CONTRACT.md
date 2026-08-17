@@ -53,6 +53,7 @@ v0.4 Builder service는 동기식 실행 모델을 유지합니다.
 | stage summary/preview | `GET /builds/{run_id}/stages`, `GET /builds/{run_id}/stages/{stage}`로 source별 Bronze/Silver/Gold 상태와 안전한 요약을 반환 |
 | structured quality/drift | `GET /builds/{run_id}/quality`로 run의 source별 `quality_results`/`schema_drift`를, `GET /datasets/{dataset_id}/quality/history`로 dataset의 run별 PASS/WARN/FAIL 집계 이력을 반환 |
 | read-only query | `POST /query`가 server-resolved Silver/Gold table을 logical `dataset`으로 등록하고 별도 capacity/timeout 안에서 실행 |
+| composition(join) | `BuildSpec.composition`이 있으면 `POST /build` 응답에 source별 `outcomes`와 별도로 `composition` 키(결합 결과)가 노출됨 |
 | 인증 실패 | `401`은 재인증 대상, `403`은 권한 요청 대상, `503`은 JWKS 일시 장애 대상 |
 
 정책과 구현이 다르면 구현 각주를 늘리지 말고 다음 순서로 정리합니다.
@@ -172,6 +173,31 @@ v0.4 Builder service는 동기식 실행 모델을 유지합니다.
   filesystem/network 접근, DML/DDL은 거부합니다.
 - query는 HTTP worker pool과 별도인 bounded capacity를 사용합니다. Query timeout은 child
   process를 실제 종료하며 429/504 오류는 안정적인 `code`로 구분됩니다.
+
+### Composition/Join (#506)
+
+- `BuildSpec.composition`은 두 source의 검증된 Silver를 join해 별도 결합 Gold
+  dataset(`gold/{composition.name}/`)을 부가로 만듭니다. source별 독립 Gold는
+  그대로 유지되며, `composition`이 없는 기존 multi-source BuildSpec은 영향받지
+  않습니다.
+- `composition.join.left`/`right`가 참조하는 source는 `alias`를 반드시 선언해야
+  하고, `composition`을 쓰는 BuildSpec 안에서는 선언된 `alias` 값이 서로
+  달라야 합니다 — 이 규칙은 `composition`이 없는 BuildSpec에는 적용되지 않습니다.
+- alias 참조·`join.type`/`join.on_duplicate_key` 어휘 같은 구조 문제는
+  `validate_spec`이 스펙 파싱 직후 거부합니다. join key 컬럼의 존재 여부와 dtype
+  일치(완전 동일만 허용, 자동 캐스팅 없음)는 두 source가 각각 Silver를 통과해야
+  알 수 있으므로 빌드 파이프라인의 런타임 게이트가 담당합니다.
+- 양쪽 join key가 모두 중복 값을 가지면(many-to-many) 결과 행이 곱셈으로
+  폭증할 수 있습니다 — 기본 `on_duplicate_key: warn`은 결과를 만들고 경고를
+  남기며, `fail`은 composition을 실패 처리합니다.
+- `POST /build` 응답의 `composition` 키는 `{name, status, error}`이며
+  `status`는 `ok`/`failed`(join 실행 자체 실패)/`skipped`(참조한 source가
+  실패해 join을 시도조차 못함) 중 하나입니다. `composition`만 실패하고 모든
+  source가 성공해도 최상위 `error` 요약은 composition의 error에서 파생됩니다.
+- `manifest.json`의 `composition`(`CompositionProvenance`, additive)에는 join
+  조건과 좌우 원본 행 수·distinct key 수·결과 행 수가 그대로 기록되어 원천과
+  join 조건을 추적할 수 있습니다. legacy manifest는 이 필드가 없거나 null이며
+  "composition 미사용 run"으로 해석해야 합니다.
 
 ### Stable Owner Identity (#505)
 

@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+from .composition import CompositionProvenance
 from .environment import BuildEnvironment, capture_build_environment
 from .models import MANIFEST_SCHEMA_VERSION, BuildManifest
 from .provenance import (
@@ -26,6 +27,7 @@ __all__ = [
     "MANIFEST_SCHEMA_VERSION",
     "BuildEnvironment",
     "BuildManifest",
+    "CompositionProvenance",
     "FieldSummary",
     "SchemaSummary",
     "SourceProvenance",
