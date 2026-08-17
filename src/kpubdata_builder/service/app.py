@@ -166,6 +166,36 @@ def _requires_service_key(dataset: DatasetRef, auth_provider_names: frozenset[st
     )
 
 
+def _catalog_dataset_body(dataset: DatasetRef, requires_service_key: bool) -> dict[str, JsonValue]:
+    """DatasetRef의 public/canonical metadata만 allowlist로 직렬화한다 (#490).
+
+    ``raw_metadata``는 provider 내부 정보와 secret-like 값이 섞일 수 있어
+    절대 그대로 노출하지 않는다 — UI 탐색에 필요한 필드만 명시적으로 골라
+    담는다. metadata가 없는 dataset은 description/source_url/query_support가
+    null, tags/operations가 빈 배열로 직렬화된다(응답 전체를 깨지 않는다).
+    """
+    query_support: JsonValue = None
+    if dataset.query_support is not None:
+        query_support = {
+            "pagination": dataset.query_support.pagination.value,
+            "filterable_fields": sorted(dataset.query_support.filterable_fields),
+            "sortable_fields": sorted(dataset.query_support.sortable_fields),
+            "time_range": dataset.query_support.time_range,
+            "max_page_size": dataset.query_support.max_page_size,
+        }
+    return {
+        "name": dataset.dataset_key,
+        "title": dataset.name,
+        "description": dataset.description,
+        "tags": sorted(dataset.tags),
+        "source_url": dataset.source_url,
+        "representation": dataset.representation.value,
+        "operations": sorted(op.value for op in dataset.operations),
+        "query_support": query_support,
+        "requires_service_key": requires_service_key,
+    }
+
+
 def _enforce_ownership() -> bool:
     """run 소유권 강제가 활성화되어 있는지 (#389). 기본 off — 하위 호환."""
     return ownership_module.enforce_ownership()
@@ -243,7 +273,10 @@ def _strip_internal_fields(entries: list[_BuildListEntry]) -> list[_BuildListEnt
 # query parameter는 bounded(기본 200, 상한 1000)이며 반환은 항상 chronological
 # ascending이다. Monitoring(#516)의 시스템 aggregate와는 역할이 분리된다 — 이
 # endpoint는 단일 run의 이벤트만 다룬다.
-API_CONTRACT_VERSION = "1.14.0"
+# 1.14.0 -> 1.15.0: /catalog 응답(CatalogDataset)에 탐색용 metadata(description/
+# tags/source_url/representation/operations/query_support)를 추가한다(#490,
+# additive — 기존 필드는 유지되며 raw_metadata는 노출하지 않는다).
+API_CONTRACT_VERSION = "1.15.0"
 
 
 def _quality_result_to_json(r: QualityCheckResult) -> dict[str, JsonValue]:
@@ -688,11 +721,10 @@ class BuilderService:
             {
                 "name": provider_name,
                 "datasets": [
-                    {
-                        "name": item.dataset_key,
-                        "title": item.name,
-                        "requires_service_key": _requires_service_key(item, auth_provider_names),
-                    }
+                    _catalog_dataset_body(
+                        item,
+                        _requires_service_key(item, auth_provider_names),
+                    )
                     for item in items
                 ],
             }
