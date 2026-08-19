@@ -12,6 +12,11 @@
 
 FROM python:3.12-slim
 
+# 베이스 이미지에 포함된 Debian 패키지의 보안 패치를 적용한다.
+RUN apt-get update \
+    && apt-get upgrade -y \
+    && rm -rf /var/lib/apt/lists/*
+
 # uv 바이너리를 Astral 공식 이미지에서 복사한다 (pip 설치 불필요).
 # 0.11.8 = 이 저장소의 uv.lock을 생성한 uv 버전.
 COPY --from=ghcr.io/astral-sh/uv:0.11.8 /uv /uvx /bin/
