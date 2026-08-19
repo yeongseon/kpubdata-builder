@@ -1,6 +1,8 @@
 # Build Run State Machine — KPubData Builder
 
-> **v0.4 계약 범위**: ADR 0002(#308)에 따라 v0.4에서는 동기식 build만 유지합니다. 아래 **비동기 Job 상태 머신** 섹션은 미래 확장을 위해 문서화하나, v0.4 호출 계약에는 포함되지 않습니다.
+> **계약 범위**: v0.4의 최초 범위는 동기식 build였지만, 현재 HTTP 계약에는
+> 비동기 build job과 협력적 취소가 포함됩니다. 실제 wire 계약은
+> `contract/builder-api.yaml`을 정본으로 합니다.
 
 ## 1. 상태 개요
 
@@ -143,13 +145,11 @@ stateDiagram-v2
     succeeded --> [*]
 ```
 
-### 8.3 v0.4 계약에서의 제외
+### 8.3 현재 계약
 
-ADR 0002(#308)에 따라 v0.4에서는 동기식 `POST /build`만 유지합니다:
-
-- 비동기 job 상태 조회 API(`GET /builds/{run_id}/status`)는 **구현되지 않습니다**
-- `contract/builder-api.yaml`에 `x-planned: true`로 표시된 엔드포인트는 codegen 및 계약 테스트에서 제외됩니다
-- 향후 비동기 모드가 추가될 때 이 문서를 참고하여 상태 머신을 구현합니다
+`POST /build`는 동기식 실행을 유지합니다. 비동기 job은 `POST /builds`,
+`GET /builds/{run_id}`, `POST /builds/{run_id}/cancel`로 제공하며, 세 endpoint의
+wire 형태와 상태 코드는 `contract/builder-api.yaml`을 따릅니다.
 
 
 #### 현재 구현 상태
@@ -197,7 +197,9 @@ source 하나의 파이프라인에서 취소는 다음 네 지점에서만 관�
 
 **partial manifest**
 
-취소된 run도 manifest를 반드시 남깁니다(AGENTS.md "매니페스트 누락 금지").
+pipeline 실행이 시작되어 산출물을 생성한 cancelled run은 partial manifest를
+반드시 남깁니다. 실행 전에 취소된 queued job은 runner를 실행하지 않으므로 artifact와
+manifest를 생성하지 않습니다.
 `BuildManifest`에 두 개의 additive 필드가 추가됩니다.
 
 | 필드 | 값 | 의미 |
