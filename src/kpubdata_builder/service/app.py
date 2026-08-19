@@ -38,7 +38,14 @@ from ..credentials import (
 from ..errors import SpecLoadError, ValidationError
 from ..events import BuildEvent, BuildEventStore
 from ..ingestion import IngestionError, parse_tabular_bytes
-from ..pipeline import DEFAULT_PREVIEW_SEED, SampleMode, preview_build, run_build
+from ..manifest import status_from_manifest
+from ..pipeline import (
+    DEFAULT_PREVIEW_SEED,
+    CancellationProbe,
+    SampleMode,
+    preview_build,
+    run_build,
+)
 from ..quality import QualityCheckResult
 from ..query.engine import QueryExecutionError, QueryTimeoutError
 from ..query.models import QueryRequest, QueryStage
@@ -280,7 +287,14 @@ def _strip_internal_fields(entries: list[_BuildListEntry]) -> list[_BuildListEnt
 # idempotent/409/429)와 GET /builds/{run_id}(잡 상태 polling) 추가(#480). 잡 상태
 # 조회에 ownership 게이트를 적용해 cross-owner의 build 출력(response) 노출을
 # 차단한다(behavioral tightening — 이전에는 미검사).
-API_CONTRACT_VERSION = "1.16.0"
+# 1.16.0 -> 1.17.0: POST /builds/{run_id}/cancel을 추가한다(#481, ADR 0008 —
+# additive). queued job은 실행 전에 즉시 cancelled로, running job은 cancelling을
+# 거쳐 안전한 stage 경계에서 cancelled로 종결된다(강제 종료 없음). BuildJobStatus
+# 어휘(queued/running/cancelling/succeeded/failed/cancelled)는 그대로 재사용한다.
+# 함께 additive로: BuildManifest에 status/partial(부분 산출물 표시),
+# BuildEventName에 run_cancelled, BuildSummary.status enum에 cancelled(이미
+# BuildIndex/dataset 계약이 쓰던 값이 이제 실제로 관측 가능해진다).
+API_CONTRACT_VERSION = "1.17.0"
 
 
 def _quality_result_to_json(r: QualityCheckResult) -> dict[str, JsonValue]:
@@ -371,6 +385,11 @@ class BuilderService:
         self._async_builds = AsyncBuildExecutor(
             max_workers=async_max_workers,
             max_queue_size=async_max_queue_size,
+            # running job이 안전 경계에서 실제로 cancelled로 종결되는 순간 정확히
+            # 한 번 호출된다 (#481). 종결 event는 job의 terminal 전이를 확정하는
+            # 쪽에서만 남겨, queued 취소와 running 취소가 똑같이 run_cancelled
+            # 하나로 끝나고 한 run에 종결 event가 둘 생기지 않는다.
+            on_cancelled=self._record_run_cancelled,
         )
 
     @property
@@ -878,6 +897,7 @@ class BuilderService:
         owner_id: str | None = None,
         manifest_owner_id: str | None = None,
         principal: Principal | None = None,
+        cancellation: CancellationProbe | None = None,
     ) -> ServiceResponse:
         """파이프라인을 실행하고 결과를 반환한다.
 
@@ -898,6 +918,14 @@ class BuilderService:
         async run(``_run_build_job``)이 이 필드로 submitting principal의
         owner_id를 manifest/BuildIndex에는 기록하면서도 file resolver에는
         여전히 owner_id를 넘기지 않는 데 쓴다(#496 follow-up).
+
+        ``cancellation``은 async job(#481)에서만 전달되는 협력적 취소 probe다.
+        ``None``이면(동기 ``POST /build``, CLI) 파이프라인이 취소 점검을 전혀
+        하지 않아 기존 동작과 100% 동일하다 — 동기 build에 취소 상태를 강요하지
+        않는다. 취소로 끝난 run은 409와 함께 ``status="cancelled"`` 요약을
+        반환하는데, 이 응답은 async worker(``AsyncBuildExecutor._run``)만 보고
+        job snapshot에도 실리지 않으므로 HTTP wire에는 노출되지 않는다 —
+        부분 산출물의 정본은 partial manifest다.
         """
         spec_or_error = self._load_validated(spec_yaml)
         if isinstance(spec_or_error, ServiceResponse):
@@ -934,6 +962,7 @@ class BuilderService:
                 manifest_owner_id=manifest_owner_id,
                 upload_repository=self._upload_repository_for(spec_or_error),
                 event_store=self._event_store,
+                cancellation=cancellation,
             )
         finally:
             _close_request_client(client)
@@ -958,14 +987,21 @@ class BuilderService:
             }
             for outcome in result.outcomes
         ]
-        status_code = 200 if result.status == "ok" else 502
+        # 취소된 run(#481)은 성공도 실패도 아니다. 이 응답은 async worker만 보고
+        # job snapshot(BuildJob.response)에도 실리지 않으므로 wire 계약(200/502)을
+        # 넓히지 않는다 — outcomes도 싣지 않아 SourceOutcome enum(ok/failed)과
+        # 어긋나지 않는다. 부분 산출물의 정본은 아래에서 이미 기록된 partial
+        # manifest다.
+        cancelled = result.status == "cancelled"
+        status_code = 200 if result.status == "ok" else 409 if cancelled else 502
         body: dict[str, JsonValue] = {
             "status": result.status,
             "run_id": result.context.run_id,
-            "outcomes": outcomes,
             "manifest": str(result.manifest_path),
             "api_version": API_CONTRACT_VERSION,
         }
+        if not cancelled:
+            body["outcomes"] = outcomes
         # composition(#506) 결과는 outcomes(소스별)와 별도로 노출한다 — bronze/silver/gold
         # stage 개념이 없고 "combined result"로 명확히 구분되어야 하기 때문이다.
         # BuildSpec.composition이 없으면 null이다.
@@ -981,7 +1017,7 @@ class BuilderService:
         # Studio 같은 소비자가 outcomes 배열을 파싱하지 않고도 사람이 읽을 수 있는
         # 사유를 즉시 표면화할 수 있게 한다 (#226). composition만 실패하고 모든 source가
         # 성공한 경우도 놓치지 않도록 composition_outcome도 함께 살핀다 (#506).
-        if result.status != "ok":
+        if result.status == "failed":
             first_error = next(
                 (o.error for o in result.outcomes if o.status != "ok" and o.error), None
             )
@@ -1135,8 +1171,71 @@ class BuilderService:
             return ServiceResponse(404, {"error": f"build job not found: {run_id}"})
         return ServiceResponse(200, snapshot.to_body())
 
+    def cancel_build(self, run_id: str) -> ServiceResponse:
+        """active(queued/running) async build job의 취소를 요청한다 (#481).
+
+        호출 전에 route가 run_id 형식 검증과 ownership 게이팅을 끝내 놓아야 한다
+        (``routes/builds.py`` — ``GET /builds/{run_id}``와 동일한 canonical 규칙).
+
+        응답은 registry의 원자적 판정(``request_cancel``) 하나로 결정되므로
+        경합과 무관하게 결정적이다.
+
+        - ``queued`` → 즉시 ``cancelled``(runner를 한 번도 실행하지 않는다), 200.
+        - ``running`` → ``cancelling``, 200. 실제 종결은 다음 안전 경계다.
+        - 이미 ``cancelling``/``cancelled`` → 200(멱등, 현재 snapshot 그대로).
+        - ``succeeded``/``failed``이거나 pipeline이 이미 정상 종료로 확정한 job
+          → 409. 새 오류 어휘를 만들지 않고 기존 conflict 관례를 쓴다
+          (``POST /builds``의 "이미 완료된 run_id" 409와 같은 의미의 충돌이다).
+        - registry가 모르는 run → 404 (``GET /builds/{run_id}``와 동일 메시지).
+        """
+        outcome, snapshot = self._async_builds.request_cancel(run_id)
+        if outcome == "unknown" or snapshot is None:
+            return ServiceResponse(404, {"error": f"build job not found: {run_id}"})
+        if outcome == "terminal":
+            return ServiceResponse(
+                409,
+                {
+                    "error": "build job is no longer cancellable",
+                    "run_id": run_id,
+                    "status": snapshot.status,
+                },
+            )
+        if outcome == "cancelled":
+            # queued job은 여기서 이미 종결됐다 — worker는 runner를 실행하지
+            # 않는다(``AsyncBuildExecutor._run``의 ``begin_run`` 게이트). 종결
+            # event는 running 경로와 동일하게 terminal 전이 시점에 한 번 남긴다.
+            self._record_run_cancelled(run_id)
+        return ServiceResponse(200, snapshot.to_body())
+
+    def _record_run_cancelled(self, run_id: str) -> None:
+        """cancelled 종결 event를 남긴다 (#481). 실패해도 전파하지 않는다.
+
+        job은 이 시점에 이미 ``cancelled``로 확정돼 있다 — event append 실패가
+        확정된 종단 상태를 되돌릴 수는 없으므로, ``_record_enqueue_failure``와
+        동일하게 로그만 남기고 흡수한다. worker thread에서도 호출되므로 예외를
+        전파하면 안 된다. message는 고정 문자열이며 raw exception/경로/자격증명을
+        담지 않는다.
+        """
+        try:
+            self._event_store.append(
+                BuildEvent(
+                    seq=0,
+                    timestamp=datetime.now(tz=timezone.utc),
+                    run_id=run_id,
+                    event="run_cancelled",
+                    status="ok",
+                    message="build cancelled at a safe stage boundary",
+                )
+            )
+        except Exception:
+            logger.error("failed to record run_cancelled event (run_id=%s)", run_id, exc_info=True)
+
     def _run_build_job(
-        self, spec_yaml: str, run_id: str, created_by: str | None
+        self,
+        spec_yaml: str,
+        run_id: str,
+        created_by: str | None,
+        cancellation: CancellationProbe,
     ) -> ServiceResponse:
         """async job registry가 부르는 실제 실행 진입점 (#482, #496 follow-up).
 
@@ -1152,7 +1251,13 @@ class BuilderService:
         snapshot = self._async_builds.get(run_id)
         manifest_owner_id = snapshot.owner_id if snapshot is not None else None
         return self.build(
-            spec_yaml, run_id=run_id, created_by=created_by, manifest_owner_id=manifest_owner_id
+            spec_yaml,
+            run_id=run_id,
+            created_by=created_by,
+            manifest_owner_id=manifest_owner_id,
+            # 협력적 취소 probe(#481)를 그대로 pipeline까지 내려보낸다 — service
+            # 개념(registry/HTTP/Principal)은 pipeline domain으로 넘기지 않는다.
+            cancellation=cancellation,
         )
 
     def artifacts(self, run_id: str) -> ServiceResponse:
@@ -1339,7 +1444,10 @@ class BuilderService:
             fs_builds.append(
                 {
                     "run_id": run_dir.name,
-                    "status": "failed" if manifest.get("errors") else "ok",
+                    # manifest.json이 정본이므로 파생 규칙은 한 곳에만 둔다
+                    # (#481) — cancelled run은 errors가 비어 있을 수 있어
+                    # 기존 "errors 유무" 파생만으로는 ok로 잘못 보고된다.
+                    "status": status_from_manifest(manifest),
                     "started_at": manifest.get("started_at"),
                     "finished_at": manifest.get("finished_at"),
                     "created_by": manifest.get("created_by"),

@@ -37,6 +37,20 @@ def route(
             spec, run_id=run_id, created_by=principal.label, owner_id=principal.owner_id
         )
 
+    # ADR 0008이 명시한 유일한 취소 endpoint (#481). alias를 추가하지 않는다.
+    if method == "POST" and path.startswith("/builds/") and path.endswith("/cancel"):
+        cancel_run_id = path[len("/builds/") : -len("/cancel")]
+        error = _validate_run_id(cancel_run_id)
+        if error is not None:
+            return error
+        # 취소는 state mutation이므로 조회보다 느슨해서는 안 된다. ``GET
+        # /builds/{run_id}``와 **정확히 같은** canonical 판정을 재사용한다 —
+        # manifest가 있으면 manifest 기준, active/terminal registry job이면
+        # snapshot의 stable owner_id 기준, 둘 다 없으면 404(fail-closed).
+        # 별도 policy를 만들지 않아 route 간 404/403 semantics가 어긋나지 않는다.
+        access_error = check_active_run_access(service, cancel_run_id, principal)
+        return access_error or service.cancel_build(cancel_run_id)
+
     if method == "GET" and path.startswith("/builds/") and "/" not in path[len("/builds/") :]:
         run_id = path[len("/builds/") :]
         try:

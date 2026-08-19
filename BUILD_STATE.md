@@ -122,9 +122,10 @@ publish가 요청된 경우에는 publish 결과를 반영한 후 manifest를 �
 | :--- | :--- |
 | `queued` | 실행 대기열에 진입하여 실행을 기다리는 상태 |
 | `running` | Builder가 source를 fetch하고 조립을 수행 중인 상태 |
+| `cancelling` | 취소가 요청되었고 다음 안전 경계에서 종료를 기다리는 과도기 상태 (#481) |
 | `succeeded` | 모든 source가 성공하고 artifact/manifest가 생성된 상태 |
 | `failed` | source 실행 또는 조립 중 실패한 상태 |
-| `cancelled` | 사용자 요청 또는 타임아웃으로 실행이 취소된 상태 |
+| `cancelled` | 사용자 요청으로 실행이 취소된 상태 |
 
 ### 8.2 상태 전이 다이어그램
 
@@ -134,8 +135,9 @@ stateDiagram-v2
     queued --> running: worker가 할당됨
     running --> succeeded: 모든 소스 성공
     running --> failed: 소스 또는 실행 오류
-    running --> cancelled: 취소 요청
-    queued --> cancelled: 큐에서 제거됨
+    running --> cancelling: 취소 요청 (#481)
+    cancelling --> cancelled: 다음 안전 경계 도달
+    queued --> cancelled: 실행 전 취소 (#481)
     cancelled --> [*]
     failed --> [*]
     succeeded --> [*]
@@ -149,10 +151,82 @@ ADR 0002(#308)에 따라 v0.4에서는 동기식 `POST /build`만 유지합니�
 - `contract/builder-api.yaml`에 `x-planned: true`로 표시된 엔드포인트는 codegen 및 계약 테스트에서 제외됩니다
 - 향후 비동기 모드가 추가될 때 이 문서를 참고하여 상태 머신을 구현합니다
 
-### 8.4 관련 ADR
+
+#### 현재 구현 상태
+
+v0.4에서는 ADR 0002에 따라 비동기 API가 호출 계약에서 제외되었으나,
+후속 async 작업(#480~#483)을 통해 비동기 build 제출/조회가 구현되었다.
+
+#481에서는 이에 cooperative cancellation을 추가한다.
+
+- queued → cancelled
+- running → cancelling → cancelled
+- safe stage boundary에서 cancellation 확인
+- 이미 생성된 산출물은 partial manifest로 보존
+
+### 8.4 협력적 취소와 partial manifest (#481)
+
+`POST /builds/{run_id}/cancel`은 **협력적(cooperative)** 취소만 수행합니다. worker
+thread를 강제로 종료하지 않고, 실행 중인 stage를 중간에 끊지 않습니다.
+
+**전이 규칙**
+
+| 요청 시점 상태 | 결과 | HTTP |
+| :--- | :--- | :--- |
+| `queued` | 즉시 `cancelled`. worker가 runner를 **한 번도 호출하지 않음** | 200 |
+| `running` | `cancelling`. 다음 안전 경계에서 `cancelled` | 200 |
+| `cancelling` / `cancelled` | 상태 변화 없음(멱등) | 200 |
+| `succeeded` / `failed`, 또는 pipeline이 정상 종료로 확정한 job | 취소 불가 | 409 |
+
+종단 상태(`succeeded`/`failed`/`cancelled`)는 다시 `running`/`cancelling`으로
+돌아가지 않습니다. `cancelling → succeeded` 전이는 존재하지 않습니다 — pipeline이
+마지막 안전 경계를 지나 정상 종료로 확정하면(point of no return) 그 이후의 취소
+요청은 409로 거절됩니다.
+
+**안전 경계**
+
+source 하나의 파이프라인에서 취소는 다음 네 지점에서만 관찰됩니다.
+
+1. source fetch를 시작하기 전
+2. Bronze 산출물이 기록된 뒤, Silver 시작 전
+3. Silver 산출물이 기록된 뒤, Gold 시작 전
+4. Gold 산출물이 기록된 뒤, export 시작 전
+
+그리고 모든 source가 끝난 뒤 composition/manifest finalize 직전에 마지막 경계가
+있습니다. 취소가 관찰되면 그 다음 단계(composition 포함)는 **시작하지 않습니다**.
+
+**partial manifest**
+
+취소된 run도 manifest를 반드시 남깁니다(AGENTS.md "매니페스트 누락 금지").
+`BuildManifest`에 두 개의 additive 필드가 추가됩니다.
+
+| 필드 | 값 | 의미 |
+| :--- | :--- | :--- |
+| `status` | `ok` / `failed` / `cancelled` | run의 종단 상태. legacy manifest에는 이 필드가 없으며, reader는 부재 시 기존대로 `errors` 유무에서 파생해야 합니다 |
+| `partial` | `true` / `false` | 정상 완료 전에 종료되어 `outputs`가 부분 산출물임을 뜻합니다. 현재는 `status: cancelled`인 run에만 `true`입니다 |
+
+partial manifest 보장 사항:
+
+- `outputs`에는 취소 시점까지 **실제로 기록된 산출물만** 담깁니다. 실행되지 않은
+  stage는 성공으로 기록되지 않습니다.
+- 취소를 실패로 위장하지 않습니다 — `errors`에 취소 사유를 넣지 않습니다.
+- 반대로 실패를 취소로 삼키지도 않습니다 — 이미 실패한 source의 사유는 `errors`에
+  그대로 남고, run의 종단 상태만 `cancelled`입니다.
+- raw exception, stack trace, 내부 경로, credential은 담기지 않습니다.
+- BuildIndex에는 `status='cancelled'`로 기록되며, `manifest.json`이 정본이므로
+  인덱스를 재구축해도(`rebuild_index`) 취소 상태가 보존됩니다. cancelled run은
+  "최근 성공 빌드"로 승격되지 않습니다.
+
+**보존 정책**
+
+부분 산출물은 **기본적으로 삭제하지 않습니다**(감사·디버깅 근거). TTL/자동
+cleanup은 이번 범위에 포함되지 않으며, 운영자가 명시적으로 정리합니다.
+
+### 8.5 관련 ADR
 
 - ADR 0002(#308): Build 실행 모델 결정 (동기 vs 비동기)
 - ADR 0005(#311): API 계약 단일 소스 및 코드 생성 전략
+- ADR 0008(#334): 비동기 build job 모델(취소·부분 산출물 규약) — 제안됨
 
 ## 9. 관련 문서
 

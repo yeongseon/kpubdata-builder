@@ -32,6 +32,19 @@ class BuildManifest:
         started_at: 실행 시작 시각.
         finished_at: 실행 종료 시각.
         schema_version: 매니페스트 형식 버전 (semver). 기본값 MANIFEST_SCHEMA_VERSION.
+        status: run의 종단 상태 (#481, additive). ``"ok"``/``"failed"``는 기존에
+            ``errors`` 유무로 파생하던 값과 동일하고, ``"cancelled"``는 협력적
+            취소로 종료된 run이다. legacy manifest는 이 필드가 없다 — reader는
+            부재 시 기존대로 ``errors`` 유무에서 파생해야 한다
+            (``manifest.status_from_manifest``가 그 규칙의 정본이다).
+            취소된 run도 ``errors``를 지우지 않으므로, 일부 source가 실패한 뒤
+            취소된 run은 실패 사유를 그대로 보존한다(실패를 취소로 삼키지 않는다).
+        partial: 이 run이 정상 완료 전에 종료되어 ``outputs``가 부분 산출물임을
+            뜻한다 (#481, additive). 현재는 ``status == "cancelled"``인 run에만
+            True다 — 취소 시점까지 실제로 기록된 산출물만 담기고, 실행되지 않은
+            단계는 성공으로 기록되지 않는다. 실패한 run의 부분성은 기존대로
+            ``status``/``errors``로 표현하며 이 플래그를 쓰지 않는다(기존 소비자
+            의미를 바꾸지 않기 위함).
         inputs: 입력 파일 또는 소스 식별자 목록.
         outputs: 생성된 결과물 경로 목록.
         warnings: 경고 메시지 목록.
@@ -67,6 +80,8 @@ class BuildManifest:
     started_at: datetime
     finished_at: datetime
     schema_version: str = MANIFEST_SCHEMA_VERSION
+    status: str = "ok"
+    partial: bool = False
     inputs: tuple[str, ...] = ()
     outputs: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()

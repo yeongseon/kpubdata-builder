@@ -29,12 +29,12 @@ v0.4 Builder service는 동기식 실행 모델을 유지합니다.
 | 범위 | 모델 | 기준 |
 | :--- | :--- | :--- |
 | `/validate`, `/preview`, `/build`, 조회 계열 | 요청-응답 동기 처리 | ADR 0002 |
-| 비동기 job 모델 | 후속 설계 범위 | Builder #334 |
+| 비동기 job 모델 (`POST /builds`, `GET /builds/{run_id}`, `POST /builds/{run_id}/cancel`) | 접수 후 즉시 반환, 상태는 polling | ADR 0008 / Builder #334 |
 
 원칙:
 
 - `POST /build`는 현재 요청 안에서 파이프라인을 실행하고 성공/실패 결과를 반환합니다.
-- `POST /builds` / `GET /builds/{run_id}` 같은 비동기 job 계약은 상태·취소·멱등성·부분 산출물 정책이 확정된 뒤 별도 ADR/이슈로 도입합니다.
+- `POST /builds` / `GET /builds/{run_id}` / `POST /builds/{run_id}/cancel`은 ADR 0008(#334)의 상태 머신·멱등성·협력적 취소·부분 산출물 규약에 따라 도입되어 있습니다.
 - Medallion stage별 artifact/preview 조회가 필요해지면 OpenAPI SSOT에 stage-specific endpoint를 먼저 추가합니다.
 
 ## 3. 응답 정책
@@ -54,6 +54,8 @@ v0.4 Builder service는 동기식 실행 모델을 유지합니다.
 | structured quality/drift | `GET /builds/{run_id}/quality`로 run의 source별 `quality_results`/`schema_drift`를, `GET /datasets/{dataset_id}/quality/history`로 dataset의 run별 PASS/WARN/FAIL 집계 이력을 반환 |
 | read-only query | `POST /query`가 server-resolved Silver/Gold table을 logical `dataset`으로 등록하고 별도 capacity/timeout 안에서 실행 |
 | composition(join) | `BuildSpec.composition`이 있으면 `POST /build` 응답에 source별 `outcomes`와 별도로 `composition` 키(결합 결과)가 노출됨 |
+| 비동기 job 취소 | `POST /builds/{run_id}/cancel`이 `queued` job은 실행 전에 곧바로 `cancelled`로, `running` job은 `cancelling`을 거쳐 안전한 stage 경계에서 `cancelled`로 종결. 종단 job이거나 정상 종료로 확정된 job은 `409` |
+| 취소된 run의 부분 산출물 | 삭제하지 않고 partial manifest(`status: cancelled`, `partial: true`)와 함께 보존. 실행되지 않은 stage는 성공으로 기록하지 않으며, 취소를 실패로도 실패를 취소로도 표기하지 않음 |
 | 인증 실패 | `401`은 재인증 대상, `403`은 권한 요청 대상, `503`은 JWKS 일시 장애 대상 |
 
 정책과 구현이 다르면 구현 각주를 늘리지 말고 다음 순서로 정리합니다.

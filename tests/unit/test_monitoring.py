@@ -17,7 +17,7 @@ import pytest
 
 from kpubdata_builder.service import BuilderService, dispatch
 from kpubdata_builder.service.auth import Principal
-from kpubdata_builder.service.jobs import AsyncBuildExecutor
+from kpubdata_builder.service.jobs import AsyncBuildExecutor, RunCancellation
 from kpubdata_builder.service.monitoring import (
     ApiStatus,
     ArtifactStoreStatus,
@@ -271,7 +271,12 @@ def _blocking_runner(entered: threading.Event, release: threading.Event):  # typ
     상태로 묶어두는 테스트 헬퍼(#516).
     """
 
-    def _runner(spec_yaml: str, run_id: str, created_by: str | None) -> _StubResponse:
+    def _runner(
+        spec_yaml: str,
+        run_id: str,
+        created_by: str | None,
+        cancellation: RunCancellation,
+    ) -> _StubResponse:
         entered.set()
         release.wait(timeout=5)
         return _StubResponse(200, {"run_id": run_id})
@@ -363,10 +368,20 @@ class TestQueueWorkerStatus:
         executor = AsyncBuildExecutor(max_workers=2, max_queue_size=10)
         try:
 
-            def _succeed(spec_yaml: str, run_id: str, created_by: str | None) -> _StubResponse:
+            def _succeed(
+                spec_yaml: str,
+                run_id: str,
+                created_by: str | None,
+                cancellation: RunCancellation,
+            ) -> _StubResponse:
                 return _StubResponse(200, {"run_id": run_id})
 
-            def _fail(spec_yaml: str, run_id: str, created_by: str | None) -> _StubResponse:
+            def _fail(
+                spec_yaml: str,
+                run_id: str,
+                created_by: str | None,
+                cancellation: RunCancellation,
+            ) -> _StubResponse:
                 raise RuntimeError("simulated build failure")
 
             executor.submit(spec_yaml="spec", run_id="run-ok", created_by=None, runner=_succeed)

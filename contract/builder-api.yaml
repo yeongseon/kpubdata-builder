@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: KPubData Builder Service API
-  version: "1.16.0"
+  version: "1.17.0"
   description: >-
     Builder 중심 서비스 계약. BuildSpec 검증, preview, build 실행, artifact 조회,
     계약 버전 조회를 제공한다. CLI와 HTTP service mode(#36)가 동일한 도메인 계약을
@@ -73,7 +73,21 @@ info:
     `GET /builds/{run_id}`(잡 상태 polling, 성공 잡의 최종 build 응답 포함)을
     추가한다(#480, additive). 잡 상태 조회에 ownership 게이트를 적용해
     cross-owner의 build 출력 노출을 차단한다(behavioral tightening — 이전에는
-    미검사였음). cooperative cancellation endpoint는 #481로 계획 중이다.
+    미검사였음).
+    v1.17.0은 ADR 0008의 협력적 취소(cooperative cancellation)를 구현한다 —
+    `POST /builds/{run_id}/cancel`을 추가한다(#481, additive). `queued` job은
+    worker가 runner를 실행하기 전에 곧바로 `cancelled`로 종결되고(파이프라인
+    산출물 0개), `running` job은 `cancelling`을 거쳐 **안전한 stage
+    경계**(Bronze/Silver/Gold 산출물이 기록된 뒤, 다음 stage 시작 전)에서
+    `cancelled`로 종결된다. worker thread를 강제로 죽이지 않으며, 실행 중인
+    stage를 중간에 끊지 않는다. 이미 `succeeded`/`failed`인 job이나 파이프라인이
+    정상 종료로 확정한 job에 대한 취소 요청은 409다. `BuildJobStatus` 어휘는
+    기존 값을 그대로 재사용하며 새 상태를 만들지 않는다. 부분 산출물은 기본적으로
+    삭제하지 않고 partial manifest와 함께 보존한다 — `BuildManifest`에
+    `status`(`ok`/`failed`/`cancelled`)와 `partial`을 additive로 추가해, 취소된
+    run이 성공 run으로 오인되지 않고 실행되지 않은 stage가 성공으로 기록되지
+    않는다. run event 어휘에는 `run_cancelled`가 추가되며(run당 정확히 한 번,
+    terminal 확정 시점) `BuildSummary.status`에도 `cancelled`가 관측 가능해진다.
 servers:
   - url: http://localhost:8000
     description: 로컬 builder 개발 서버
@@ -874,6 +888,81 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /builds/{run_id}/cancel:
+    post:
+      operationId: cancelBuildJob
+      summary: 비동기 build job 협력적 취소 요청 (#481, ADR 0008)
+      description: >-
+        active(`queued`/`running`) async build job의 취소를 요청한다. worker
+        thread를 강제로 종료하지 않는다 — `queued` job은 worker가 runner를
+        실행하기 전에 곧바로 `cancelled`로 종결되고(파이프라인 산출물 0개),
+        `running` job은 즉시 `cancelling`으로 표시된 뒤 **안전한 stage
+        경계**(Bronze/Silver/Gold 산출물이 기록된 뒤 다음 stage를 시작하기 전)에서
+        `cancelled`로 종결된다. 실행 중인 stage를 중간에 끊지 않으므로 응답
+        시점에 job이 아직 `cancelling`일 수 있다 — 최종 상태는
+        `GET /builds/{run_id}`로 확인한다. 취소 시점까지 만들어진 산출물은
+        삭제하지 않고 `partial: true` manifest(`status: cancelled`)와 함께
+        보존한다. 이미 `cancelling`/`cancelled`인 job에 다시 요청해도 현재
+        상태를 그대로 200으로 돌려주는 멱등 연산이다. ownership 판정은
+        `GET /builds/{run_id}`와 동일한 canonical 규칙(manifest 우선, active는
+        registry snapshot의 stable owner_id)을 따른다.
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: >-
+            취소가 접수됨(또는 이미 취소된 job에 대한 멱등 재요청). 본문은 전이
+            직후의 job 스냅샷이다.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BuildJob"
+              examples:
+                QueuedCancelled:
+                  summary: 실행 전 queued job이 즉시 종결 취소됨
+                  value:
+                    run_id: run-0123456789abcdef
+                    status: cancelled
+                    created_at: "2026-08-16T09:00:00+00:00"
+                    updated_at: "2026-08-16T09:00:02+00:00"
+                    created_by: oidc:user-a
+                RunningCancelling:
+                  summary: running job에 취소를 요청함(다음 안전 경계에서 종결)
+                  value:
+                    run_id: run-0123456789abcdef
+                    status: cancelling
+                    created_at: "2026-08-16T09:00:00+00:00"
+                    updated_at: "2026-08-16T09:00:03+00:00"
+                    created_by: oidc:user-a
+        "400":
+          description: 안전하지 않은 run_id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: run 소유자가 아님
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: 알려지지 않은 run(registry에 없음)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: >-
+            더 이상 취소할 수 없는 job — 이미 `succeeded`/`failed`로 끝났거나,
+            파이프라인이 마지막 안전 경계를 지나 정상 종료로 확정했다.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /builds/{run_id}/manifest:
     get:
       operationId: getBuildManifest
@@ -1003,9 +1092,8 @@ paths:
         BuildSpec을 검증해 async build job으로 큐잉하고 즉시 초기 상태를 반환한다.
         동일 run_id의 active job이 있으면 idempotent하게 기존 잡 상태를 200으로
         반환하고(#513), 이미 완료된 run_id면 409, queue가 가득 차면 429를
-        반환한다. 잡의 실행 결과는 `GET /builds/{run_id}`로 polling한다.
-        cooperative cancellation(`POST /builds/{run_id}/cancel`)은 #481로
-        계획 중이며 이 계약에 포함되지 않는다.
+        반환한다. 잡의 실행 결과는 `GET /builds/{run_id}`로 polling하고,
+        협력적 취소는 `POST /builds/{run_id}/cancel`(#481)로 요청한다.
       requestBody:
         required: true
         content:
@@ -3136,6 +3224,24 @@ components:
           type: string
         schema_version:
           type: string
+        status:
+          type: string
+          enum: [ok, failed, cancelled]
+          description: >-
+            run의 종단 상태 (#481, additive). `ok`/`failed`는 기존에 `errors`
+            유무로 파생하던 값과 동일하고, `cancelled`는 협력적 취소로 종료된
+            run이다. legacy manifest에는 이 필드가 없다 — reader는 부재 시
+            기존대로 `errors` 유무에서 파생해야 한다. 취소된 run도 이미 실패한
+            source의 사유를 `errors`에 그대로 보존한다(취소가 실패를 삼키지
+            않는다).
+        partial:
+          type: boolean
+          description: >-
+            이 run이 정상 완료 전에 종료되어 `outputs`가 부분 산출물임을 뜻한다
+            (#481, additive). 현재는 `status: cancelled`인 run에만 `true`이며,
+            취소 시점까지 실제로 기록된 산출물만 담긴다 — 실행되지 않은 stage는
+            성공으로 기록되지 않는다. 부분 산출물은 기본적으로 삭제하지
+            않는다(감사/디버깅 목적 보존).
         inputs:
           type: array
           items:
@@ -3286,8 +3392,11 @@ components:
           description: 빌드 실행 식별자
         status:
           type: string
-          enum: [ok, failed]
-          description: 빌드 상태
+          enum: [ok, failed, cancelled]
+          description: >-
+            빌드 상태. `cancelled`(#481)는 협력적 취소로 종료된 run이며 부분
+            산출물과 partial manifest가 함께 남는다 — 성공한 빌드로 취급하면
+            안 된다.
         started_at:
           type: [string, "null"]
           description: 빌드 시작 시각 (ISO 8601 또는 null)
@@ -3310,8 +3419,11 @@ components:
           type: string
           enum: [queued, running, cancelling, succeeded, failed, cancelled]
           description: >-
-            `cancelling`/`cancelled`는 #481 cooperative cancellation 착지 전
-            예약된 vocabulary다(현재 전이를 일으키는 endpoint는 없음).
+            `POST /builds/{run_id}/cancel`(#481)이 `queued` job을 곧바로
+            `cancelled`로, `running` job을 `cancelling`으로 전이시키고,
+            `cancelling` job은 다음 안전한 stage 경계에서 `cancelled`가 된다.
+            `succeeded`/`failed`/`cancelled`는 종단 상태이며 다시
+            `running`/`cancelling`으로 돌아가지 않는다.
         created_at:
           type: string
           description: job 접수 시각 (ISO 8601)
@@ -3358,14 +3470,16 @@ components:
       description: >-
         structured run event의 bounded vocabulary (#496). run_submitted은
         실제 async job submission이 있는 `POST /builds`(비동기)에서만 발생하며
-        동기 `POST /build`에는 없다. run_cancelled은 아직 이 API에 없다 —
-        cancellation state transition(#481)이 구현되기 전까지는 발생하지
-        않는다.
+        동기 `POST /build`에는 없다. run_cancelled(#481)도 async 전용이며 job이
+        실제로 terminal `cancelled`로 확정되는 순간 run당 정확히 한 번만
+        발생한다 — 같은 run에 run_finished/run_failed와 함께 나타나지 않는다.
+        과도기 상태(`cancelling`)는 job status로만 노출되고 별도 event는 없다.
       enum:
         - run_submitted
         - run_started
         - run_finished
         - run_failed
+        - run_cancelled
         - source_fetch_started
         - source_fetch_completed
         - source_fetch_failed

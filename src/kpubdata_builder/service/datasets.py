@@ -25,6 +25,7 @@ from pathlib import Path
 
 import yaml
 
+from ..manifest import status_from_manifest
 from ..spec import BuildSpec, JsonValue, parse_spec
 from ..spec.serializer import BUILDSPEC_SNAPSHOT_FILENAME
 from ..stages._path_safety import ensure_within
@@ -281,7 +282,7 @@ def retain_canonical_run_records(
             RunRecord(
                 run_id=record.run_id,
                 dataset_id=dataset_id,
-                status=_status_from_manifest(manifest, fallback_status=record.status),
+                status=status_from_manifest(manifest, fallback_status=record.status),
                 started_at=started_at if isinstance(started_at, str) else None,
                 finished_at=finished_at if isinstance(finished_at, str) else None,
                 spec_digest=record.spec_digest,
@@ -290,17 +291,6 @@ def retain_canonical_run_records(
             )
         )
     return canonical
-
-
-def _status_from_manifest(
-    manifest: dict[str, object], *, fallback_status: str | None = None
-) -> str:
-    explicit_status = manifest.get("status")
-    if isinstance(explicit_status, str) and explicit_status in ("ok", "failed", "cancelled"):
-        return explicit_status
-    if manifest.get("errors"):
-        return "failed"
-    return "cancelled" if fallback_status == "cancelled" else "ok"
 
 
 def collect_run_records_from_filesystem(output_root: Path) -> list[RunRecord]:
@@ -330,7 +320,7 @@ def collect_run_records_from_filesystem(output_root: Path) -> list[RunRecord]:
             RunRecord(
                 run_id=run_dir.name,
                 dataset_id=dataset_id,
-                status=_status_from_manifest(manifest),
+                status=status_from_manifest(manifest),
                 started_at=started_at if isinstance(started_at, str) else None,
                 finished_at=finished_at if isinstance(finished_at, str) else None,
                 spec_digest=None,

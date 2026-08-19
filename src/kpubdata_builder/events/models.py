@@ -24,9 +24,14 @@ from typing import Literal
 
 from ..spec.models import JsonValue
 
-# run 수준 전이. "cancelled"는 아직 이 저장소에 실제 cancellation 전이가 없어
-# (#481 미구현) 어휘에 포함하지 않는다 — 그 전이가 생기면 함께 추가한다.
-RunEventName = Literal["run_submitted", "run_started", "run_finished", "run_failed"]
+# run 수준 전이. "run_cancelled"(#481)는 async job이 실제로 terminal
+# ``cancelled``로 확정되는 순간에만 기록되는 종결 event다 — queued 취소(파이프라인
+# 미실행)와 running 취소(안전 경계 종결)가 모두 이 하나로 끝나며, 같은 run에
+# ``run_finished``/``run_failed``와 함께 나타나지 않는다. 과도기 상태
+# (``cancelling``)는 job status로만 노출하고 별도 event를 만들지 않는다.
+RunEventName = Literal[
+    "run_submitted", "run_started", "run_finished", "run_failed", "run_cancelled"
+]
 
 # source fetch 전이 (#498 resolver 경계: public_api/file/url 공통).
 SourceFetchEventName = Literal[
