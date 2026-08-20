@@ -143,6 +143,33 @@ startup 비용 대신 강한 취소·수명 격리를 선택한다. 비동기 bu
 분리하면 HTTP process 장애와 GIL/메모리 경쟁을 줄이지만 외부 queue, 상태 영속성, credential
 전달 신뢰경계와 운영 복잡도가 증가한다. 이 tradeoff는 ADR 0008 승인 과정에서 결정한다.
 
+## 11. 컨테이너 이미지 취약점 스캔 게이트 (Trivy)
+
+`docker.yml` 워크플로가 serve 이미지를 빌드해 Trivy로 스캔한다 (#376 도입, #552 정책 문서화).
+
+**게이트 정책** (변경 시 이 문서와 함께 갱신할 것):
+
+| 항목 | 값 | 근거 |
+| :--- | :--- | :--- |
+| 대상 severity | `CRITICAL,HIGH` | MEDIUM 이하는 배포를 막는 신호로 쓰지 않는다 |
+| 실패 동작 | `exit-code: 1` (job 실패 → GHCR publish 차단) | 취약점이 있는 이미지가 배포되지 않게 fail-closed |
+| `ignore-unfixed` | `true` | 업스트림 패치가 없는 finding은 PR 신호를 오염시킨다 |
+| 예외 처리 | 원칙적으로 없음. 불가피한 경우 `.trivyignore`에 CVE·만료일·근거 주석 명시 | 무기한 예외 금지 |
+
+**base image 취약점 대응 이력**:
+
+- CVE-2026-53615 (Debian `util-linux` 계열 HIGH 9건, 2026-08): 베이스 이미지의
+  `apt-get upgrade` 레이어를 Dockerfile에 추가해 해소 (PR #547). 이후 기능 PR들이
+  이미지 스캔 실패로 오염되지 않도록, **베이스 패치는 기능 PR과 별도 커밋**으로
+  Dockerfile에 반영하는 것이 원칙이다.
+- Trivy 자체·action 버전 bump는 dependabot이 따른다 (워크플로 수정이라 병합에
+  `workflow` 스코프 토큰 또는 웹 UI가 필요할 수 있다).
+
+**CI 신호 분리**: docker 워크플로는 `Dockerfile`/`docker-entrypoint.sh`/`.dockerignore`/
+`pyproject.toml`/`uv.lock`/`src/**`/워크플로 자체 변경 시에만 실행된다(이미지에
+포함되는 파일이 바뀌어야 재스캔이 의미 있음). 문서·테스트 전용 변경은 스캔을
+트리거하지 않으므로 기능 PR과 독립적인 신호를 유지한다.
+
 ## 관련
 
 - [ADR 0006](./adrs/0006-service-auth-and-deployment.md) — 인증·배포(fail-closed, Docker)
