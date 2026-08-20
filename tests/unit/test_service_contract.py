@@ -64,6 +64,8 @@ _DISPATCH_ROUTES: dict[tuple[str, str], str] = {
     ("/builds/{run_id}/stages/{stage}", "GET"): "getBuildStageDetail",
     ("/builds/{run_id}/quality", "GET"): "getBuildQuality",
     ("/builds/{run_id}/events", "GET"): "getBuildEvents",
+    ("/builds/{run_id}/publish/readiness", "GET"): "getPublishReadiness",
+    ("/builds/{run_id}/publish", "POST"): "publishBuild",
     ("/monitoring/summary", "GET"): "getMonitoringSummary",
     ("/monitoring/builds", "GET"): "getMonitoringBuilds",
     ("/uploads", "POST"): "createUpload",
@@ -101,6 +103,8 @@ _REQUIRED_OPERATIONS = [
     ("/builds/{run_id}/stages/{stage}", "get"),
     ("/builds/{run_id}/quality", "get"),
     ("/builds/{run_id}/events", "get"),
+    ("/builds/{run_id}/publish/readiness", "get"),
+    ("/builds/{run_id}/publish", "post"),
     ("/monitoring/summary", "get"),
     ("/monitoring/builds", "get"),
     ("/uploads", "post"),
@@ -395,6 +399,8 @@ _IMPLEMENTED_OPERATIONS = {
     "getBuildStageDetail",
     "getBuildQuality",
     "getBuildEvents",
+    "getPublishReadiness",
+    "publishBuild",
     "getMonitoringSummary",
     "getMonitoringBuilds",
     "createUpload",
@@ -621,6 +627,8 @@ _OPERATION_STATUS_CODES: dict[str, set[int]] = {
     "getBuildStageDetail": {200, 400, 403, 404},
     "getBuildQuality": {200, 400, 403, 404},
     "getBuildEvents": {200, 400, 403, 404},
+    "getPublishReadiness": {200, 400, 403, 404},
+    "publishBuild": {200, 400, 403, 404, 409, 502},
     "getMonitoringSummary": {200},
     "getMonitoringBuilds": {200, 400},
     "createUpload": {200, 400, 403, 413},
@@ -676,6 +684,36 @@ def test_declared_status_codes_match_implementation() -> None:
             f"  실제 구현: {sorted(all_implemented_codes)}\n"
             f"  차이: {sorted(declared_codes ^ all_implemented_codes)}"
         )
+
+
+def test_publish_request_contract_matches_huggingface_runtime() -> None:
+    """#491 HTTP target/options와 실제 fail-closed runtime 계약을 고정한다."""
+    contract = _load_contract()
+    schemas = contract["components"]["schemas"]
+    assert schemas["PublishTarget"]["enum"] == ["huggingface"]
+    assert schemas["PublishRequest"]["additionalProperties"] is False
+    hf_options = schemas["PublishHuggingFaceOptions"]
+    assert hf_options["additionalProperties"] is False
+    assert hf_options["properties"]["private"] == {
+        "type": "boolean",
+        "default": True,
+    }
+
+    operation = contract["paths"]["/builds/{run_id}/publish"]["post"]
+    example = operation["requestBody"]["content"]["application/json"]["examples"]["HuggingFace"][
+        "value"
+    ]
+    schema = operation["requestBody"]["content"]["application/json"]["schema"]
+    assert validate(example, schema, contract) == []
+    assert validate(
+        {
+            "target": "huggingface",
+            "destination": "owner/dataset",
+            "options": {"visibility": "private"},
+        },
+        schema,
+        contract,
+    )
 
 
 def _extract_response_schema_required_fields(

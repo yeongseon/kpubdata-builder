@@ -21,6 +21,7 @@ import os
 import threading
 import time
 from collections.abc import Callable, Iterable, Mapping
+from contextlib import suppress
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol, cast, runtime_checkable
@@ -46,6 +47,7 @@ from ..pipeline import (
     preview_build,
     run_build,
 )
+from ..publishers import PUBLISHER_REGISTRY
 from ..quality import QualityCheckResult
 from ..query.engine import QueryExecutionError, QueryTimeoutError
 from ..query.models import QueryRequest, QueryStage
@@ -74,6 +76,7 @@ from . import datasets as datasets_service
 from . import events as events_service
 from . import monitoring as monitoring_service
 from . import ownership as ownership_module
+from . import publish as publish_service
 from . import quality as quality_service
 from . import stages as stages_service
 from .auth import AuthError, Principal, authenticate
@@ -287,14 +290,16 @@ def _strip_internal_fields(entries: list[_BuildListEntry]) -> list[_BuildListEnt
 # idempotent/409/429)와 GET /builds/{run_id}(잡 상태 polling) 추가(#480). 잡 상태
 # 조회에 ownership 게이트를 적용해 cross-owner의 build 출력(response) 노출을
 # 차단한다(behavioral tightening — 이전에는 미검사).
-# 1.16.0 -> 1.17.0: POST /builds/{run_id}/cancel을 추가한다(#481, ADR 0008 —
+# 1.16.0 -> 1.17.0: build publish 표면을 추가한다(#491) — GET /builds/{run_id}/publish/
+# readiness와 POST /builds/{run_id}/publish(idempotent receipt, TOCTOU 재검사).
+# 1.17.0 -> 1.18.0: POST /builds/{run_id}/cancel을 추가한다(#481, ADR 0008 —
 # additive). queued job은 실행 전에 즉시 cancelled로, running job은 cancelling을
 # 거쳐 안전한 stage 경계에서 cancelled로 종결된다(강제 종료 없음). BuildJobStatus
 # 어휘(queued/running/cancelling/succeeded/failed/cancelled)는 그대로 재사용한다.
 # 함께 additive로: BuildManifest에 status/partial(부분 산출물 표시),
 # BuildEventName에 run_cancelled, BuildSummary.status enum에 cancelled(이미
 # BuildIndex/dataset 계약이 쓰던 값이 이제 실제로 관측 가능해진다).
-API_CONTRACT_VERSION = "1.17.0"
+API_CONTRACT_VERSION = "1.18.0"
 
 
 def _quality_result_to_json(r: QualityCheckResult) -> dict[str, JsonValue]:
@@ -331,6 +336,35 @@ def _parse_spec_text(spec_yaml: str) -> BuildSpec:
     if not isinstance(raw, dict):
         raise SpecLoadError("top-level YAML must be a mapping")
     return parse_spec(cast(dict[str, object], raw))
+
+
+def _publish_receipt_response(
+    claim_status: publish_service.PublishClaimStatus,
+    receipt: publish_service.PublishReceipt,
+) -> ServiceResponse | None:
+    """기존 receipt 상태를 replay/409 wire response로 변환한다."""
+    if claim_status == "claimed":
+        return None
+    if claim_status == "replay" and receipt.result is not None:
+        return ServiceResponse(200, cast(dict[str, JsonValue], receipt.result))
+    if claim_status == "replay":
+        claim_status = "state_unknown"
+    conflict_codes = {
+        "in_progress": (
+            "publish_in_progress",
+            "publish operation is already in progress",
+        ),
+        "state_unknown": (
+            "publish_state_unknown",
+            "publish operation outcome is unknown; automatic retry is blocked",
+        ),
+        "conflict": (
+            "publish_conflict",
+            "this run and destination were already published with different options",
+        ),
+    }
+    code, message = conflict_codes[claim_status]
+    return ServiceResponse(409, {"error": message, "code": code})
 
 
 class BuilderService:
@@ -370,6 +404,9 @@ class BuilderService:
         # Monitoring API용 bounded latency recorder (#516). dispatch()가 매 요청
         # 처리 시간을 기록한다 — 인스턴스별로 분리해 테스트 간 상태가 섞이지 않는다.
         self._latency_recorder = monitoring_service.LatencyRecorder()
+        # 외부 publish side effect의 durable idempotency receipt. 객체 생성은
+        # 파일을 만들지 않으며 최초 POST claim 때 SQLite를 지연 초기화한다.
+        self._publish_receipts = publish_service.PublishReceiptStore(output_root)
         self._query_service = query_service or QueryService()
         repository = credential_repository or _credential_repository_from_env(output_root)
         self._credential_resolver = CredentialResolver(repository)
@@ -1784,6 +1821,245 @@ class BuilderService:
             body["sample_available"] = False
 
         return ServiceResponse(200, body)
+
+    def _publish_context(
+        self, run_id: str
+    ) -> tuple[publish_service.RunStatus, dict[str, JsonValue] | None, BuildSpec | None]:
+        """publish readiness/POST가 공유하는 (status, manifest, spec) 조회.
+
+        route adapter가 이미 존재/ownership을 판정했다는 전제 아래(``/stages``,
+        ``/quality``와 동일한 패턴) 호출된다. manifest가 있으면 그것이 정본
+        (terminal run)이고, 없으면 async job registry(#482)에서 active/terminal
+        상태를 읽는다 — ``routes._guards.check_active_run_access``와 동일한
+        두 소스를 쓴다(#496 follow-up 패턴 재사용).
+        """
+        manifest = cast(
+            "dict[str, JsonValue] | None", datasets_service.read_manifest(self._output_root, run_id)
+        )
+        if manifest is not None:
+            status: publish_service.RunStatus = "failed" if manifest.get("errors") else "succeeded"
+            spec = datasets_service.read_snapshot_spec(self._output_root, run_id)
+            return status, manifest, spec
+        snapshot = self._async_builds.get(run_id)
+        if snapshot is not None:
+            return snapshot.status, None, None
+        # route adapter의 check_active_run_access가 이미 존재를 보장했으므로
+        # 이론상 도달하지 않는다 — fail-closed로 failed 취급한다.
+        return "failed", None, None
+
+    def publish_readiness(self, run_id: str, target: str) -> ServiceResponse:
+        """GET /builds/{run_id}/publish/readiness (#491).
+
+        side-effect-free다 — Publisher를 호출하거나 원격 dataset을 만들지
+        않는다. ready == blockers가 하나도 없음으로 deterministic하게 계산한다.
+        """
+        resolved_target, error = publish_service.resolve_target(target)
+        if resolved_target is None:
+            return ServiceResponse(
+                400,
+                {"error": error or "invalid target", "code": "unsupported_target"},
+            )
+
+        status, manifest, spec = self._publish_context(run_id)
+        result = publish_service.build_readiness(
+            run_id=run_id,
+            target=resolved_target,
+            status=status,
+            manifest=cast("dict[str, object] | None", manifest),
+            spec=spec,
+            output_root=self._output_root,
+        )
+        return ServiceResponse(
+            200,
+            {
+                "run_id": run_id,
+                "target": result.target,
+                "ready": result.ready,
+                "blockers": cast(JsonValue, [b.to_body() for b in result.blockers]),
+                "warnings": cast(JsonValue, [w.to_body() for w in result.warnings]),
+            },
+        )
+
+    def publish(
+        self,
+        run_id: str,
+        body: Mapping[str, JsonValue] | None,
+        *,
+        principal: Principal,
+    ) -> ServiceResponse:
+        """POST /builds/{run_id}/publish (#491).
+
+        readiness와 완전히 같은 deterministic 검사를 다시 수행한다 — 호출자가
+        먼저 GET readiness를 불렀다고 신뢰하지 않는다(TOCTOU: readiness 통과
+        이후 상태가 바뀌어도 여기서 다시 막힌다). blocker가 하나라도 있으면
+        기존 Publisher를 절대 호출하지 않는다.
+        """
+        if not isinstance(body, Mapping):
+            return ServiceResponse(400, {"error": "request body must be a JSON object"})
+
+        unknown_fields = sorted(
+            str(key) for key in body if key not in {"target", "destination", "options"}
+        )
+        if unknown_fields:
+            return ServiceResponse(
+                400, {"error": f"unsupported request field(s): {unknown_fields!r}"}
+            )
+
+        resolved_target, error = publish_service.resolve_target(body.get("target"))
+        if resolved_target is None:
+            return ServiceResponse(
+                400,
+                {"error": error or "invalid target", "code": "unsupported_target"},
+            )
+
+        destination_error = publish_service.validate_destination(
+            resolved_target, body.get("destination")
+        )
+        if destination_error is not None:
+            return ServiceResponse(400, {"error": destination_error})
+        destination = cast(str, body["destination"])
+
+        options_error, options = publish_service.validate_options(
+            resolved_target, body.get("options")
+        )
+        if options_error is not None:
+            return ServiceResponse(400, {"error": options_error})
+
+        owner_key = principal.owner_id or principal.label
+        try:
+            existing = self._publish_receipts.lookup(
+                owner_key=owner_key,
+                run_id=run_id,
+                target=resolved_target,
+                destination=destination,
+                options=options,
+            )
+        except Exception as exc:
+            logger.error(
+                "publish receipt lookup failed: run_id=%s target=%s error_type=%s",
+                run_id,
+                resolved_target,
+                type(exc).__name__,
+            )
+            return ServiceResponse(
+                409,
+                {
+                    "error": "publish operation state is unavailable; retry is blocked",
+                    "code": "publish_state_unknown",
+                },
+            )
+        if existing is not None:
+            existing_response = _publish_receipt_response(*existing)
+            if existing_response is not None:
+                return existing_response
+
+        status, manifest, spec = self._publish_context(run_id)
+        readiness = publish_service.build_readiness(
+            run_id=run_id,
+            target=resolved_target,
+            status=status,
+            manifest=cast("dict[str, object] | None", manifest),
+            spec=spec,
+            output_root=self._output_root,
+        )
+        if not readiness.ready or readiness.artifacts is None:
+            return ServiceResponse(
+                409,
+                {
+                    "error": f"run is not ready to publish to {resolved_target!r}",
+                    "blockers": cast(JsonValue, [b.to_body() for b in readiness.blockers]),
+                },
+            )
+
+        try:
+            claim_status, receipt = self._publish_receipts.claim(
+                owner_key=owner_key,
+                run_id=run_id,
+                target=resolved_target,
+                destination=destination,
+                options=options,
+            )
+        except Exception as exc:
+            logger.error(
+                "publish receipt claim failed: run_id=%s target=%s error_type=%s",
+                run_id,
+                resolved_target,
+                type(exc).__name__,
+            )
+            return ServiceResponse(
+                409,
+                {
+                    "error": "publish operation state is unavailable; retry is blocked",
+                    "code": "publish_state_unknown",
+                },
+            )
+
+        claimed_response = _publish_receipt_response(claim_status, receipt)
+        if claimed_response is not None:
+            return claimed_response
+
+        publisher = PUBLISHER_REGISTRY[resolved_target]
+        publish_kwargs: dict[str, object] = {"destination": destination, **options}
+        try:
+            result = publisher.publish(readiness.artifacts.paths, **publish_kwargs)  # type: ignore[arg-type]
+        except Exception as exc:
+            # Publisher가 던지는 예외(PublishError, credential/dependency
+            # RuntimeError, 그 외 검토하지 않은 예외 포함)는 어떤 것도 "안전한
+            # known exception"으로 취급하지 않는다 — 외부 SDK 예외 메시지에는
+            # 원격 응답 원문이나(#491 지침 1) 로컬 filesystem 절대 경로가 섞일
+            # 수 있다. client에는 항상 stable generic 메시지만 보낸다.
+            #
+            # 서버 log도 str(exc)/repr(exc)나 traceback(로그에 다시 raw
+            # message를 남기는 logger.exception())을 쓰지 않는다 — exception
+            # type과 이미 안전하다고 확인된 context만 남긴다.
+            logger.error(
+                "publish failed: run_id=%s target=%s error_type=%s",
+                run_id,
+                resolved_target,
+                type(exc).__name__,
+            )
+            try:
+                self._publish_receipts.mark_unknown(receipt.fingerprint)
+            except Exception as receipt_exc:
+                logger.error(
+                    "publish receipt unknown-state persist failed: "
+                    "run_id=%s target=%s error_type=%s",
+                    run_id,
+                    resolved_target,
+                    type(receipt_exc).__name__,
+                )
+            return ServiceResponse(
+                502,
+                {"error": "publish failed due to an unexpected error", "code": "publish_failed"},
+            )
+
+        response_body: dict[str, JsonValue] = {
+            "run_id": run_id,
+            "target": resolved_target,
+            "publisher": result.publisher,
+            "destination": destination,
+            "reference": result.reference,
+            "artifact_count": result.artifact_count,
+            "status": result.status,
+        }
+        try:
+            self._publish_receipts.mark_succeeded(
+                receipt.fingerprint, cast(dict[str, object], response_body)
+            )
+        except Exception as exc:
+            logger.error(
+                "publish receipt success persist failed: run_id=%s target=%s error_type=%s",
+                run_id,
+                resolved_target,
+                type(exc).__name__,
+            )
+            with suppress(Exception):
+                self._publish_receipts.mark_unknown(receipt.fingerprint)
+            return ServiceResponse(
+                502,
+                {"error": "publish failed due to an unexpected error", "code": "publish_failed"},
+            )
+        return ServiceResponse(200, response_body)
 
     def get_build_events(self, run_id: str, *, limit: int, tail: bool) -> ServiceResponse:
         """run의 append-only structured event timeline을 조회한다 (#496).

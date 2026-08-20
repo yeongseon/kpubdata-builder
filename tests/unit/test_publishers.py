@@ -97,13 +97,30 @@ class TestLocalPublisherFailurePolicy:
             LocalPublisher().publish((artifact,), destination=str(tmp_path / "registry"))
 
 
-def _install_fake_hf(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[dict[str, str]]]:
+def _install_fake_hf(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[dict[str, object]]]:
     """huggingface_hub.HfApi를 가짜로 주입하고 업로드 호출을 기록한다."""
-    calls: dict[str, list[dict[str, str]]] = {"files": [], "folders": []}
+    calls: dict[str, list[dict[str, object]]] = {"repos": [], "files": [], "folders": []}
 
     class FakeHfApi:
         def __init__(self, token: str | None = None) -> None:
             self._token = token
+
+        def create_repo(
+            self,
+            *,
+            repo_id: str,
+            repo_type: str,
+            private: bool,
+            exist_ok: bool,
+        ) -> None:
+            calls["repos"].append(
+                {
+                    "repo_id": repo_id,
+                    "repo_type": repo_type,
+                    "private": private,
+                    "exist_ok": exist_ok,
+                }
+            )
 
         def upload_file(
             self,
@@ -154,6 +171,39 @@ class TestHuggingFacePublisher:
         repo_paths = {c["path_in_repo"] for c in calls["files"]}
         assert repo_paths == {"README.md", "data/train.parquet"}
         assert result.artifact_count == 2
+
+    @pytest.mark.parametrize("private", [True, False])
+    def test_create_repo_uses_requested_new_repo_visibility(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        private: bool,
+    ) -> None:
+        calls = _install_fake_hf(monkeypatch)
+        artifact = tmp_path / "data.parquet"
+        artifact.write_text("x", encoding="utf-8")
+
+        HuggingFacePublisher().publish((artifact,), destination="org/ds", private=private)
+
+        assert calls["repos"] == [
+            {
+                "repo_id": "org/ds",
+                "repo_type": "dataset",
+                "private": private,
+                "exist_ok": True,
+            }
+        ]
+
+    def test_create_repo_defaults_to_private(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = _install_fake_hf(monkeypatch)
+        artifact = tmp_path / "data.parquet"
+        artifact.write_text("x", encoding="utf-8")
+
+        HuggingFacePublisher().publish((artifact,), destination="org/ds")
+
+        assert calls["repos"][0]["private"] is True
 
     def test_same_basename_different_dirs_do_not_collide(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

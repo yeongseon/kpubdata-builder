@@ -30,12 +30,20 @@ class HuggingFacePublisher(BasePublisher):
     def name(self) -> str:
         return "huggingface"
 
-    def publish(self, artifact_paths: tuple[Path, ...], *, destination: str) -> PublishResult:
+    def publish(
+        self,
+        artifact_paths: tuple[Path, ...],
+        *,
+        destination: str,
+        private: bool = True,
+    ) -> PublishResult:
         """artifact를 HuggingFace 데이터셋 레포지토리에 게시한다.
 
         매개변수:
             artifact_paths: 업로드할 파일 또는 디렉토리 목록.
             destination: HF 레포지토리 ID (예: "kpubdata/air-quality").
+            private: 신규 repo 생성 시 visibility. ``exist_ok=True``이므로 기존
+                repo의 visibility는 변경하지 않는다.
         """
         try:
             from huggingface_hub import HfApi  # type: ignore[import-not-found]
@@ -53,6 +61,15 @@ class HuggingFacePublisher(BasePublisher):
             )
 
         api = HfApi(token=token)
+        # 먼저 신규 dataset repo가 존재하도록 보장한다. exist_ok=True인 기존
+        # repo에는 visibility mutation을 수행하지 않으며 update_repo_settings도
+        # 호출하지 않는다(#491).
+        api.create_repo(
+            repo_id=destination,
+            repo_type="dataset",
+            private=private,
+            exist_ok=True,
+        )
         count = 0
 
         # 파일 artifact의 공통 상위 디렉터리를 기준으로 repo 내 경로를 정한다.
