@@ -173,6 +173,9 @@ def test_extraction_script_emits_documented_json_shape() -> None:
         check=True,
         capture_output=True,
         text=True,
+        # 스크립트가 ensure_ascii=False(한글 원문)로 출력하므로 Windows cp949
+        # 기본 디코딩을 쓰지 않는다(#553).
+        encoding="utf-8",
     )
     payload = json.loads(completed.stdout)
     assert payload["contract_version"] == "1.18.0"

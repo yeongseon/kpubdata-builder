@@ -14,6 +14,8 @@ from kpubdata_builder.stages._path_safety import (
     validate_path_segment,
 )
 
+from .conftest import requires_symlinks
+
 
 class TestStripWindowsExtendedPrefix:
     """Windows ``\\\\?\\`` 확장 경로 프리픽스 제거 (#506).
@@ -103,6 +105,7 @@ class TestEnsureWithin:
 
         ensure_within(root, target, label="silver directory")  # 예외 없음
 
+    @requires_symlinks
     def test_rejects_escape_via_existing_symlink(self, tmp_path: Path) -> None:
         root = tmp_path / "root"
         root.mkdir()

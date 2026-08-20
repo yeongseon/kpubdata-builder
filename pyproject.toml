@@ -61,6 +61,9 @@ dev = [
   "pytest-cov>=5,<8",
   "ruff>=0.5,<1",
   "types-PyYAML>=6.0",
+  # Windows에서 zoneinfo가 시스템 tz 데이터베이스를 찾지 못하는 경우를
+  # 대비해 tzdata wheel을 보장한다(#553). Linux에서는 no-op다.
+  "tzdata>=2024.1",
   # auth extra를 dev에 포함해 CI(mypy/ruff/pytest)에서 항상 타입 체크 가능 (#385).
   "pyjwt[crypto]>=2.9,<3",
 ]
