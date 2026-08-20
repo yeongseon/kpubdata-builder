@@ -144,6 +144,12 @@ class BuildEventRecorder:
     # 막아야 한다). ``BuilderService.submit_build``가
     # ``AsyncBuildExecutor.submit(on_accept=...)`` hook에서 store에 직접
     # append해 그 전파를 그대로 활용한다.
+    #
+    # "run_cancelled"(#481)도 여기 없다 — 취소된 job의 terminal 상태를 실제로
+    # 확정하는 곳은 service의 job registry이고(queued 취소는 pipeline이 아예
+    # 실행되지 않아 recorder 자체가 존재하지 않는다), 그 한 곳에서만 남겨야
+    # 종결 event가 run당 정확히 하나가 된다. pipeline은 취소를 관찰하면
+    # run_finished/run_failed를 남기지 않는 것으로 자기 몫을 다한다.
 
     def run_started(self) -> None:
         self._record("run_started", "ok", message="pipeline execution started")

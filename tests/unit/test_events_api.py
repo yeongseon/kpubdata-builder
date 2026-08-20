@@ -16,6 +16,7 @@ from typing import cast
 import pytest
 
 import kpubdata_builder.service.app as app_module
+from kpubdata_builder.pipeline import CancellationProbe
 from kpubdata_builder.service import BuilderService, ServiceResponse, dispatch
 from kpubdata_builder.service.auth import Principal
 from kpubdata_builder.service.ownership import _OWNERSHIP_ENV
@@ -120,10 +121,14 @@ class _ObservedAsyncService(BuilderService):
         self._completed = completed
 
     def _run_build_job(
-        self, spec_yaml: str, run_id: str, created_by: str | None
+        self,
+        spec_yaml: str,
+        run_id: str,
+        created_by: str | None,
+        cancellation: CancellationProbe,
     ) -> ServiceResponse:
         try:
-            return super()._run_build_job(spec_yaml, run_id, created_by)
+            return super()._run_build_job(spec_yaml, run_id, created_by, cancellation)
         finally:
             self._completed.set()
 
@@ -133,7 +138,7 @@ class _BlockingAsyncService(BuilderService):
 
     ``_run_build_job``(worker pool의 실제 실행 진입점)이 ``entered``를 set한
     뒤 ``release``를 기다린다 — 그 사이 registry 상태는 이미 "running"이지만
-    (``AsyncBuildExecutor._run``이 runner 호출 *전에* ``mark_running``한다)
+    (``AsyncBuildExecutor._run``이 runner 호출 *전에* ``begin_run``으로 전이시킨다)
     run directory/manifest는 아직 만들어지지 않는다(``BuilderService.build()``
     가 아직 호출되지 않았으므로). ``release`` 이후에는 실제 ``build()``를
     그대로 호출해 정상적으로 완료시키고 ``completed``를 set한다 — active
@@ -163,12 +168,16 @@ class _BlockingAsyncService(BuilderService):
         self._completed = completed
 
     def _run_build_job(
-        self, spec_yaml: str, run_id: str, created_by: str | None
+        self,
+        spec_yaml: str,
+        run_id: str,
+        created_by: str | None,
+        cancellation: CancellationProbe,
     ) -> ServiceResponse:
         self._entered.set()
         self._release.wait(timeout=5)
         try:
-            return super()._run_build_job(spec_yaml, run_id, created_by)
+            return super()._run_build_job(spec_yaml, run_id, created_by, cancellation)
         finally:
             self._completed.set()
 

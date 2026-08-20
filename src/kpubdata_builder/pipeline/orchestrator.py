@@ -61,6 +61,7 @@ from ..stages.silver.pii import scan_pii
 from ..stages.silver.summarize import build_schema
 from ..tabular import DEFAULT_PREVIEW_LIMIT
 from ..uploads import UploadRepository
+from .cancellation import BuildCancelled, CancellationProbe, raise_if_cancelled
 from .context import BuildContext
 from .export import export_gold_package
 
@@ -98,8 +99,14 @@ class SourceBuildOutcome:
 
     속성:
         source_key: 소스 식별자.
-        status: "ok" 또는 "failed".
+        status: "ok", "failed", 또는 "cancelled"(#481 — 안전한 stage 경계에서
+            협력적 취소가 관찰되어 다음 단계를 시작하지 않은 소스). "cancelled"는
+            실패가 아니므로 ``error``를 채우지 않으며, cancellation probe를 받는
+            async run에서만 만들어진다(동기 ``POST /build``/CLI는 probe가 없어
+            기존과 동일하게 ok/failed만 나온다).
         stages_completed: 성공적으로 끝난 단계 이름 순서 (bronze/silver/gold).
+            취소된 소스도 취소 시점까지 실제로 완료한 단계만 담는다 — 실행되지
+            않은 단계를 성공으로 가장하지 않는다.
         error: 실패 시 오류 메시지.
     """
 
@@ -135,7 +142,9 @@ class BuildResult:
 
     속성:
         context: 실행 컨텍스트.
-        status: 전체 상태 ("ok" 또는 "failed").
+        status: 전체 상태 ("ok", "failed", 또는 "cancelled"). "cancelled"는
+            cancellation probe(#481)를 넘긴 호출자에서만 나온다 — 동기
+            ``POST /build``/CLI 경로는 기존대로 ok/failed만 반환한다.
         outcomes: 소스별 실행 결과.
         manifest_path: 기록된 빌드 매니페스트 경로.
         composition_outcome: composition 실행 결과. BuildSpec.composition이
@@ -257,6 +266,7 @@ def _run_source_pipeline(
     upload_repository: UploadRepository | None = None,
     owner_id: str | None = None,
     capture_silver: bool = False,
+    cancellation: CancellationProbe | None = None,
 ) -> _SourcePipelineResult:
     """한 소스를 Bronze → Silver → Gold로 실행하고 산출물을 저장한다.
 
@@ -277,6 +287,11 @@ def _run_source_pipeline(
         capture_silver: True면 검증을 통과한 SilverDataset을 결과에 함께 담는다.
             composition(#506)이 이 소스를 참조할 때만 켜서, composition을 쓰지
             않는 일반 빌드는 Silver 테이블을 불필요하게 오래 들고 있지 않는다.
+        cancellation: 협력적 취소 probe (#481). ``None``이면(동기 ``POST /build``,
+            CLI) 취소 점검 자체가 없어 기존 동작과 100% 동일하다. probe가 있으면
+            **stage 사이의 안전 경계**에서만 점검한다 — 실행 중인 stage를 중간에
+            끊지 않고(부분 object를 남기지 않는다), 직전 stage의 산출물이 디스크에
+            기록된 *뒤* 다음 stage를 새로 시작하기 *전*에만 확인한다.
     """
     output_key = _output_source_key(source)
     completed: list[str] = []
@@ -298,6 +313,11 @@ def _run_source_pipeline(
     export_started = False
     fetch_completed = False
     try:
+        # 경계 0 (#481): 이 소스는 아직 아무 것도 시작하지 않았다. worker pool
+        # (#247, 최대 4개)에서 순서를 기다리다 이제 막 시작하려는 소스는 취소가
+        # 이미 요청됐다면 fetch 자체를 시작하지 않는다 — 취소 후 새 원격 I/O를
+        # 시작하지 않기 위해서다.
+        raise_if_cancelled(cancellation)
         # kind(public_api/file/url)에 맞는 resolver로 원시 레코드를 가져온다
         # (#498) — 이후 Silver/Gold는 kind를 전혀 알 필요가 없다. bronze stage와
         # source fetch는 이 호출을 공유 경계로 삼는다(#496) — public_api/file/url
@@ -338,6 +358,11 @@ def _run_source_pipeline(
             # 그대로다.
             params=bronze.fetch_params,
         )
+
+        # 경계 1 (#481): Bronze 산출물이 디스크에 기록되고 provenance까지 확정된
+        # 뒤다. 여기서 취소가 관찰되면 Bronze는 그대로 보존되고 Silver는 아예
+        # 시작하지 않는다.
+        raise_if_cancelled(cancellation)
 
         recorder.stage_started(output_key, "silver")
         required_columns = source.schema.required if source.schema else ()
@@ -444,6 +469,10 @@ def _run_source_pipeline(
             silver_paths.validation_path,
         )
 
+        # 경계 2 (#481): Silver 산출물이 모두 기록된 뒤다. 취소가 관찰되면
+        # Bronze+Silver를 보존하고 Gold는 시작하지 않는다.
+        raise_if_cancelled(cancellation)
+
         recorder.stage_started(output_key, "gold")
         gold = build_gold_package(
             silver,
@@ -465,6 +494,10 @@ def _run_source_pipeline(
             gold_paths.package_path,
             *gold_paths.splits_paths.values(),
         )
+
+        # 경계 3 (#481): Gold 산출물이 기록된 뒤, export를 시작하기 전이다.
+        # 이 소스의 medallion 단계는 모두 끝났고 export만 남았다.
+        raise_if_cancelled(cancellation)
 
         # export 단계(#496): SourceBuildOutcome.stages_completed에는 반영되지
         # 않는 기존 모델을 유지하되(#488 stage API와 동일 계약), 실제 export
@@ -519,6 +552,26 @@ def _run_source_pipeline(
             output_paths=tuple(outputs),
             row_count=evaluated_row_count,
             schema_summary=schema_summary,
+            provenance_entry=provenance_entry,
+            quality_results=quality_results,
+            quality_evaluated=quality_evaluated,
+            schema_drift=schema_drift,
+            silver=captured_silver,
+        )
+    except BuildCancelled:
+        # 협력적 취소는 실패가 아니다 (#481) — 아래 공통 except보다 먼저 잡아
+        # "이 소스 실패"로 해석되지 않게 한다. 실패 event(stage_failed/
+        # source_fetch_failed)를 남기지 않고, error도 채우지 않는다. 이미 완료된
+        # 단계(completed)와 그 산출물(outputs)은 그대로 보존해 partial manifest에
+        # 실린다 — 실행되지 않은 단계는 어디에도 성공으로 기록되지 않는다.
+        return _SourcePipelineResult(
+            outcome=SourceBuildOutcome(
+                source_key=output_key,
+                status="cancelled",
+                stages_completed=tuple(completed),
+            ),
+            output_paths=tuple(outputs),
+            row_count=evaluated_row_count,
             provenance_entry=provenance_entry,
             quality_results=quality_results,
             quality_evaluated=quality_evaluated,
@@ -723,6 +776,7 @@ def run_build(
     manifest_owner_id: str | None = None,
     upload_repository: UploadRepository | None = None,
     event_store: BuildEventStore | None = None,
+    cancellation: CancellationProbe | None = None,
 ) -> BuildResult:
     """BuildSpec을 Medallion 파이프라인으로 실행한다.
 
@@ -752,9 +806,18 @@ def run_build(
         event_store: structured run event timeline 저장소 (#496). None이면
             (CLI 직접 호출 등) event를 전혀 기록하지 않는다 — 기존 호출자는
             아무 것도 바꾸지 않아도 된다.
+        cancellation: 협력적 취소 probe (#481). None이면(동기 ``POST /build``,
+            CLI) 취소 점검이 전혀 일어나지 않아 기존 동작과 100% 동일하다.
+            probe가 있으면 각 소스의 stage 경계와, 모든 소스가 끝난 뒤
+            composition/manifest finalize 직전의 마지막 경계(``commit()``)에서
+            점검한다. ``commit()``이 성공하면 그 시점부터는 정상 종료로
+            확정되어 이후 취소 요청은 거절된다 — 성공 manifest를 쓴 run이
+            나중에 cancelled로 뒤집히는 모순을 구조적으로 막는다.
 
     반환값:
-        BuildResult: 전체 상태, 소스별 결과, 매니페스트 경로.
+        BuildResult: 전체 상태("ok"/"failed"/"cancelled"), 소스별 결과,
+        매니페스트 경로. "cancelled"는 cancellation probe가 있는 호출자에서만
+        나온다.
 
     예외:
         ValidationError: spec이 최소 실행 요건을 만족하지 못한 경우.
@@ -794,6 +857,7 @@ def run_build(
             upload_repository=upload_repository,
             owner_id=owner_id,
             capture_silver=_output_source_key(source) in composition_aliases,
+            cancellation=cancellation,
         )
 
     # 소스별 fetch/stage는 대부분 네트워크 I/O 대기이므로 스레드 풀로 동시에 실행해
@@ -833,11 +897,31 @@ def run_build(
         if result.silver is not None:
             silver_by_key[result.outcome.source_key] = result.silver
 
+    # ---- 마지막 안전 경계 (#481) --------------------------------------------
+    #
+    # 여기가 이 run의 "point of no return"이다. 두 가지 경우에 취소로 확정한다.
+    #
+    #   (a) 어떤 소스든 stage 경계에서 이미 취소를 관찰한 경우.
+    #   (b) 모든 소스가 끝났지만 composition/manifest finalize에 진입하기 직전에
+    #       취소 요청이 도착한 경우 — ``commit()``이 False를 반환한다.
+    #
+    # ``commit()``이 True를 반환하면 그 시점부터 취소 요청은 거절되므로
+    # (``CancellationProbe`` 계약), 아래 정상 경로가 성공/실패 manifest를 쓰는
+    # 동안 job 상태가 cancelling으로 바뀌는 일이 없다 — "성공 manifest를 쓴 run이
+    # cancelled로 뒤집히는" 모순과 "cancelling -> succeeded" 전이를 구조적으로
+    # 막는다. (a)에서는 이미 취소가 요청된 것이 확정이라 commit을 호출하지 않는다.
+    cancelled = any(outcome.status == "cancelled" for outcome in outcomes)
+    if not cancelled and cancellation is not None and not cancellation.commit():
+        cancelled = True
+
     # composition(#506)은 모든 source가 끝난 뒤, 참조된 두 source의 검증된 Silver를
     # 가지고 단일 스레드에서 실행한다 — join 자체는 병렬화 대상이 아니다.
+    # 취소된 run에서는 아예 시작하지 않는다 — 취소 이후 새 stage를 시작하지 않는
+    # 원칙이 source 단계와 동일하게 적용되고, manifest도 실행되지 않은
+    # composition을 성공으로 기록하지 않는다(composition은 null로 남는다).
     composition_outcome: CompositionOutcome | None = None
     composition_provenance: CompositionProvenance | None = None
-    if spec.composition is not None:
+    if spec.composition is not None and not cancelled:
         composition_result = _run_composition(
             spec.composition, silver_by_key=silver_by_key, context=context
         )
@@ -856,14 +940,30 @@ def run_build(
     )
     if composition_outcome is not None and composition_outcome.status != "ok":
         errors = (*errors, f"{composition_outcome.name}: {composition_outcome.error}")
-    status = "ok" if not errors else "failed"
-    if status == "ok":
-        recorder.run_finished()
-    else:
+    if cancelled:
+        # 취소는 실패가 아니므로 run_failed를 남기지 않고, 정상 완료도 아니므로
+        # run_finished도 남기지 않는다 (#481). 종결 event(``run_cancelled``)는
+        # job의 terminal 전이를 실제로 확정하는 service 계층이 정확히 한 번
+        # 남긴다 — 여기서도 남기면 queued 취소(파이프라인이 아예 실행되지 않는
+        # 경로)와 event 개수가 달라지고, 같은 run에 종결 event가 둘 생긴다.
+        #
+        # 이미 실패한 소스가 있었다면 그 사유는 errors에 그대로 남긴다 — 취소가
+        # 실패를 삼키지 않는다. 다만 run의 종단 상태는 "cancelled"다.
+        status = "cancelled"
+    elif errors:
+        status = "failed"
         recorder.run_failed(failed_source_count=len(errors))
+    else:
+        status = "ok"
+        recorder.run_finished()
 
     manifest = BuildManifest(
         build_id=context.run_id,
+        status=status,
+        # partial(#481)은 "정상 완료 전에 종료되어 outputs가 부분 산출물"이라는
+        # 뜻이다. 취소된 run에만 True이며, 실패한 run의 부분성은 기존대로
+        # status/errors로 표현한다(기존 소비자 의미를 바꾸지 않는다).
+        partial=cancelled,
         started_at=context.started_at,
         finished_at=utc_now(),
         inputs=tuple(_output_source_key(source) for source in spec.sources),

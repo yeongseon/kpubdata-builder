@@ -10,6 +10,7 @@ import pytest
 
 import kpubdata_builder.service.app as app_module
 from kpubdata_builder.events import BuildEvent
+from kpubdata_builder.pipeline import CancellationProbe
 from kpubdata_builder.service import BuilderService, ServiceResponse, dispatch
 from kpubdata_builder.service.auth import Principal
 from kpubdata_builder.service.ownership import _OWNERSHIP_ENV
@@ -86,6 +87,7 @@ class _ObservedBuildService(BuilderService):
         owner_id: str | None = None,
         manifest_owner_id: str | None = None,
         principal: Principal | None = None,
+        cancellation: CancellationProbe | None = None,
     ) -> ServiceResponse:
         try:
             return super().build(
@@ -95,6 +97,7 @@ class _ObservedBuildService(BuilderService):
                 owner_id=owner_id,
                 manifest_owner_id=manifest_owner_id,
                 principal=principal,
+                cancellation=cancellation,
             )
         finally:
             self._completed.set()
@@ -119,7 +122,11 @@ class _BlockingBuildService(BuilderService):
         self._release = release
 
     def _run_build_job(
-        self, spec_yaml: str, run_id: str, created_by: str | None
+        self,
+        spec_yaml: str,
+        run_id: str,
+        created_by: str | None,
+        cancellation: CancellationProbe,
     ) -> ServiceResponse:
         self._entered.set()
         self._release.wait(timeout=5)

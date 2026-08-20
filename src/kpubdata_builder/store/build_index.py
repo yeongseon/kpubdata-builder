@@ -484,6 +484,7 @@ def rebuild_index(output_root: Path) -> int:
 
     import yaml
 
+    from ..manifest import status_from_manifest
     from ..spec.serializer import BUILDSPEC_SNAPSHOT_FILENAME, compute_spec_digest
 
     if not output_root.exists():
@@ -511,7 +512,10 @@ def rebuild_index(output_root: Path) -> int:
             except (json.JSONDecodeError, UnicodeDecodeError, OSError):
                 continue
 
-            status = "failed" if manifest.get("errors") else "ok"
+            # manifest.json이 정본이므로 파생 규칙은 manifest 패키지가 소유한다
+            # (#481) — 취소된 run은 errors가 비어 있을 수 있어, 기존 "errors 유무"
+            # 파생만으로는 재구축 시 성공(ok)으로 잘못 승격된다.
+            status = status_from_manifest(manifest)
             started_at = manifest.get("started_at")
             finished_at = manifest.get("finished_at")
             snapshot_path = run_dir / BUILDSPEC_SNAPSHOT_FILENAME

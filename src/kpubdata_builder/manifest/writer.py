@@ -34,6 +34,13 @@ def manifest_writer(manifest: BuildManifest, output_path: Path) -> None:
     payload = {
         "schema_version": manifest.schema_version,
         "build_id": manifest.build_id,
+        # additive (#481): run의 종단 상태와 부분 산출물 여부. legacy manifest에는
+        # 이 키가 없고, reader는 부재 시 기존대로 errors 유무에서 status를 파생한다
+        # (manifest.status_from_manifest가 그 규칙의 정본). 취소된 run이
+        # 성공/실패와 구분되고, BuildIndex 재구축(store.rebuild_index)이
+        # manifest만으로 cancelled를 복원할 수 있게 하는 것이 목적이다.
+        "status": manifest.status,
+        "partial": manifest.partial,
         "started_at": manifest.started_at.astimezone(timezone.utc).isoformat(),
         "finished_at": manifest.finished_at.astimezone(timezone.utc).isoformat(),
         "build_environment": (

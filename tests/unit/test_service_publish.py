@@ -191,7 +191,7 @@ class TestReadiness:
         _with_credentials(monkeypatch, "huggingface")
         service = _service(tmp_path)
         snapshot = service._async_builds.registry.create(run_id="run-running", created_by="dev")
-        service._async_builds.registry.mark_running(snapshot.run_id)
+        assert service._async_builds.registry.begin_run(snapshot.run_id)
 
         resp = _readiness(service, "run-running")
         assert resp.status_code == 200
@@ -415,7 +415,7 @@ class TestPublish:
         snapshot = service._async_builds.registry.create(
             run_id="run-running-post", created_by="dev"
         )
-        service._async_builds.registry.mark_running(snapshot.run_id)
+        assert service._async_builds.registry.begin_run(snapshot.run_id)
 
         resp = _publish(service, "run-running-post")
         assert resp.status_code == 409

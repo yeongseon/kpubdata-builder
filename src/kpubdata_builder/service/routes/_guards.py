@@ -47,7 +47,11 @@ def check_run_exists(service: BuilderService, run_id: str) -> ServiceResponse | 
 def check_active_run_access(
     service: BuilderService, run_id: str, principal: Principal
 ) -> ServiceResponse | None:
-    """``/builds/{run_id}/events`` 전용 존재·소유권 판정 (#496 follow-up: BLOCKER).
+    """manifest 이전(queued/running) 구간까지 다루는 존재·소유권 판정 (#496 follow-up).
+
+    ``/builds/{run_id}/events``에서 출발했고, 이후 ``GET /builds/{run_id}``(#480)와
+    ``POST /builds/{run_id}/cancel``(#481)이 같은 규칙을 재사용한다 — active job을
+    다루는 route가 서로 다른 404/403 semantics를 갖지 않게 하기 위해서다.
 
     ``check_run_exists``/``check_ownership``은 run directory와 manifest.json이
     이미 있다고 가정한다 - 하지만 async job은 ``run_submitted``가 worker
@@ -79,7 +83,7 @@ def check_active_run_access(
     source owner propagation 한계는 그대로 유지된다.
 
     ``/manifest``, ``/stages`` 등 다른 route는 여전히 persisted run만 다루므로
-    이 함수를 쓰지 않는다 - 영향 범위를 events endpoint로 좁게 유지한다.
+    이 함수를 쓰지 않는다 - 영향 범위를 active job을 다루는 route로 좁게 유지한다.
     """
     run_dir = service._output_root / run_id
     ensure_within(service._output_root, run_dir, label="run directory")
