@@ -219,10 +219,34 @@ partial manifest 보장 사항:
   인덱스를 재구축해도(`rebuild_index`) 취소 상태가 보존됩니다. cancelled run은
   "최근 성공 빌드"로 승격되지 않습니다.
 
-**보존 정책**
+**보존 정책 (#549)**
 
-부분 산출물은 **기본적으로 삭제하지 않습니다**(감사·디버깅 근거). TTL/자동
-cleanup은 이번 범위에 포함되지 않으며, 운영자가 명시적으로 정리합니다.
+부분 산출물은 **기본적으로 삭제하지 않습니다**(감사·디버깅 근거). 정리는
+명시적 opt-in로만 일어납니다:
+
+- CLI `kpubdata-builder prune-cancelled --output-dir <root> [--ttl-hours N] [--apply]`
+  — 기본은 dry-run(대상 나열만), `--apply`를 줘야 삭제됩니다.
+- TTL은 `--ttl-hours` 인자가 우선, 없으면 환경변수
+  `KPUBDATA_BUILDER_CANCELLED_RUN_TTL_HOURS`, 그마저 없으면 **비활성**(그 무엇도
+  삭제 대상이 아님)입니다. `finished_at`을 알 수 없는 run은 나이를 판정할 수
+  없어 항상 보존됩니다.
+- 삭제 단위는 run workspace(``{output_root}/{run_id}``) 디렉터리뿐이며 run_id는
+  경로 세그먼트 검증을 통과해야 합니다. 서비스 내부 상태
+  (`_publish_receipts.sqlite` 등)는 건드리지 않습니다.
+
+**`cancelling` 중 프로세스 크래시·재기동**
+
+job registry는 메모리 상태이므로 프로세스가 죽으면 `cancelling`/`running` job의
+진행 상황은 모두 사라집니다. 재기동 시:
+
+- manifest.json이 이미 `status: cancelled`로 기록된 run: 종단 상태 그대로
+  보존됩니다(manifest가 정본). partial 산출물도 그대로 남습니다.
+- 안전 경계에 도달하기 전에 죽은 run(manifest 없음): run workspace에 부분
+  산출물만 남은 고아 상태가 됩니다. 재기동이 이를 자동으로 정리하거나
+  `cancelled`로 표시하지 **않습니다** — `rebuild-index`는 manifest 없는 run을
+  인덱스에 넣지 않으므로 고아 산출물은 API에 노출되지 않고, 정리는 위
+  `prune-cancelled` dry-run으로 운영자가 확인한 뒤 수행합니다.
+- 동일 run_id의 재제출은 기존 멱등 규칙(ADR 0008)을 따릅니다.
 
 ### 8.5 관련 ADR
 

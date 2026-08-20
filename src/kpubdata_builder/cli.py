@@ -152,6 +152,31 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run workspace root directory (default: build).",
     )
 
+    prune_cmd = subparsers.add_parser(
+        "prune-cancelled",
+        help="List (and optionally delete) cancelled partial-run artifacts past a TTL (#549).",
+    )
+    prune_cmd.add_argument(
+        "--output-dir",
+        default="build",
+        help="Run workspace root directory (default: build).",
+    )
+    prune_cmd.add_argument(
+        "--ttl-hours",
+        type=float,
+        default=None,
+        help=(
+            "Retention window in hours for cancelled partial runs. "
+            "Defaults to KPUBDATA_BUILDER_CANCELLED_RUN_TTL_HOURS; "
+            "when unset, nothing is ever a deletion candidate."
+        ),
+    )
+    prune_cmd.add_argument(
+        "--apply",
+        action="store_true",
+        help="Actually delete matching run workspaces. Without this flag the command is a dry run.",
+    )
+
     return parser
 
 
@@ -430,6 +455,48 @@ def _run_rebuild_index(output_dir: str) -> int:
         return 1
 
 
+def _run_prune_cancelled(*, output_dir: str, ttl_hours: float | None, apply: bool) -> int:
+    """TTL이 지난 cancelled+partial run 산출물을 나열/정리한다 (#549).
+
+    기본은 dry-run이고, ``--apply``를 줘야 삭제가 일어난다. TTL은 인자가
+    우선이고, 없으면 ``KPUBDATA_BUILDER_CANCELLED_RUN_TTL_HOURS`` 환경변수,
+    그마저 없으면 비활성(대상 없음)이다 — 잘못된 설정으로 증거가 사라지는
+    일은 없다.
+    """
+    import os
+
+    from .retention import CANCELLED_RUN_TTL_ENV, prune_cancelled_runs
+
+    output_root = Path(output_dir)
+    effective_ttl = ttl_hours
+    if effective_ttl is None:
+        raw_env = os.environ.get(CANCELLED_RUN_TTL_ENV, "").strip()
+        if raw_env:
+            try:
+                effective_ttl = float(raw_env)
+            except ValueError:
+                print(
+                    f"error: {CANCELLED_RUN_TTL_ENV}={raw_env!r} is not a number of hours",
+                    file=sys.stderr,
+                )
+                return 1
+
+    mode = "APPLY (deleting)" if apply else "dry run (nothing will be deleted)"
+    print(f"pruning cancelled partial runs under {output_root} — {mode}", flush=True)
+
+    report = prune_cancelled_runs(output_root, ttl_hours=effective_ttl, apply=apply)
+
+    for candidate in report.kept:
+        print(f"kept: {candidate.run_id}", flush=True)
+    for run_id in report.deleted:
+        print(f"deleted: {run_id}", flush=True)
+    print(
+        f"scanned {report.scanned} cancelled partial run(s), deleted {report.deleted_count}",
+        flush=True,
+    )
+    return 0
+
+
 def dispatch(args: argparse.Namespace) -> int:
     """파싱된 argparse 결과를 실제 명령 실행 함수로 전달한다.
 
@@ -468,6 +535,12 @@ def dispatch(args: argparse.Namespace) -> int:
         )
     if command == "rebuild-index":
         return _run_rebuild_index(output_dir=args.output_dir)
+    if command == "prune-cancelled":
+        return _run_prune_cancelled(
+            output_dir=args.output_dir,
+            ttl_hours=args.ttl_hours,
+            apply=args.apply,
+        )
     # 일반적인 CLI 경로로는 도달할 수 없지만(argparse가 알 수 없는 하위 명령을 거부함),
     # 프로그래밍 방식 호출자를 위한 방어적 대체 경로로 유지한다.
     return 2
