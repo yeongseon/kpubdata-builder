@@ -1,6 +1,6 @@
 # ADR 0009 — 사용자 인증 모델: Google OIDC ID 토큰 검증
 
-- 상태: 제안됨(Proposed)
+- 상태: 대체됨(Superseded by [ADR 0015](./0015-email-password-oidc-idp-keycloak.md)) — 검증 계약·Bearer 전송·allowlist fail-closed·internal ingress는 0015가 승계
 - 관련 이슈: #383, #312(ADR 0006), #384(B2 Principal), #385(B3 Google 검증), #386(B4 허용 목록), #387(B5 계약 1.1.0)
 - 관련 문서: [ADR 0006](./0006-service-auth-and-deployment.md), [API_CONTRACT.md](../API_CONTRACT.md), [BOUNDARY.md](../BOUNDARY.md)
 

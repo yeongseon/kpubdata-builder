@@ -1,6 +1,6 @@
 # 배포 가이드
 
-Builder HTTP 서비스를 로컬 개발 이상으로 운영하기 위한 배포·인증 스토리. 본 문서는 [ADR 0006](./adrs/0006-service-auth-and-deployment.md)(인증·배포)과 ADR 0009(사용자 인증, PR #398)의 운영 가이드를 통합한다.
+Builder HTTP 서비스를 로컬 개발 이상으로 운영하기 위한 배포·인증 스토리. 본 문서는 [ADR 0006](./adrs/0006-service-auth-and-deployment.md)(인증·배포), ADR 0009(사용자 인증, PR #398 — [ADR 0015](./adrs/0015-email-password-oidc-idp-keycloak.md)로 대체됨)의 운영 가이드를 통합한다.
 
 > **상태**: ADR 0009는 제안됨(Proposed). 인증(Bearer) 구현은 B3(#385)/B4(#386) 진행 중이며, 본 문서의 Bearer 관련 절은 구현 완료 후 적용된다. 컨테이너 배포(fail-closed, HEALTHCHECK)는 이미 구현되었다.
 
@@ -22,6 +22,8 @@ Builder HTTP 서비스를 로컬 개발 이상으로 운영하기 위한 배포�
 두 경로 모두 `Principal`(`service`/`oidc`/`dev`)로 정규화된다 (B2/#384).
 
 ## 3. Google OAuth client 설정
+
+> **전환 안내(ADR 0015)**: 사람 사용자 인증 IdP는 self-hosted Keycloak(email/password-capable OIDC)로 확정되었고 본 절의 Google 직접 audience 구성은 대체되었다. IdP 전환 절차·설정 분리는 [ADR 0015](./adrs/0015-email-password-oidc-idp-keycloak.md)를 따른다. 아래는 ADR 0009 시대의 기록으로 남긴다.
 
 1. Google Cloud Console → APIs & Services → Credentials → **OAuth client ID**.
 2. **Web application** 타입으로 생성.
