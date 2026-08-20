@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: KPubData Builder Service API
-  version: "1.18.0"
+  version: "1.19.0"
   description: >-
     Builder 중심 서비스 계약. BuildSpec 검증, preview, build 실행, artifact 조회,
     계약 버전 조회를 제공한다. CLI와 HTTP service mode(#36)가 동일한 도메인 계약을
@@ -75,6 +75,7 @@ info:
     cross-owner의 build 출력 노출을 차단한다(behavioral tightening — 이전에는
     미검사였음).
     v1.17.0은 build publish 표면을 추가한다(#491) — `GET /builds/{run_id}/publish/readiness`(ready/blockers/warnings)와 `POST /builds/{run_id}/publish`(idempotent publish receipt, TOCTOU 재검사)를 추가한다(additive). HTTP target은 `huggingface`로 한정한다.
+    v1.19.0은 publish receipt 운영 경로를 추가한다(#551, additive) — `GET /builds/{run_id}/publish/receipt`(상태 조회, 소유자 불일치는 404), `POST /builds/{run_id}/publish/reconcile`(원격 상태 확인 후 `succeeded` 확정 또는 reset으로 재게시 허용; 판단 불가 시 503로 무변경), `DELETE /builds/{run_id}/publish/receipt`(명시적 reset, 감사 로그 기록).
     v1.18.0은 ADR 0008의 협력적 취소(cooperative cancellation)를 구현한다 —
     `POST /builds/{run_id}/cancel`을 추가한다(#481, additive). `queued` job은
     worker가 runner를 실행하기 전에 곧바로 `cancelled`로 종결되고(파이프라인

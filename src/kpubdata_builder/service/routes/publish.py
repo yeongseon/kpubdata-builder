@@ -18,6 +18,8 @@ if TYPE_CHECKING:
 
 _READINESS_SUFFIX = "/publish/readiness"
 _PUBLISH_SUFFIX = "/publish"
+_RECEIPT_SUFFIX = "/publish/receipt"
+_RECONCILE_SUFFIX = "/publish/reconcile"
 
 
 def route(
@@ -49,6 +51,50 @@ def route(
         if access_error is not None:
             return access_error
         return service.publish_readiness(run_id, target)
+
+    if method == "GET" and rest.endswith(_RECEIPT_SUFFIX):
+        run_id = rest[: -len(_RECEIPT_SUFFIX)]
+        error = _validate_run_id(run_id)
+        if error is not None:
+            return error
+        query_params = parse_qs(query)
+        target = (query_params.get("target") or [""])[-1]
+        destination = (query_params.get("destination") or [""])[-1]
+        if not target or not destination:
+            return ServiceResponse(
+                400, {"error": "'target' and 'destination' query parameters are required"}
+            )
+        access_error = check_active_run_access(service, run_id, principal)
+        if access_error is not None:
+            return access_error
+        return service.get_publish_receipt(run_id, target, destination, principal=principal)
+
+    if method == "POST" and rest.endswith(_RECONCILE_SUFFIX):
+        run_id = rest[: -len(_RECONCILE_SUFFIX)]
+        error = _validate_run_id(run_id)
+        if error is not None:
+            return error
+        access_error = check_active_run_access(service, run_id, principal)
+        if access_error is not None:
+            return access_error
+        return service.reconcile_publish(run_id, body, principal=principal)
+
+    if method == "DELETE" and rest.endswith(_RECEIPT_SUFFIX):
+        run_id = rest[: -len(_RECEIPT_SUFFIX)]
+        error = _validate_run_id(run_id)
+        if error is not None:
+            return error
+        query_params = parse_qs(query)
+        target = (query_params.get("target") or [""])[-1]
+        destination = (query_params.get("destination") or [""])[-1]
+        if not target or not destination:
+            return ServiceResponse(
+                400, {"error": "'target' and 'destination' query parameters are required"}
+            )
+        access_error = check_active_run_access(service, run_id, principal)
+        if access_error is not None:
+            return access_error
+        return service.reset_publish_receipt(run_id, target, destination, principal=principal)
 
     if method == "POST" and rest.endswith(_PUBLISH_SUFFIX):
         run_id = rest[: -len(_PUBLISH_SUFFIX)]

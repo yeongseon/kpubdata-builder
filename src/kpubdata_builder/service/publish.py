@@ -26,6 +26,8 @@ import re
 import sqlite3
 import threading
 from dataclasses import dataclass, replace
+from datetime import datetime as datetime_module
+from datetime import timezone
 from pathlib import Path
 from typing import Literal, cast
 
@@ -122,6 +124,19 @@ class PublishReceiptStore:
                             CHECK (state IN ('pending', 'succeeded', 'unknown')),
                         result_json TEXT,
                         PRIMARY KEY (owner_key, run_id, target, destination)
+                    )
+                    """
+                )
+                # reconcile/reset 감사 로그(#551) — credential/path/원문을 담지
+                # 않는 최소 필드만 append한다.
+                connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS publish_receipt_audit (
+                        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                        fingerprint TEXT NOT NULL,
+                        action TEXT NOT NULL,
+                        actor TEXT NOT NULL,
+                        recorded_at TEXT NOT NULL
                     )
                     """
                 )
@@ -281,12 +296,99 @@ class PublishReceiptStore:
     def mark_unknown(self, fingerprint: str) -> None:
         self._set_terminal(fingerprint, state="unknown", result=None)
 
+    def get_by_key(
+        self,
+        *,
+        owner_key: str,
+        run_id: str,
+        target: str,
+        destination: str,
+    ) -> PublishReceipt | None:
+        """operation key로 receipt를 직접 조회한다(#551 조회 API용, side effect 없음)."""
+        self._initialize()
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT fingerprint, owner_key, target, destination, options_json, state,
+                       result_json
+                FROM publish_receipts
+                WHERE owner_key = ? AND run_id = ? AND target = ? AND destination = ?
+                """,
+                (owner_key, run_id, target, destination),
+            ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_receipt(cast(tuple[object, ...], row))
+
+    def reconcile_succeeded(self, fingerprint: str, result: dict[str, object]) -> None:
+        """원격 상태 확인으로 unknown을 succeeded로 확정한다(#551). 감사 로그를 남긴다."""
+        self._initialize()
+        self._set_terminal(
+            fingerprint,
+            state="succeeded",
+            result=result,
+            allowed_source_states=("pending", "unknown"),
+        )
+        self._append_audit(fingerprint, "reconcile_succeeded")
+
+    def reset(self, fingerprint: str, *, action: str = "reset") -> bool:
+        """receipt를 삭제해 재시도(새 claim)를 허용한다(#551). 감사 로그를 남긴다.
+
+        삭제가 실제로 일어났으면 True, 해당 fingerprint가 없으면 False.
+        """
+        self._initialize()
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM publish_receipts WHERE fingerprint = ?",
+                (fingerprint,),
+            )
+            deleted = cursor.rowcount == 1
+        if deleted:
+            self._append_audit(fingerprint, action)
+        return deleted
+
+    def _append_audit(self, fingerprint: str, action: str, *, actor: str = "operator") -> None:
+        recorded_at = datetime_module.now(timezone.utc).isoformat(timespec="seconds")
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO publish_receipt_audit(fingerprint, action, actor, recorded_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (fingerprint, action, actor, recorded_at),
+            )
+
+    def audit_entries(self, *, owner_key: str, run_id: str) -> list[dict[str, str]]:
+        """해당 owner/run의 감사 로그를 시간순으로 반환한다(조회 API용)."""
+        self._initialize()
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT a.fingerprint, a.action, a.actor, a.recorded_at
+                FROM publish_receipt_audit a
+                JOIN publish_receipts r ON r.fingerprint = a.fingerprint
+                WHERE r.owner_key = ? AND r.run_id = ?
+                ORDER BY a.seq
+                """,
+                (owner_key, run_id),
+            ).fetchall()
+        return [
+            {
+                "fingerprint": cast(str, row[0]),
+                "action": cast(str, row[1]),
+                "actor": cast(str, row[2]),
+                "recorded_at": cast(str, row[3]),
+            }
+            for row in rows
+        ]
+
     def _set_terminal(
         self,
         fingerprint: str,
         *,
         state: Literal["succeeded", "unknown"],
         result: dict[str, object] | None,
+        allowed_source_states: tuple[str, ...] = ("pending",),
     ) -> None:
         self._initialize()
         result_json = (
@@ -294,14 +396,15 @@ class PublishReceiptStore:
             if result is not None
             else None
         )
+        placeholders = ", ".join("?" for _ in allowed_source_states)
         with self._connect() as connection:
             cursor = connection.execute(
-                """
+                f"""
                 UPDATE publish_receipts
                 SET state = ?, result_json = ?
-                WHERE fingerprint = ? AND state = 'pending'
+                WHERE fingerprint = ? AND state IN ({placeholders})
                 """,
-                (state, result_json, fingerprint),
+                (state, result_json, fingerprint, *allowed_source_states),
             )
             if cursor.rowcount != 1:
                 raise RuntimeError("publish receipt is not pending")
