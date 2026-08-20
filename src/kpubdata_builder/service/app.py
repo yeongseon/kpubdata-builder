@@ -299,7 +299,12 @@ def _strip_internal_fields(entries: list[_BuildListEntry]) -> list[_BuildListEnt
 # 함께 additive로: BuildManifest에 status/partial(부분 산출물 표시),
 # BuildEventName에 run_cancelled, BuildSummary.status enum에 cancelled(이미
 # BuildIndex/dataset 계약이 쓰던 값이 이제 실제로 관측 가능해진다).
-API_CONTRACT_VERSION = "1.18.0"
+# 1.18.0 -> 1.19.0: publish receipt 운영 경로를 추가한다(#551, additive) —
+# GET /builds/{run_id}/publish/receipt(unknown 상태 조회),
+# POST /builds/{run_id}/publish/reconcile(원격 상태 확인 후 succeeded 확정 또는
+# reset으로 재게시 허용), DELETE /builds/{run_id}/publish/receipt(명시적 reset,
+# 감사 로그 기록). reconcile은 원격 판단 불가 시 503로 아무 것도 변경하지 않는다.
+API_CONTRACT_VERSION = "1.19.0"
 
 
 def _quality_result_to_json(r: QualityCheckResult) -> dict[str, JsonValue]:
@@ -2060,6 +2065,237 @@ class BuilderService:
                 {"error": "publish failed due to an unexpected error", "code": "publish_failed"},
             )
         return ServiceResponse(200, response_body)
+
+    def get_publish_receipt(
+        self,
+        run_id: str,
+        target: str,
+        destination: str,
+        *,
+        principal: Principal,
+    ) -> ServiceResponse:
+        """GET /builds/{run_id}/publish/receipt (#551).
+
+        unknown receipt로 영구 차단된 운영자가 상태를 조회한다. 소유자 불일치는
+        404로 응답해 다른 owner의 receipt 존재 자체를 노출하지 않는다.
+        """
+        owner_key = principal.owner_id or principal.label
+        receipt = self._publish_receipts.get_by_key(
+            owner_key=owner_key, run_id=run_id, target=target, destination=destination
+        )
+        if receipt is None:
+            return ServiceResponse(
+                404, {"error": "publish receipt not found", "code": "receipt_not_found"}
+            )
+        body: dict[str, JsonValue] = {
+            "run_id": run_id,
+            "target": receipt.target,
+            "destination": receipt.destination,
+            "state": receipt.state,
+            "fingerprint": receipt.fingerprint,
+            "options": cast(JsonValue, receipt.options),
+            "reconcilable": receipt.state == "unknown",
+        }
+        if receipt.result is not None:
+            body["result"] = cast(JsonValue, receipt.result)
+        return ServiceResponse(200, body)
+
+    def reconcile_publish(
+        self,
+        run_id: str,
+        body: Mapping[str, JsonValue] | None,
+        *,
+        principal: Principal,
+    ) -> ServiceResponse:
+        """POST /builds/{run_id}/publish/reconcile (#551).
+
+        unknown receipt를 원격 상태 확인으로 확정한다. 원격에 결과가 있으면
+        succeeded로 확정하고, 확실히 없으면 receipt를 reset해 재게시(새 claim)를
+        허용한다. 원격 확인 자체가 불가능하면 503 — 아무 것도 변경하지 않는다.
+        """
+        if not isinstance(body, Mapping):
+            return ServiceResponse(400, {"error": "request body must be a JSON object"})
+        unknown_fields = sorted(str(key) for key in body if key not in {"target", "destination"})
+        if unknown_fields:
+            return ServiceResponse(
+                400, {"error": f"unsupported request field(s): {unknown_fields!r}"}
+            )
+
+        resolved_target, target_error = publish_service.resolve_target(body.get("target"))
+        if resolved_target is None:
+            return ServiceResponse(
+                400, {"error": target_error or "invalid target", "code": "unsupported_target"}
+            )
+        destination_error = publish_service.validate_destination(
+            resolved_target, body.get("destination")
+        )
+        if destination_error is not None:
+            return ServiceResponse(400, {"error": destination_error})
+        destination = cast(str, body["destination"])
+
+        owner_key = principal.owner_id or principal.label
+        receipt = self._publish_receipts.get_by_key(
+            owner_key=owner_key, run_id=run_id, target=resolved_target, destination=destination
+        )
+        if receipt is None:
+            return ServiceResponse(
+                404, {"error": "publish receipt not found", "code": "receipt_not_found"}
+            )
+
+        if receipt.state == "succeeded":
+            # 이미 확정된 receipt는 멱등하게 그 상태를 돌려준다(원격 재조회 없음).
+            body_out: dict[str, JsonValue] = {
+                "run_id": run_id,
+                "state": "succeeded",
+                "reconciled": False,
+                "fingerprint": receipt.fingerprint,
+            }
+            if receipt.result is not None:
+                body_out["result"] = cast(JsonValue, receipt.result)
+            return ServiceResponse(200, body_out)
+
+        probe = self._probe_remote_publish_target(resolved_target, destination)
+        if probe is None:
+            return ServiceResponse(
+                503,
+                {
+                    "error": "remote state could not be determined; nothing was changed",
+                    "code": "reconcile_unavailable",
+                },
+            )
+        remote_exists = probe
+
+        if remote_exists:
+            result: dict[str, object] = {
+                "run_id": run_id,
+                "target": resolved_target,
+                "destination": destination,
+                "reconciled": True,
+                "status": "succeeded",
+            }
+            try:
+                self._publish_receipts.reconcile_succeeded(receipt.fingerprint, result)
+            except Exception as exc:
+                logger.error(
+                    "publish receipt reconcile persist failed: run_id=%s target=%s error_type=%s",
+                    run_id,
+                    resolved_target,
+                    type(exc).__name__,
+                )
+                return ServiceResponse(
+                    503,
+                    {
+                        "error": "reconcile outcome could not be persisted; nothing was changed",
+                        "code": "reconcile_unavailable",
+                    },
+                )
+            return ServiceResponse(
+                200,
+                {
+                    "run_id": run_id,
+                    "state": "succeeded",
+                    "reconciled": True,
+                    "fingerprint": receipt.fingerprint,
+                },
+            )
+
+        # 원격에 결과가 없다 — 게시가 실제로 일어나지 않았다고 확정할 수 없어도
+        # receipt를 reset해 운영자 판단으로 재게시를 허용한다(감사 로그에 남긴다).
+        reset_ok = self._publish_receipts.reset(
+            receipt.fingerprint, action="reconcile_absent_reset"
+        )
+        if not reset_ok:
+            return ServiceResponse(
+                503,
+                {
+                    "error": "reconcile reset could not be persisted; nothing was changed",
+                    "code": "reconcile_unavailable",
+                },
+            )
+        return ServiceResponse(
+            200,
+            {
+                "run_id": run_id,
+                "state": "reset",
+                "reconciled": True,
+                "retry_allowed": True,
+                "fingerprint": receipt.fingerprint,
+            },
+        )
+
+    def reset_publish_receipt(
+        self,
+        run_id: str,
+        target: str,
+        destination: str,
+        *,
+        principal: Principal,
+    ) -> ServiceResponse:
+        """DELETE /builds/{run_id}/publish/receipt (#551) — 명시적 reset.
+
+        어떤 상태든 receipt를 삭제해 새 claim을 허용한다. 원격 부작용은 전혀
+        발생하지 않는다(이미 게시된 결과를 되돌리지 않는다). 감사 로그에 남긴다.
+        """
+        owner_key = principal.owner_id or principal.label
+        receipt = self._publish_receipts.get_by_key(
+            owner_key=owner_key, run_id=run_id, target=target, destination=destination
+        )
+        if receipt is None:
+            return ServiceResponse(
+                404, {"error": "publish receipt not found", "code": "receipt_not_found"}
+            )
+        reset_ok = self._publish_receipts.reset(receipt.fingerprint, action="manual_reset")
+        if not reset_ok:
+            return ServiceResponse(
+                503,
+                {
+                    "error": "receipt reset could not be persisted; nothing was changed",
+                    "code": "reconcile_unavailable",
+                },
+            )
+        return ServiceResponse(
+            200,
+            {
+                "run_id": run_id,
+                "state": "reset",
+                "retry_allowed": True,
+                "fingerprint": receipt.fingerprint,
+            },
+        )
+
+    def _probe_remote_publish_target(self, target: str, destination: str) -> bool | None:
+        """원격에 publish 결과가 존재하는지 조사한다 (#551).
+
+        반환값: True(존재)/False(부재)/None(판단 불가 — credential·네트워크 문제).
+        조사 자체가 credential을 소비하거나 원격을 변경하지 않는 read-only다.
+        """
+        if target == "huggingface":
+            token = os.environ.get("HF_TOKEN", "").strip()
+            if not token:
+                return None
+            try:
+                from huggingface_hub import HfApi  # type: ignore[import-not-found]
+            except ImportError:
+                return None
+            try:
+                api = HfApi(token=token)
+                api.dataset_info(repo_id=destination, repo_type="dataset")
+            except Exception as exc:
+                # repo 부재(gated 401/404 계열)와 접근 실패를 구분한다 —
+                # huggingface_hub는 부재를 RepositoryNotFoundError로 알려준다.
+                name = type(exc).__name__
+                if name in ("RepositoryNotFoundError", "GatedRepoError"):
+                    return False
+                if getattr(exc, "status_code", None) in (401, 403):
+                    # 존재하지 않는 private repo도 401로 보이는 HF 특성상
+                    # 소유자라면 부재로 간주한다(asset이 내 credential로
+                    # 생성됐다면 접근 가능해야 하기 때문).
+                    return False
+                if getattr(exc, "status_code", None) == 404:
+                    return False
+                return None
+            return True
+        return None
 
     def get_build_events(self, run_id: str, *, limit: int, tail: bool) -> ServiceResponse:
         """run의 append-only structured event timeline을 조회한다 (#496).

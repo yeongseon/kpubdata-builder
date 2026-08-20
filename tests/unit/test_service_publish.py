@@ -1008,6 +1008,213 @@ def _assert_conforms(resp: ServiceResponse, path: str, method: str) -> None:
     )
 
 
+class TestReceiptReconcile:
+    """unknown receipt의 조회/reconcile/reset 운영 경로 (#551)."""
+
+    def _unknown_receipt_service(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, run_id: str
+    ) -> BuilderService:
+        """publish가 실패해 receipt가 unknown인 service를 만든다."""
+        _with_credentials(monkeypatch, "huggingface")
+        failing = _SpyPublisher("huggingface", error=RuntimeError("remote blew up"))
+        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "huggingface", failing)
+        service = _service(tmp_path)
+        _build(service, run_id, LICENSED_SPEC_YAML)
+        resp = _publish(service, run_id)
+        assert resp.status_code == 502
+        return service
+
+    def test_get_receipt_reports_unknown_state(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        service = self._unknown_receipt_service(tmp_path, monkeypatch, "run-unknown")
+        resp = dispatch(
+            service,
+            "GET",
+            "/builds/run-unknown/publish/receipt",
+            None,
+            query="target=huggingface&destination=kpubdata%2Fair-quality",
+        )
+        assert resp.status_code == 200
+        assert resp.body["state"] == "unknown"
+        assert resp.body["reconcilable"] is True
+        assert resp.body["target"] == "huggingface"
+
+    def test_get_receipt_missing_returns_404(self, tmp_path: Path) -> None:
+        service = _service(tmp_path)
+        resp = dispatch(
+            service,
+            "GET",
+            "/builds/run-none/publish/receipt",
+            None,
+            query="target=huggingface&destination=kpubdata%2Fair-quality",
+        )
+        assert resp.status_code == 404
+
+    def test_reconcile_remote_exists_confirms_succeeded(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        service = self._unknown_receipt_service(tmp_path, monkeypatch, "run-exists")
+        monkeypatch.setattr(service, "_probe_remote_publish_target", lambda *_args: True)
+
+        resp = dispatch(
+            service,
+            "POST",
+            "/builds/run-exists/publish/reconcile",
+            {"target": "huggingface", "destination": "kpubdata/air-quality"},
+        )
+        assert resp.status_code == 200
+        assert resp.body["state"] == "succeeded"
+        assert resp.body["reconciled"] is True
+
+        # 이후 동일 publish 요청은 receipt 결과를 replay한다(중복 게시 없음).
+        ok_publisher = _SpyPublisher("huggingface")
+        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "huggingface", ok_publisher)
+        replay = _publish(service, "run-exists")
+        assert replay.status_code == 200
+        assert ok_publisher.calls == []
+
+    def test_reconcile_remote_absent_resets_and_allows_retry(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        service = self._unknown_receipt_service(tmp_path, monkeypatch, "run-absent")
+        monkeypatch.setattr(service, "_probe_remote_publish_target", lambda *_args: False)
+
+        resp = dispatch(
+            service,
+            "POST",
+            "/builds/run-absent/publish/reconcile",
+            {"target": "huggingface", "destination": "kpubdata/air-quality"},
+        )
+        assert resp.status_code == 200
+        assert resp.body["state"] == "reset"
+        assert resp.body["retry_allowed"] is True
+
+        # reset 이후 같은 operation을 다시 게시할 수 있다(새 claim).
+        ok_publisher = _SpyPublisher("huggingface")
+        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "huggingface", ok_publisher)
+        retry = _publish(service, "run-absent")
+        assert retry.status_code == 200
+        assert len(ok_publisher.calls) == 1
+
+    def test_reconcile_probe_unavailable_changes_nothing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        service = self._unknown_receipt_service(tmp_path, monkeypatch, "run-probe-down")
+        monkeypatch.setattr(service, "_probe_remote_publish_target", lambda *_args: None)
+
+        resp = dispatch(
+            service,
+            "POST",
+            "/builds/run-probe-down/publish/reconcile",
+            {"target": "huggingface", "destination": "kpubdata/air-quality"},
+        )
+        assert resp.status_code == 503
+        assert resp.body["code"] == "reconcile_unavailable"
+
+        blocked = _publish(service, "run-probe-down")
+        assert blocked.status_code == 409
+        assert blocked.body["code"] == "publish_state_unknown"
+
+    def test_reconcile_succeeded_receipt_is_idempotent_noop(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _with_credentials(monkeypatch, "huggingface")
+        spy = _SpyPublisher("huggingface")
+        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "huggingface", spy)
+        service = _service(tmp_path)
+        _build(service, "run-done", LICENSED_SPEC_YAML)
+        assert _publish(service, "run-done").status_code == 200
+        probes: list[tuple[str, str]] = []
+        monkeypatch.setattr(
+            service,
+            "_probe_remote_publish_target",
+            lambda target, destination: probes.append((target, destination)),
+        )
+
+        resp = dispatch(
+            service,
+            "POST",
+            "/builds/run-done/publish/reconcile",
+            {"target": "huggingface", "destination": "kpubdata/air-quality"},
+        )
+        assert resp.status_code == 200
+        assert resp.body["state"] == "succeeded"
+        assert resp.body["reconciled"] is False
+        assert probes == []
+
+    def test_delete_receipt_resets_with_audit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        service = self._unknown_receipt_service(tmp_path, monkeypatch, "run-manual")
+        # reset 전 receipt에서 fingerprint와 owner를 읽어 감사 로그를 결정적으로 검증한다.
+        receipts = service._publish_receipts
+        import sqlite3
+
+        with sqlite3.connect(receipts.path) as conn:
+            fingerprint, owner_key = conn.execute(
+                "SELECT fingerprint, owner_key FROM publish_receipts WHERE run_id = 'run-manual'"
+            ).fetchone()
+
+        resp = dispatch(
+            service,
+            "DELETE",
+            "/builds/run-manual/publish/receipt",
+            None,
+            query="target=huggingface&destination=kpubdata%2Fair-quality",
+        )
+        assert resp.status_code == 200
+        assert resp.body["state"] == "reset"
+
+        gone = dispatch(
+            service,
+            "GET",
+            "/builds/run-manual/publish/receipt",
+            None,
+            query="target=huggingface&destination=kpubdata%2Fair-quality",
+        )
+        assert gone.status_code == 404
+
+        with sqlite3.connect(receipts.path) as conn:
+            audit_rows = conn.execute(
+                "SELECT fingerprint, action FROM publish_receipt_audit"
+            ).fetchall()
+        assert audit_rows == [(fingerprint, "manual_reset")]
+
+    def test_cross_owner_receipt_is_404(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(_OWNERSHIP_ENV, "true")
+        owner = Principal(kind="oidc", identifier="a", owner_id="oidc:owner-a")
+        monkeypatch.setattr(app_module, "authenticate", lambda **_kwargs: owner)
+        _with_credentials(monkeypatch, "huggingface")
+        failing = _SpyPublisher("huggingface", error=RuntimeError("boom"))
+        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "huggingface", failing)
+        service = _service(tmp_path)
+        _build(service, "run-owned-reconcile", LICENSED_SPEC_YAML)
+        assert _publish(service, "run-owned-reconcile").status_code == 502
+
+        other = Principal(kind="oidc", identifier="b", owner_id="oidc:owner-b")
+        monkeypatch.setattr(app_module, "authenticate", lambda **_kwargs: other)
+        # publish/readiness 라우트와 동일하게 run 소유권 게이트가 403으로 차단한다.
+        resp = dispatch(
+            service,
+            "GET",
+            "/builds/run-owned-reconcile/publish/receipt",
+            None,
+            query="target=huggingface&destination=kpubdata%2Fair-quality",
+        )
+        assert resp.status_code == 403
+        reset_resp = dispatch(
+            service,
+            "DELETE",
+            "/builds/run-owned-reconcile/publish/receipt",
+            None,
+            query="target=huggingface&destination=kpubdata%2Fair-quality",
+        )
+        assert reset_resp.status_code == 403
+
+
 class TestOpenApiConformance:
     """실제 dispatch() wire 응답이 OpenAPI 스키마와 정확히 일치하는지 (ADR-0005 방식)."""
 
