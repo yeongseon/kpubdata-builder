@@ -41,9 +41,7 @@ class TestFindCancelledPartialRuns:
         _write_manifest(
             tmp_path / "run-cancelled", status="cancelled", partial=True, finished_at=_iso(now)
         )
-        _write_manifest(
-            tmp_path / "run-ok", status="ok", partial=False, finished_at=_iso(now)
-        )
+        _write_manifest(tmp_path / "run-ok", status="ok", partial=False, finished_at=_iso(now))
         _write_manifest(
             tmp_path / "run-failed", status="failed", partial=False, finished_at=_iso(now)
         )

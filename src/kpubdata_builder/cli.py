@@ -491,8 +491,7 @@ def _run_prune_cancelled(*, output_dir: str, ttl_hours: float | None, apply: boo
     for run_id in report.deleted:
         print(f"deleted: {run_id}", flush=True)
     print(
-        f"scanned {report.scanned} cancelled partial run(s), "
-        f"deleted {report.deleted_count}",
+        f"scanned {report.scanned} cancelled partial run(s), deleted {report.deleted_count}",
         flush=True,
     )
     return 0
