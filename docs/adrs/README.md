@@ -12,13 +12,13 @@ KPubData Builder의 주요 설계 결정을 기록합니다. 각 ADR은 배경·
 | [0006](./0006-service-auth-and-deployment.md) | 서비스 인증 & 배포(Docker) 스토리 | 승인됨 | #312 |
 | [0007](./0007-kpubdata-version-compatibility-policy.md) | kpubdata 버전 호환성 정책 및 핀 강화 | 승인됨 | #213 |
 | [0008](./0008-async-build-job-model.md) | 비동기 build job 모델: 상태·실패·취소·멱등성·부분 산출물 | 제안됨 | #334 |
-| [0009](./0009-user-authentication-google-oidc.md) | 사용자 인증 모델: Google OIDC ID 토큰 검증 | 제안됨 | #383 |
+| [0009](./0009-user-authentication-google-oidc.md) | 사용자 인증 모델: Google OIDC ID 토큰 검증 | 대체됨(0015) | #383 |
 | [0010](./0010-artifactstore-state-backend.md) | ArtifactStore 추상화 + BuildIndex 백엔드 분리 | 제안됨 | #375 |
 | [0011](./0011-buildspec-assistant-grounding.md) | BuildSpec 어시스턴트 그라운딩 계약 | 제안됨 | #415 |
-| [0012](./0012-provider-credential-boundary.md) | Provider credential 저장·주입 경계 | 승인됨 | #492 |
+| [0012](./0012-provider-credential-boundary.md) | Provider credential 저장·주입 경계 | 승인됨 | #492, #505 |
 | [0013](./0013-api-contract-release-policy.md) | API 계약 버전과 릴리스 경계 정책 | 승인됨 | #521 |
-| [0012](./0012-provider-credential-boundary.md) | 사용자별 Provider Credential 저장과 Client 격리 | 승인됨 | #492, #505 |
 | [0014](./0014-source-ingestion-file-url-boundary.md) | Public API·File·URL Source 통합 경계 | 승인됨 | #498 |
+| [0015](./0015-email-password-oidc-idp-keycloak.md) | 사용자 인증 IdP: 이메일/비밀번호-capable OIDC(Keycloak) 전환 | 승인됨 | #515 |
 
 ## 작성 규칙
 
