@@ -10,6 +10,8 @@ import pytest
 
 from kpubdata_builder.store import SCHEMA_VERSION, BuildIndex, rebuild_index
 
+from .conftest import requires_symlinks
+
 
 class TestBuildIndex:
     """BuildIndex 단위 테스트."""
@@ -597,6 +599,7 @@ class TestRebuildIndex:
         assert entry is not None
         assert entry.dataset_id is None
 
+    @requires_symlinks
     def test_rebuild_skips_symlinked_snapshot(self, tmp_path: Path) -> None:
         run_dir = tmp_path / "run1"
         run_dir.mkdir()

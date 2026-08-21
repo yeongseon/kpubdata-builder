@@ -13,6 +13,8 @@ import pytest
 import kpubdata_builder.query.engine as engine_module
 from kpubdata_builder.query.engine import QueryEngine, QueryExecutionError, QueryTimeoutError
 
+from .conftest import spawn_timeout_multiplier
+
 
 def _sleeping_worker(
     connection: Connection,
@@ -54,7 +56,8 @@ def test_timeout_leaves_child_not_alive(tmp_path: Path) -> None:
     pid_file = tmp_path / "child.pid"
     # Windows spawn imports the test module in a fresh interpreter, so leave
     # enough time for the worker to publish its PID before exercising timeout.
-    engine = QueryEngine(timeout_seconds=5, worker=_sleeping_worker)
+    timeout_seconds = 5 * spawn_timeout_multiplier()
+    engine = QueryEngine(timeout_seconds=timeout_seconds, worker=_sleeping_worker)
 
     with pytest.raises(QueryTimeoutError):
         engine.execute(pid_file, "SELECT * FROM dataset", limit=1)
@@ -73,7 +76,7 @@ def test_real_engine_executes_canonical_sql_and_hard_limit(
     sql = "SELECT value FROM dataset ORDER BY value"
     caplog.set_level(logging.INFO, logger=engine_module.__name__)
 
-    result = QueryEngine(timeout_seconds=5).execute(
+    result = QueryEngine(timeout_seconds=5 * spawn_timeout_multiplier()).execute(
         table_path,
         sql,
         limit=2,
@@ -109,7 +112,7 @@ def test_real_engine_raises_execution_error_for_unresolvable_column(tmp_path: Pa
     pl.DataFrame({"value": [1, 2, 3]}).write_parquet(table_path)
 
     with pytest.raises(QueryExecutionError):
-        QueryEngine(timeout_seconds=5).execute(
+        QueryEngine(timeout_seconds=5 * spawn_timeout_multiplier()).execute(
             table_path,
             "SELECT nonexistent_column FROM dataset",
             limit=1,

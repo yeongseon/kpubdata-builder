@@ -28,6 +28,7 @@ from kpubdata_builder.service.ownership import _OWNERSHIP_ENV
 from kpubdata_builder.spec import JsonValue
 
 from ._openapi import response_schema, validate
+from .conftest import requires_symlinks
 from .test_service import _FakeClient
 from .test_service_contract import _load_contract
 
@@ -960,6 +961,7 @@ class TestArtifactScope:
         assert "artifact_invalid" in _blocker_codes(resp)
         assert spy.calls == []
 
+    @requires_symlinks
     def test_symlink_escape_artifact_blocks_publish(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
