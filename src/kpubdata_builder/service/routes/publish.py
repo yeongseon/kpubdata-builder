@@ -44,13 +44,17 @@ def route(
         if not target_values or not target_values[-1]:
             return ServiceResponse(400, {"error": "'target' query parameter is required"})
         target = target_values[-1]
+        # destination은 선택(#550) — kaggle metadata 정합 등 destination 의존
+        # 검사는 제공된 경우에만 readiness에 반영되고, POST가 최종 재검증한다.
+        destination_values = query_params.get("destination")
+        destination = destination_values[-1] if destination_values else None
         # #496 follow-up과 동일하게 manifest 유무와 무관하게(queued/running도)
         # 존재/소유권을 판정한다 — publish readiness는 running/queued run도
         # 404가 아니라 "아직 안 끝남" blocker로 보고해야 한다(#491).
         access_error = check_active_run_access(service, run_id, principal)
         if access_error is not None:
             return access_error
-        return service.publish_readiness(run_id, target)
+        return service.publish_readiness(run_id, target, destination=destination)
 
     if method == "GET" and rest.endswith(_RECEIPT_SUFFIX):
         run_id = rest[: -len(_RECEIPT_SUFFIX)]

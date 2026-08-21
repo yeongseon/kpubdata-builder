@@ -304,7 +304,12 @@ def _strip_internal_fields(entries: list[_BuildListEntry]) -> list[_BuildListEnt
 # POST /builds/{run_id}/publish/reconcile(원격 상태 확인 후 succeeded 확정 또는
 # reset으로 재게시 허용), DELETE /builds/{run_id}/publish/receipt(명시적 reset,
 # 감사 로그 기록). reconcile은 원격 판단 불가 시 503로 아무 것도 변경하지 않는다.
-API_CONTRACT_VERSION = "1.19.0"
+# 1.19.0 -> 1.20.0: HTTP publish target에 kaggle과 local을 추가한다(#550,
+# additive). kaggle은 packaging의 dataset-metadata.json id가 destination과
+# 일치할 때만(readiness blocker로 정합 검증), local은
+# KPUBDATA_BUILDER_LOCAL_PUBLISH_ROOT로 지정한 publish-root 안의 상대
+# owner/name 경로로 한정된다. GET readiness의 destination query는 선택 파라미터다.
+API_CONTRACT_VERSION = "1.20.0"
 
 
 def _quality_result_to_json(r: QualityCheckResult) -> dict[str, JsonValue]:
@@ -1852,7 +1857,9 @@ class BuilderService:
         # 이론상 도달하지 않는다 — fail-closed로 failed 취급한다.
         return "failed", None, None
 
-    def publish_readiness(self, run_id: str, target: str) -> ServiceResponse:
+    def publish_readiness(
+        self, run_id: str, target: str, destination: str | None = None
+    ) -> ServiceResponse:
         """GET /builds/{run_id}/publish/readiness (#491).
 
         side-effect-free다 — Publisher를 호출하거나 원격 dataset을 만들지
@@ -1869,6 +1876,7 @@ class BuilderService:
         result = publish_service.build_readiness(
             run_id=run_id,
             target=resolved_target,
+            destination=destination or "",
             status=status,
             manifest=cast("dict[str, object] | None", manifest),
             spec=spec,
@@ -1962,6 +1970,7 @@ class BuilderService:
         readiness = publish_service.build_readiness(
             run_id=run_id,
             target=resolved_target,
+            destination=destination,
             status=status,
             manifest=cast("dict[str, object] | None", manifest),
             spec=spec,
@@ -2004,7 +2013,22 @@ class BuilderService:
             return claimed_response
 
         publisher = PUBLISHER_REGISTRY[resolved_target]
-        publish_kwargs: dict[str, object] = {"destination": destination, **options}
+        # local target은 destination을 publish-root 안의 절대 경로로 해석해
+        # 넘긴다(#550). readiness가 이미 통과했어도 여기서 다시 해석·검증한다
+        # (TOCTOU 재검증, #491과 동일 원칙).
+        effective_destination: str = destination
+        if resolved_target == "local":
+            resolved_local = publish_service.resolve_local_destination(destination)
+            if isinstance(resolved_local, publish_service.PublishIssue):
+                return ServiceResponse(
+                    409,
+                    {
+                        "error": f"run is not ready to publish to {resolved_target!r}",
+                        "blockers": [cast(JsonValue, resolved_local.to_body())],
+                    },
+                )
+            effective_destination = str(resolved_local[1])
+        publish_kwargs: dict[str, object] = {"destination": effective_destination, **options}
         try:
             result = publisher.publish(readiness.artifacts.paths, **publish_kwargs)  # type: ignore[arg-type]
         except Exception as exc:

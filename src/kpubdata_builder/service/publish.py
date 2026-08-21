@@ -41,29 +41,36 @@ from . import stages as stages_service
 
 # HTTP로 안전하게 노출 가능한 publish target. PUBLISHER_REGISTRY에는 "local"도
 # 있지만, LocalPublisher는 caller-provided destination을 그대로 로컬
-# 파일시스템 Path로 써서 복사한다(publishers/local.py) — 이 저장소에는 그
-# destination을 안전하게 한정할 configured publish-root/allowlist 계약이
-# 아직 없다(검색 확인: publish_root/local publish 관련 서버 설정이 없음).
-# 그런 계약이 생기기 전까지 "local"을 HTTP publish target에서 제외한다.
-# Kaggle도 정상 pipeline packaging의 metadata.id가 destination-aware해질 때까지
-# 제외한다. PUBLISHER_REGISTRY에 있다는 사실만으로 HTTP에 안전하고 실제로
-# publish 가능하다고 가정하지 않는다(#491).
-HTTP_PUBLISH_TARGETS: tuple[str, ...] = ("huggingface",)
+# 파일시스템 Path로 써서 복사한다(publishers/local.py) — HTTP 노출은
+# ``KPUBDATA_BUILDER_LOCAL_PUBLISH_ROOT``로 지정된 publish-root 안의 상대
+# 경로로 한정할 때만 허용한다(#550). Kaggle은 packaging이 기록한
+# ``dataset-metadata.json``의 ``id``가 destination과 일치할 때만 허용한다
+# (#550 정합화 규칙 — 기존 CLI 의미론과 동일).
+HTTP_PUBLISH_TARGETS: tuple[str, ...] = ("huggingface", "kaggle", "local")
 
 RunStatus = Literal["queued", "running", "cancelling", "succeeded", "failed", "cancelled"]
+
+# Local publish-root 절대 경로를 지정하는 서버 설정(#550). 미설정이면 local
+# target의 readiness가 credential/게시 경계 미구성 blocker를 보고한다(fail-closed).
+_LOCAL_PUBLISH_ROOT_ENV = "KPUBDATA_BUILDER_LOCAL_PUBLISH_ROOT"
 
 _DESTINATION_PATTERN = re.compile(
     r"^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?/[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$"
 )
 
 # target별로 실제 Publisher.publish()가 받는 kwarg만 허용한다. Hugging Face는
-# 신규 repo visibility를 위한 private만 노출하고 그 밖의 option은 거부한다.
+# 신규 repo visibility를 위한 private만, Kaggle은 신규 dataset 공개 여부의
+# public만 노출하고 그 밖의 option은 거부한다. Local은 노출 option이 없다.
 _ALLOWED_OPTIONS: dict[str, dict[str, type]] = {
     "huggingface": {"private": bool},
+    "kaggle": {"public": bool},
+    "local": {},
 }
 
 _DEFAULT_OPTIONS: dict[str, dict[str, object]] = {
     "huggingface": {"private": True},
+    "kaggle": {"public": False},
+    "local": {},
 }
 
 PublishReceiptState = Literal["pending", "succeeded", "unknown"]
@@ -510,16 +517,107 @@ def _huggingface_credential_configured() -> bool:
     return bool(os.environ.get("HF_TOKEN"))
 
 
+def _kaggle_credential_configured() -> bool:
+    return bool(os.environ.get("KAGGLE_USERNAME")) and bool(os.environ.get("KAGGLE_KEY"))
+
+
+def local_publish_root() -> Path | None:
+    """설정된 local publish-root 절대 경로(#550). 미설정/불완전이면 None."""
+    raw = os.environ.get(_LOCAL_PUBLISH_ROOT_ENV, "").strip()
+    if not raw:
+        return None
+    return Path(raw).expanduser().resolve()
+
+
+def resolve_local_destination(destination: str) -> tuple[Path, Path] | PublishIssue:
+    """local target의 destination을 publish-root 안의 절대 경로로 해석한다.
+
+    반환값: ``(publish_root, absolute_destination)`` 또는 blocker.
+    destination은 항상 상대 ``owner/name`` 형태여야 하고, root를 벗어나는
+    경로는 fail-closed다(#550).
+    """
+    root = local_publish_root()
+    if root is None:
+        return PublishIssue(
+            "local_publish_root_unconfigured",
+            "KPUBDATA_BUILDER_LOCAL_PUBLISH_ROOT is not configured on the server",
+        )
+    absolute = (root / destination).resolve()
+    try:
+        ensure_within(root, absolute, label="local publish destination")
+    except ValueError:
+        return PublishIssue(
+            "destination_outside_publish_root",
+            "destination must stay inside the configured local publish root",
+        )
+    return root, absolute
+
+
+def kaggle_package_id(artifacts: ResolvedArtifacts) -> tuple[Path, str] | PublishIssue | None:
+    """Kaggle packaging을 해석한다 (#550).
+
+    반환값:
+        ``(package_dir, metadata_id)`` — 정확히 하나의 dataset-metadata.json이
+        있고 id를 읽을 수 있을 때(KagglePublisher는 디렉터리 artifact를
+        받는다). ``None`` — packaging이 아예 없을 때. :class:`PublishIssue` —
+        packaging이 여러 개(모호)거나 id를 읽을 수 없을 때.
+    """
+    # dataset-metadata.json은 exporter가 기록하는 sidecar라 manifest.outputs에
+    # 들어가지 않는다 — 해석된 gold artifact의 형제 디렉터리에서 찾는다(#550).
+    package_dirs: list[Path] = []
+    for artifact_path in artifacts.paths:
+        candidate = artifact_path.parent / "dataset-metadata.json"
+        if candidate.is_file() and candidate.parent not in package_dirs:
+            package_dirs.append(candidate.parent)
+    if not package_dirs:
+        return None
+    if len(package_dirs) > 1:
+        return PublishIssue(
+            "kaggle_metadata_ambiguous",
+            "run has multiple Kaggle packagings; publish target is ambiguous",
+        )
+    metadata_path = package_dirs[0] / "dataset-metadata.json"
+    try:
+        raw = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return PublishIssue(
+            "kaggle_metadata_unreadable",
+            "Kaggle dataset-metadata.json could not be read",
+        )
+    if not isinstance(raw, dict):
+        return PublishIssue(
+            "kaggle_metadata_unreadable",
+            "Kaggle dataset-metadata.json could not be read",
+        )
+    metadata_id = raw.get("id")
+    if not isinstance(metadata_id, str) or not metadata_id:
+        return PublishIssue(
+            "kaggle_metadata_unreadable",
+            "Kaggle dataset-metadata.json has no dataset id",
+        )
+    return metadata_path.parent, metadata_id
+
+
 def credential_blocker(target: str) -> PublishIssue | None:
-    """target publish credential이 서버에 설정돼 있는지만 boolean으로 확인한다.
+    """target publish credential/경계가 서버에 설정돼 있는지만 확인한다.
 
     원문 credential은 절대 읽거나 반환하지 않는다. 설정 여부를 확인할 수 없으면
     (지원 불가능한 credential shape 포함) ready=true로 추정하지 않고 명시적으로
-    unavailable로 처리한다(#491 지침 7).
+    unavailable로 처리한다(#491 지침 7). local target의 "credential"은
+    publish-root 설정이다(#550).
     """
-    configured = _huggingface_credential_configured()
-    if configured:
+    if target == "huggingface" and _huggingface_credential_configured():
         return None
+    if target == "kaggle" and _kaggle_credential_configured():
+        return None
+    if target == "local" and local_publish_root() is not None:
+        return None
+
+    if target == "local":
+        return PublishIssue(
+            "local_publish_root_unconfigured",
+            "no local publish root is configured for target 'local'",
+        )
     return PublishIssue(
         "credential_unavailable",
         f"no server-side credential is configured for target {target!r}",
@@ -668,6 +766,7 @@ def build_readiness(
     *,
     run_id: str,
     target: str,
+    destination: str,
     status: RunStatus,
     manifest: dict[str, object] | None,
     spec: BuildSpec | None,
@@ -695,6 +794,41 @@ def build_readiness(
             blockers.append(resolved)
         else:
             artifacts = resolved
+
+            if target == "kaggle":
+                # Kaggle packaging의 dataset-metadata.json id가 destination과
+                # 일치해야 하고(#550), KagglePublisher는 패키지 디렉터리를
+                # 받으므로 artifact 묶음을 디렉터리 형태로 바꾼다. packaging
+                # 부재는 destination과 무관한 blocker지만 id 불일치 검사는
+                # destination이 주어진 경우에만 한다(GET readiness는 선택
+                # 파라미터, POST가 최종 재검증한다).
+                package = kaggle_package_id(resolved)
+                if isinstance(package, PublishIssue):
+                    blockers.append(package)
+                elif package is None:
+                    blockers.append(
+                        PublishIssue(
+                            "kaggle_metadata_missing",
+                            "run has no Kaggle packaging (dataset-metadata.json) to publish",
+                        )
+                    )
+                else:
+                    package_dir, metadata_id = package
+                    if destination and metadata_id != destination:
+                        blockers.append(
+                            PublishIssue(
+                                "kaggle_destination_mismatch",
+                                f"packaged Kaggle dataset id {metadata_id!r} does not match"
+                                f" destination {destination!r}",
+                            )
+                        )
+                    else:
+                        artifacts = ResolvedArtifacts(paths=(package_dir,), expects_directory=True)
+
+            if target == "local" and destination:
+                resolved_local = resolve_local_destination(destination)
+                if isinstance(resolved_local, PublishIssue):
+                    blockers.append(resolved_local)
 
         blockers.extend(effective_publish_policy_blockers(spec))
 
