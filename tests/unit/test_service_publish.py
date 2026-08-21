@@ -164,9 +164,22 @@ def _no_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
 
 
-def _with_credentials(monkeypatch: pytest.MonkeyPatch, target: str) -> None:
-    assert target == "huggingface"
-    monkeypatch.setenv("HF_TOKEN", "hf_super_secret_token_value")
+def _with_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+    target: str,
+    *,
+    publish_root: Path | None = None,
+) -> None:
+    if target == "huggingface":
+        monkeypatch.setenv("HF_TOKEN", "hf_super_secret_token_value")
+    elif target == "kaggle":
+        monkeypatch.setenv("KAGGLE_USERNAME", "kpubdata")
+        monkeypatch.setenv("KAGGLE_KEY", "kaggle-secret")
+    elif target == "local":
+        if publish_root is not None:
+            monkeypatch.setenv("KPUBDATA_BUILDER_LOCAL_PUBLISH_ROOT", str(publish_root))
+    else:
+        raise AssertionError(f"unsupported test credential target: {target}")
 
 
 class TestReadiness:
@@ -272,13 +285,19 @@ class TestReadiness:
         assert resp.body["ready"] is False
         assert "credential_unavailable" in _blocker_codes(resp)
 
-    def test_kaggle_target_is_not_available_over_http(self, tmp_path: Path) -> None:
+    def test_kaggle_target_readiness_reports_packaging_blocker(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # #550 이후 kaggle은 HTTP target이다 — packaging/credential 없으면
+        # readiness blocker로 보고된다(unsupported_target 400이 아님).
+        _with_credentials(monkeypatch, "kaggle")
         service = _service(tmp_path)
         _build(service, "run-kaggle-http-disabled", LICENSED_SPEC_YAML)
 
         resp = _readiness(service, "run-kaggle-http-disabled", "kaggle")
-        assert resp.status_code == 400
-        assert resp.body["code"] == "unsupported_target"
+        assert resp.status_code == 200
+        assert resp.body["ready"] is False
+        assert "kaggle_metadata_missing" in _blocker_codes(resp)
 
     def test_effective_publish_policy_blocks_pii_allow(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -292,13 +311,16 @@ class TestReadiness:
         assert resp.body["ready"] is False
         assert "pii_allow_with_publish" in _blocker_codes(resp)
 
-    def test_local_target_rejected_before_readiness_body(self, tmp_path: Path) -> None:
+    def test_local_target_without_root_reports_blocker(self, tmp_path: Path) -> None:
+        # #550 이후 local은 HTTP target이다 — publish-root 미설정은 400이 아니라
+        # readiness blocker다(fail-closed지만 원인이 사용자에게 설명된다).
         service = _service(tmp_path)
         _build(service, "run-local", LICENSED_SPEC_YAML)
 
         resp = _readiness(service, "run-local", "local")
-        assert resp.status_code == 400
-        assert "local" in cast(str, resp.body["error"])
+        assert resp.status_code == 200
+        assert resp.body["ready"] is False
+        assert "local_publish_root_unconfigured" in _blocker_codes(resp)
 
     def test_unknown_target_returns_400(self, tmp_path: Path) -> None:
         service = _service(tmp_path)
@@ -794,8 +816,10 @@ class TestPublish:
         _build(service, "run-kaggle-disabled-post", LICENSED_SPEC_YAML)
 
         resp = _publish(service, "run-kaggle-disabled-post", target="kaggle")
-        assert resp.status_code == 400
-        assert resp.body["code"] == "unsupported_target"
+        # #550 이후 kaggle은 HTTP target이다 — packaging/credential 없으면
+        # readiness blocker로 게시가 막힌다(unsupported_target 400이 아님).
+        assert resp.status_code == 409
+        assert "kaggle_metadata_missing" in _blocker_codes(resp)
         assert spy.calls == []
 
     def test_effective_pii_policy_blocks_post_before_publisher_call(
@@ -1006,6 +1030,131 @@ def _assert_conforms(resp: ServiceResponse, path: str, method: str) -> None:
         f"{method} {path} {resp.status_code} response drifts from contract:\n  "
         + "\n  ".join(errors)
     )
+
+
+KAGGLE_SPEC_YAML = LICENSED_SPEC_YAML.replace(
+    "dataset_id: dataset.publish", "dataset_id: kpubdata/air"
+)
+KAGGLE_EXPORTS_BLOCK = (
+    "exports:\n  - kind: jsonl\n    output_path: out/data.jsonl"
+    "\n  - kind: kaggle\n    output_path: out/kaggle/data.csv"
+)
+KAGGLE_FULL_SPEC_YAML = KAGGLE_SPEC_YAML.replace(
+    "exports:\n  - kind: jsonl\n    output_path: out/data.jsonl",
+    KAGGLE_EXPORTS_BLOCK,
+)
+
+
+class TestKaggleLocalTargets:
+    """kaggle/local HTTP publish target wiring (#550)."""
+
+    def test_local_publish_without_root_env_is_blocker(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("KPUBDATA_BUILDER_LOCAL_PUBLISH_ROOT", raising=False)
+        service = _service(tmp_path)
+        _build(service, "run-local-noroot", LICENSED_SPEC_YAML)
+
+        resp = _readiness(service, "run-local-noroot", target="local")
+        assert resp.status_code == 200
+        assert resp.body["ready"] is False
+        assert "local_publish_root_unconfigured" in _blocker_codes(resp)
+
+    def test_local_publish_root_escape_is_blocker(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "publish-root"
+        root.mkdir()
+        _with_credentials(monkeypatch, "local", publish_root=root)
+        service = _service(tmp_path)
+        _build(service, "run-local-escape", LICENSED_SPEC_YAML)
+
+        resp = dispatch(
+            service,
+            "GET",
+            "/builds/run-local-escape/publish/readiness",
+            None,
+            query="target=local&destination=..%2Fescape",
+        )
+        assert resp.status_code == 200
+        assert resp.body["ready"] is False
+        # owner/name 패턴 위반이 우선이다(경로 횡단 문자열은 형태 검사에서 거부).
+        assert resp.body["blockers"]
+
+    def test_local_publish_copies_into_root(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "publish-root"
+        root.mkdir()
+        _with_credentials(monkeypatch, "local", publish_root=root)
+        spy = _SpyPublisher("local")
+        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "local", spy)
+        service = _service(tmp_path)
+        _build(service, "run-local-ok", LICENSED_SPEC_YAML)
+
+        resp = _publish(service, "run-local-ok", target="local", destination="kpubdata/air-quality")
+        assert resp.status_code == 200
+        assert len(spy.calls) == 1
+        # Publisher가 받는 destination은 root 안의 절대 경로다.
+        passed_destination = spy.calls[0][1]["destination"]
+        assert str(root.resolve()) in str(passed_destination)
+
+    def test_kaggle_without_packaging_is_blocker(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _with_credentials(monkeypatch, "kaggle")
+        service = _service(tmp_path)
+        _build(service, "run-kaggle-nopack", LICENSED_SPEC_YAML)
+
+        resp = dispatch(
+            service,
+            "GET",
+            "/builds/run-kaggle-nopack/publish/readiness",
+            None,
+            query="target=kaggle&destination=kpubdata%2Fair-quality",
+        )
+        assert resp.status_code == 200
+        assert resp.body["ready"] is False
+        assert "kaggle_metadata_missing" in _blocker_codes(resp)
+
+    def test_kaggle_publish_requires_metadata_destination_match(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _with_credentials(monkeypatch, "kaggle")
+        service = _service(tmp_path)
+        built = _build(service, "run-kaggle-match", KAGGLE_FULL_SPEC_YAML)
+        assert built.status_code == 200
+
+        # exporter가 기록한 metadata id(dataset_id 기반)와 다른 destination은 blocker.
+        resp = dispatch(
+            service,
+            "GET",
+            "/builds/run-kaggle-match/publish/readiness",
+            None,
+            query="target=kaggle&destination=someone%2Felse",
+        )
+        assert resp.status_code == 200
+        assert "kaggle_destination_mismatch" in _blocker_codes(resp)
+
+        # packaging id와 일치하는 destination이면 publisher에 디렉터리가 전달된다.
+        spy = _SpyPublisher("kaggle", expects_directory=True)
+        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "kaggle", spy)
+        resp = dispatch(
+            service,
+            "POST",
+            "/builds/run-kaggle-match/publish",
+            {"target": "kaggle", "destination": "kpubdata/air"},
+        )
+        assert resp.status_code == 200
+        assert len(spy.calls) == 1
+        paths = spy.calls[0][0]
+        assert all(p.is_dir() for p in paths)
+
+    def test_unknown_target_still_rejected(self, tmp_path: Path) -> None:
+        service = _service(tmp_path)
+        _build(service, "run-bad-target-2", LICENSED_SPEC_YAML)
+        resp = _publish(service, "run-bad-target-2", target="s3")
+        assert resp.status_code == 400
 
 
 class TestReceiptReconcile:
@@ -1239,7 +1388,7 @@ class TestOpenApiConformance:
     def test_readiness_400_conforms(self, tmp_path: Path) -> None:
         service = _service(tmp_path)
         _build(service, "conform-400", LICENSED_SPEC_YAML)
-        resp = _readiness(service, "conform-400", "local")
+        resp = _readiness(service, "conform-400", "s3")
         assert resp.status_code == 400
         _assert_conforms(resp, "/builds/{run_id}/publish/readiness", "GET")
 
