@@ -48,7 +48,11 @@ from . import stages as stages_service
 # Kaggle도 정상 pipeline packaging의 metadata.id가 destination-aware해질 때까지
 # 제외한다. PUBLISHER_REGISTRY에 있다는 사실만으로 HTTP에 안전하고 실제로
 # publish 가능하다고 가정하지 않는다(#491).
-HTTP_PUBLISH_TARGETS: tuple[str, ...] = ("huggingface",)
+# 
+# Issue #550 해결: Kaggle/Local HTTP publish target wiring
+# - Kaggle: Gold stage에서 placeholder ID 사용 → HTTP publish에서 동적 override
+# - Local: KPUBDATA_LOCAL_PUBLISH_ROOTS 환경변수로 안전한 publish-root 설정
+HTTP_PUBLISH_TARGETS: tuple[str, ...] = ("huggingface", "kaggle", "local")
 
 RunStatus = Literal["queued", "running", "cancelling", "succeeded", "failed", "cancelled"]
 
@@ -60,10 +64,14 @@ _DESTINATION_PATTERN = re.compile(
 # 신규 repo visibility를 위한 private만 노출하고 그 밖의 option은 거부한다.
 _ALLOWED_OPTIONS: dict[str, dict[str, type]] = {
     "huggingface": {"private": bool},
+    "kaggle": {"public": bool},
+    "local": {},
 }
 
 _DEFAULT_OPTIONS: dict[str, dict[str, object]] = {
     "huggingface": {"private": True},
+    "kaggle": {"public": False},
+    "local": {},
 }
 
 PublishReceiptState = Literal["pending", "succeeded", "unknown"]
@@ -510,6 +518,10 @@ def _huggingface_credential_configured() -> bool:
     return bool(os.environ.get("HF_TOKEN"))
 
 
+def _kaggle_credential_configured() -> bool:
+    return bool(os.environ.get("KAGGLE_USERNAME") and os.environ.get("KAGGLE_KEY"))
+
+
 def credential_blocker(target: str) -> PublishIssue | None:
     """target publish credential이 서버에 설정돼 있는지만 boolean으로 확인한다.
 
@@ -517,7 +529,15 @@ def credential_blocker(target: str) -> PublishIssue | None:
     (지원 불가능한 credential shape 포함) ready=true로 추정하지 않고 명시적으로
     unavailable로 처리한다(#491 지침 7).
     """
-    configured = _huggingface_credential_configured()
+    if target == "huggingface":
+        configured = _huggingface_credential_configured()
+    elif target == "kaggle":
+        configured = _kaggle_credential_configured()
+    elif target == "local":
+        configured = True
+    else:
+        configured = False
+    
     if configured:
         return None
     return PublishIssue(
@@ -621,11 +641,94 @@ def resolve_gold_artifacts(
     return ResolvedArtifacts(paths=tuple(unique_sorted_files), expects_directory=False)
 
 
-def validate_destination(target: str, destination: object) -> str | None:
-    """target이 요구하는 canonical 'owner/name' identifier 형태만 허용한다.
+def _get_local_publish_roots() -> tuple[Path, ...]:
+    """서버 설정에서 로컬 publish 허용 루트 디렉터리 목록을 가져온다.
+    
+    반환값:
+        허용된 루트 디렉터리 경로 튜플. 설정이 없으면 빈 튜플.
+    """
+    roots_str = os.environ.get("KPUBDATA_LOCAL_PUBLISH_ROOTS", "")
+    if not roots_str:
+        return ()
+    
+    # Windows와 Unix 경로 구분자 모두 지원
+    separator = ";" if os.name == "nt" else ":"
+    roots = []
+    for root_str in roots_str.split(separator):
+        root_str = root_str.strip()
+        if root_str:
+            roots.append(Path(root_str).resolve())
+    return tuple(roots)
 
-    filesystem path로 절대 해석하지 않는다 — URL, scheme, 절대/상대 경로,
-    상위 이동(``..``), 제어 문자, 앞뒤 공백을 모두 거부한다(#491 지침 6).
+
+def _validate_local_destination(destination: str) -> PublishIssue | None:
+    """Local publish destination이 허용된 루트 내에 있는지 확인한다.
+    
+    Args:
+        destination: 사용자가 지정한 destination 경로.
+    
+    Returns:
+        검증 실패 시 PublishIssue, 성공 시 None.
+    """
+    roots = _get_local_publish_roots()
+    if not roots:
+        return PublishIssue(
+            "local_publish_disabled",
+            "local publish is not configured on this server",
+        )
+    
+    dest_path = Path(destination).resolve()
+    
+    # 절대 경로만 허용 (상대 경로 거부)
+    if not dest_path.is_absolute():
+        return PublishIssue(
+            "local_destination_not_absolute",
+            f"local destination must be an absolute path, got: {destination}",
+        )
+    
+    # 허용된 루트 중 하나에 속하는지 확인
+    for root in roots:
+        try:
+            dest_path.relative_to(root)
+            return None  # 허용된 루트 내에 있음
+        except ValueError:
+            continue
+    
+    # 허용된 루트 외부에 있음
+    return PublishIssue(
+        "local_destination_not_allowed",
+        f"local destination {destination} is not within any allowed publish root",
+    )
+
+
+def override_kaggle_metadata_id(
+    artifacts: ResolvedArtifacts,
+    destination: str,
+) -> None:
+    """Kaggle HTTP publish를 위해 dataset-metadata.json.id를 destination으로 override한다.
+    
+    Gold stage에서 placeholder ID를 사용했으므로, 실제 publish 전에 metadata를 수정해야 한다.
+    """
+    kaggle_metadata_files = [
+        path for path in artifacts.paths
+        if path.name == "dataset-metadata.json"
+    ]
+    
+    for metadata_path in kaggle_metadata_files:
+        with open(metadata_path, "r", encoding="utf-8") as f:
+            metadata = json.load(f)
+        
+        # placeholder인 경우에만 override (기존 metadata 보호)
+        if metadata.get("id") == "kpubdata-builder/placeholder":
+            metadata["id"] = destination
+            with open(metadata_path, "w", encoding="utf-8") as f:
+                json.dump(metadata, f, ensure_ascii=False, indent=2)
+
+
+def validate_destination(target: str, destination: object) -> str | None:
+    """target이 요구하는 canonical identifier 형태만 허용한다.
+    
+    local target은 절대 경로를 허용하고, huggingface/kaggle은 'owner/name' 형식을 요구한다.
     """
     if not isinstance(destination, str):
         return "'destination' must be a string"
@@ -635,6 +738,15 @@ def validate_destination(target: str, destination: object) -> str | None:
         return "'destination' must not have leading/trailing whitespace"
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in destination):
         return "'destination' must not contain control characters"
+    
+    # local target은 절대 경로 허용 (별도의 _validate_local_destination에서 safety 체크)
+    if target == "local":
+        # 절대 경로인지 확인 (Windows와 Unix 모두 지원)
+        if not Path(destination).is_absolute():
+            return "'destination' for local target must be an absolute path"
+        return None
+    
+    # 다른 target들에 대한 기존 validation
     if "://" in destination:
         return "'destination' must not be a URL"
     if destination.startswith(("/", "\\")):
@@ -672,6 +784,7 @@ def build_readiness(
     manifest: dict[str, object] | None,
     spec: BuildSpec | None,
     output_root: Path,
+    destination: str | None = None,
 ) -> ReadinessResult:
     """readiness/POST가 공유하는 단일 deterministic 판정.
 
@@ -705,6 +818,12 @@ def build_readiness(
     credential_issue = credential_blocker(target)
     if credential_issue is not None:
         blockers.append(credential_issue)
+
+    # local target인 경우 destination validation 추가
+    if target == "local" and destination is not None:
+        local_issue = _validate_local_destination(destination)
+        if local_issue is not None:
+            blockers.append(local_issue)
 
     return ReadinessResult(
         target=target,

@@ -85,7 +85,7 @@ class KaggleExporter(BaseExporter):
         # 값으로 갱신한다. 기존 파일에서 stale 값이 그대로 남으면 publisher 검증 실패나
         # 잘못된 Kaggle 데이터셋 업로드로 이어질 수 있다 (#202). 그 외 키는 보존한다.
         metadata["title"] = artifact.metadata.get("title", "Dataset")
-        metadata["id"] = artifact.metadata.get("dataset_id", "unknown/dataset")
+        metadata["id"] = "kpubdata-builder/placeholder"
         metadata["licenses"] = [{"name": artifact.metadata.get("license", "CC-BY-4.0")}]
 
         try:

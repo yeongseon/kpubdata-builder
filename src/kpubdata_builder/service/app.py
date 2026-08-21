@@ -1852,7 +1852,7 @@ class BuilderService:
         # 이론상 도달하지 않는다 — fail-closed로 failed 취급한다.
         return "failed", None, None
 
-    def publish_readiness(self, run_id: str, target: str) -> ServiceResponse:
+    def publish_readiness(self, run_id: str, target: str, destination: str | None = None) -> ServiceResponse:
         """GET /builds/{run_id}/publish/readiness (#491).
 
         side-effect-free다 — Publisher를 호출하거나 원격 dataset을 만들지
@@ -1873,6 +1873,7 @@ class BuilderService:
             manifest=cast("dict[str, object] | None", manifest),
             spec=spec,
             output_root=self._output_root,
+            destination=destination,
         )
         return ServiceResponse(
             200,
@@ -1966,6 +1967,7 @@ class BuilderService:
             manifest=cast("dict[str, object] | None", manifest),
             spec=spec,
             output_root=self._output_root,
+            destination=destination,
         )
         if not readiness.ready or readiness.artifacts is None:
             return ServiceResponse(
@@ -2002,6 +2004,10 @@ class BuilderService:
         claimed_response = _publish_receipt_response(claim_status, receipt)
         if claimed_response is not None:
             return claimed_response
+
+        # kaggle target인 경우 metadata override (#550)
+        if resolved_target == "kaggle":
+            publish_service.override_kaggle_metadata_id(readiness.artifacts, destination)
 
         publisher = PUBLISHER_REGISTRY[resolved_target]
         publish_kwargs: dict[str, object] = {"destination": destination, **options}
