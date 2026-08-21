@@ -478,7 +478,13 @@ def _run_source_pipeline(
             silver,
             dataset_name=output_key,
             exports=context.spec.exports,
-            metadata={"title": context.spec.title, "description": context.spec.description},
+            metadata={
+                "title": context.spec.title,
+                "description": context.spec.description,
+                # Kaggle exporter가 dataset-metadata.json의 id를 여기서 읽는다
+                # (#550 정합화 — spec.dataset_id가 곧 게시 destination 식별자).
+                "dataset_id": context.spec.dataset_id,
+            },
             splits_spec=context.spec.splits,
         )
         gold_paths = persist_gold_package(
@@ -525,7 +531,13 @@ def _run_source_pipeline(
         # BuildSpec.exports에 정의된 내보내기 도구 실행
         export_artifact = ArtifactDataset(
             records=tuple(gold.table.iter_rows(named=True)),
-            metadata={"title": context.spec.title, "description": context.spec.description},
+            metadata={
+                "title": context.spec.title,
+                "description": context.spec.description,
+                # Kaggle metadata id 정합(#550) — 이 경로가 파일을 다시 쓰므로
+                # dataset_id가 누락되면 unknown/dataset로 덮어쓴다.
+                "dataset_id": context.spec.dataset_id,
+            },
             statistics={"row_count": len(gold.table)},
             provenance=(output_key,),
         )
@@ -730,7 +742,12 @@ def _run_composition(
 
     export_artifact = ArtifactDataset(
         records=tuple(package.table.iter_rows(named=True)),
-        metadata={"title": context.spec.title, "description": context.spec.description},
+        metadata={
+            "title": context.spec.title,
+            "description": context.spec.description,
+            # Kaggle metadata id 정합(#550) — 위와 같은 이유로 dataset_id 필수.
+            "dataset_id": context.spec.dataset_id,
+        },
         statistics={"row_count": package.table.height},
         provenance=(join.left, join.right),
     )

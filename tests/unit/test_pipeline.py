@@ -305,7 +305,15 @@ def test_run_build_does_not_forward_arbitrary_metadata_to_exporters(
     result = run_build(spec, client=client, output_root=tmp_path, run_id="run1")
 
     assert result.status == "ok"
-    assert captured == [{"title": "Apartment Trades", "description": "seoul apartment trades"}]
+    # dataset_id는 #550부터 exporter에 전달되는 공개 필드다(Kaggle metadata id
+    # 정합). 임의 metadata(nested/tags)는 여전히 새지 않는다.
+    assert captured == [
+        {
+            "title": "Apartment Trades",
+            "description": "seoul apartment trades",
+            "dataset_id": "apt_trade",
+        }
+    ]
 
 
 def test_run_build_uses_alias_as_source_key(tmp_path: Path) -> None:
