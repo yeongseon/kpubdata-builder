@@ -56,7 +56,21 @@ Plugin 생태계와 고급 빌드 기능.
 - ✅ read-only query backend — Silver/Gold `/query` sandbox (#504, 계약 1.7.0)
 - ✅ ADR 0008 (async job), 0009 (auth), 0010 (state backend), 0011 (assistant)
 - ✅ Azure Bicep IaC, 배포 가이드, request ID 추적
-- 🔲 비동기 job 모델 구현 (#334, ADR 0008 제안됨)
+- ✅ 비동기 job 모델 구현 — 제출/polling/멱등(#480, #513), job registry·worker(#482),
+  backpressure(#483), 협력적 취소·partial manifest(#481), owner 게이트(계약 1.18.0)
+
+## v0.5 ✅ 완료 — UI vNext 지원 API (#484)
+
+- ✅ BuildSpec·Preview 계약 정합(#485), Quality 구조화·gate·history(#486)
+- ✅ Run별 canonical BuildSpec snapshot(#487), Dataset Catalog/Detail/Stage API(#488)
+- ✅ Public API·File·URL source 통합 ingestion + SSRF 방어(#498)
+- ✅ Silver/Gold read-only `/query`(#504), Stable Principal ID(#505)
+- ✅ `/catalog` 탐색 metadata(#490), Publish readiness·HTTP publish(#491)
+  + kaggle/local target(#550) + receipt reconcile/reset(#551) — 계약 1.20.0
+- ✅ Provider Credential·Status/Test(#492), Run Event Timeline(#496)
+- ✅ Preview diff/sampling(#497), Monitoring API(#516), Multi-source Join(#506)
+- ✅ Email/Password IdP ADR 0015(Keycloak, #515 — ADR 0009 대체)
+- ✅ cancelled run retention hooks(#549), Windows 테스트 결정성(#553)
 
 ## v1.0 기준
 
@@ -65,7 +79,10 @@ Plugin 생태계와 고급 빌드 기능.
 - ✅ 2개 publish 대상 (Hugging Face, Kaggle)
 - ✅ Dataset card + manifest 자동 생성
 - ✅ Plugin exporter API로 외부 확장 가능
-- 🔲 kpubdata-studio에서 전체 워크플로우 제어
+- ✅ kpubdata-studio에서 전체 워크플로우 제어 — vNext UI 에픽(#484/#246) 완료,
+  Studio E2E 34개 + cross-repo 실연동 슈트(studio PR #310)
+- 🔲 Keycloak 전환 실행(ADR 0015 후속: realm 구축·owner_key 마이그레이션·Studio provider)
+- 🔲 cross-repo E2E CI 자동화(kpubdata#282 — 워크플로 수정 권한 필요)
 
 ---
 
@@ -80,7 +97,11 @@ Plugin 생태계와 고급 빌드 기능.
 | 0005 | API 계약 단일 소스 | 승인됨 |
 | 0006 | 서비스 인증 & 배포 | 승인됨 |
 | 0007 | kpubdata 버전 호환성 | 승인됨 |
-| 0008 | 비동기 build job 모델 | 제안됨 |
-| 0009 | 사용자 인증 Google OIDC | 제안됨 |
+| 0008 | 비동기 build job 모델 | 승인됨 |
+| 0009 | 사용자 인증 Google OIDC | 대체됨(0015) |
 | 0010 | ArtifactStore + 상태 백엔드 | 제안됨 |
-| 0011 | BuildSpec 어시스턴트 그라운딩 | 제안됨 |
+| 0011 | BuildSpec 어시스턴트 그라운딩 | 승인됨 |
+| 0012 | Provider credential 저장·주입 경계 | 승인됨 |
+| 0013 | API 계약 버전과 릴리스 경계 | 승인됨 |
+| 0014 | Public API·File·URL Source 통합 경계 | 승인됨 |
+| 0015 | Email/Password OIDC IdP(Keycloak) 전환 | 승인됨 |
