@@ -56,7 +56,9 @@ def test_direct_cli_client_keeps_environment_cache_behavior(
 
     _ = cli_module._create_client()
 
-    assert captured == [{}]
+    # kpubdata #276 이후 from_env는 명시적 파라미터를 받는다 — 미지정값은
+    # None(환경 규칙 적용)으로 전달되고 cache를 강제하지 않는다.
+    assert captured == [{"provider_keys": None, "timeout": None, "cache": None}]
 
 
 def test_build_parser_uses_program_name() -> None:

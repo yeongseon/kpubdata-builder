@@ -193,14 +193,15 @@ def _create_client(
     """
     from kpubdata import Client
 
-    overrides: dict[str, object] = {}
-    if provider_keys is not None:
-        overrides["provider_keys"] = provider_keys
-    if timeout is not None:
-        overrides["timeout"] = timeout
-    if cache is not None:
-        overrides["cache"] = cache
-    return cast(SourceClient, Client.from_env(**overrides))
+    # kpubdata #276 이후 from_env는 명시적 파라미터만 받는다(**kwargs 폐기).
+    return cast(
+        SourceClient,
+        Client.from_env(
+            provider_keys=provider_keys,
+            timeout=timeout,
+            cache=cache,
+        ),
+    )
 
 
 def _run_validate(spec_path: str) -> int:
