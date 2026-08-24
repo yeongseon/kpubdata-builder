@@ -20,6 +20,7 @@ _READINESS_SUFFIX = "/publish/readiness"
 _PUBLISH_SUFFIX = "/publish"
 _RECEIPT_SUFFIX = "/publish/receipt"
 _RECONCILE_SUFFIX = "/publish/reconcile"
+_AUDIT_SUFFIX = "/publish/audit"
 
 
 def route(
@@ -72,6 +73,16 @@ def route(
         if access_error is not None:
             return access_error
         return service.get_publish_receipt(run_id, target, destination, principal=principal)
+
+    if method == "GET" and rest.endswith(_AUDIT_SUFFIX):
+        run_id = rest[: -len(_AUDIT_SUFFIX)]
+        error = _validate_run_id(run_id)
+        if error is not None:
+            return error
+        access_error = check_active_run_access(service, run_id, principal)
+        if access_error is not None:
+            return access_error
+        return service.publish_audit_log(run_id, principal=principal)
 
     if method == "POST" and rest.endswith(_RECONCILE_SUFFIX):
         run_id = rest[: -len(_RECONCILE_SUFFIX)]

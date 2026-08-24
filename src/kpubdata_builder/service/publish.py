@@ -25,6 +25,7 @@ import os
 import re
 import sqlite3
 import threading
+from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import datetime as datetime_module
 from datetime import timezone
@@ -135,18 +136,28 @@ class PublishReceiptStore:
                     """
                 )
                 # reconcile/reset 감사 로그(#551) — credential/path/원문을 담지
-                # 않는 최소 필드만 append한다.
+                # 않는 최소 필드만 append한다. owner_key/run_id를 행에 직접
+                # 저장해 receipt가 reset으로 삭제돼도 감사 이력이 조회되게 한다(#563).
                 connection.execute(
                     """
                     CREATE TABLE IF NOT EXISTS publish_receipt_audit (
                         seq INTEGER PRIMARY KEY AUTOINCREMENT,
                         fingerprint TEXT NOT NULL,
+                        owner_key TEXT,
+                        run_id TEXT,
                         action TEXT NOT NULL,
                         actor TEXT NOT NULL,
                         recorded_at TEXT NOT NULL
                     )
                     """
                 )
+                # #557 시점 스키마(owner/run 컬럼 없음)에서 만든 DB 호환 마이그레이션.
+                for column in ("owner_key", "run_id"):
+                    # 컬럼이 이미 존재하면 ALTER가 OperationalError로 실패한다.
+                    with suppress(sqlite3.OperationalError):
+                        connection.execute(
+                            f"ALTER TABLE publish_receipt_audit ADD COLUMN {column} TEXT"
+                        )
             self._initialized = True
 
     @staticmethod
@@ -336,46 +347,103 @@ class PublishReceiptStore:
             result=result,
             allowed_source_states=("pending", "unknown"),
         )
-        self._append_audit(fingerprint, "reconcile_succeeded")
+        owner_key, run_id = self._receipt_owner_run(fingerprint)
+        self._append_audit(fingerprint, "reconcile_succeeded", owner_key=owner_key, run_id=run_id)
 
     def reset(self, fingerprint: str, *, action: str = "reset") -> bool:
         """receipt를 삭제해 재시도(새 claim)를 허용한다(#551). 감사 로그를 남긴다.
 
         삭제가 실제로 일어났으면 True, 해당 fingerprint가 없으면 False.
+        감사 행에는 receipt의 owner/run을 옮겨 적는다(#563) — receipt 삭제 후에도
+        이력이 소유자·run 단위로 조회되어야 하기 때문이다.
         """
         self._initialize()
-        with self._connect() as connection:
-            cursor = connection.execute(
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT owner_key, run_id FROM publish_receipts WHERE fingerprint = ?",
+                (fingerprint,),
+            ).fetchone()
+            if row is None:
+                connection.commit()
+                return False
+            owner_key, run_id = cast(str | None, row[0]), cast(str, row[1])
+            connection.execute(
                 "DELETE FROM publish_receipts WHERE fingerprint = ?",
                 (fingerprint,),
             )
-            deleted = cursor.rowcount == 1
-        if deleted:
-            self._append_audit(fingerprint, action)
-        return deleted
+            self._append_audit_on(
+                connection, fingerprint, action, owner_key=owner_key, run_id=run_id
+            )
+            connection.commit()
+            return True
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
 
-    def _append_audit(self, fingerprint: str, action: str, *, actor: str = "operator") -> None:
-        recorded_at = datetime_module.now(timezone.utc).isoformat(timespec="seconds")
+    def _receipt_owner_run(self, fingerprint: str) -> tuple[str | None, str | None]:
+        """fingerprint에서 receipt의 (owner_key, run_id)를 읽는다(#563)."""
         with self._connect() as connection:
-            connection.execute(
-                """
-                INSERT INTO publish_receipt_audit(fingerprint, action, actor, recorded_at)
-                VALUES (?, ?, ?, ?)
-                """,
-                (fingerprint, action, actor, recorded_at),
+            row = connection.execute(
+                "SELECT owner_key, run_id FROM publish_receipts WHERE fingerprint = ?",
+                (fingerprint,),
+            ).fetchone()
+        if row is None:
+            return None, None
+        return cast(str | None, row[0]), cast(str | None, row[1])
+
+    def _append_audit(
+        self,
+        fingerprint: str,
+        action: str,
+        *,
+        owner_key: str | None = None,
+        run_id: str | None = None,
+        actor: str = "operator",
+    ) -> None:
+        with self._connect() as connection:
+            self._append_audit_on(
+                connection, fingerprint, action, owner_key=owner_key, run_id=run_id, actor=actor
             )
 
+    @staticmethod
+    def _append_audit_on(
+        connection: sqlite3.Connection,
+        fingerprint: str,
+        action: str,
+        *,
+        owner_key: str | None,
+        run_id: str | None,
+        actor: str = "operator",
+    ) -> None:
+        recorded_at = datetime_module.now(timezone.utc).isoformat(timespec="seconds")
+        connection.execute(
+            """
+            INSERT INTO publish_receipt_audit(
+                fingerprint, owner_key, run_id, action, actor, recorded_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (fingerprint, owner_key, run_id, action, actor, recorded_at),
+        )
+
     def audit_entries(self, *, owner_key: str, run_id: str) -> list[dict[str, str]]:
-        """해당 owner/run의 감사 로그를 시간순으로 반환한다(조회 API용)."""
+        """해당 owner/run의 감사 로그를 시간순으로 반환한다.
+
+        receipt가 삭제(reset)된 이후의 행도 포함한다(#563) — 감사 행이 owner/run을
+        스스로 들고 있으므로 JOIN이 필요 없다.
+        """
         self._initialize()
         with self._connect() as connection:
             rows = connection.execute(
                 """
-                SELECT a.fingerprint, a.action, a.actor, a.recorded_at
-                FROM publish_receipt_audit a
-                JOIN publish_receipts r ON r.fingerprint = a.fingerprint
-                WHERE r.owner_key = ? AND r.run_id = ?
-                ORDER BY a.seq
+                SELECT fingerprint, action, actor, recorded_at
+                FROM publish_receipt_audit
+                WHERE owner_key = ? AND run_id = ?
+                ORDER BY seq
                 """,
                 (owner_key, run_id),
             ).fetchall()
@@ -403,18 +471,35 @@ class PublishReceiptStore:
             if result is not None
             else None
         )
-        placeholders = ", ".join("?" for _ in allowed_source_states)
-        with self._connect() as connection:
-            cursor = connection.execute(
-                f"""
+        # BEGIN IMMEDIATE로 전환 순간까지 쓰기 잠금을 잡아 claim()과 같은
+        # 직렬화 수준에서 상태 전이를 확정한다(#564).
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            current = connection.execute(
+                "SELECT state FROM publish_receipts WHERE fingerprint = ?",
+                (fingerprint,),
+            ).fetchone()
+            if current is None or cast(str, current[0]) not in allowed_source_states:
+                connection.commit()
+                raise RuntimeError(
+                    "publish receipt is not in an allowed state for this transition"
+                    f" (allowed: {list(allowed_source_states)})"
+                )
+            connection.execute(
+                """
                 UPDATE publish_receipts
                 SET state = ?, result_json = ?
-                WHERE fingerprint = ? AND state IN ({placeholders})
+                WHERE fingerprint = ?
                 """,
-                (state, result_json, fingerprint, *allowed_source_states),
+                (state, result_json, fingerprint),
             )
-            if cursor.rowcount != 1:
-                raise RuntimeError("publish receipt is not pending")
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
 
 
 @dataclass(frozen=True)

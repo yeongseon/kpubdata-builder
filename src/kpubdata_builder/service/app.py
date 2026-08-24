@@ -309,7 +309,9 @@ def _strip_internal_fields(entries: list[_BuildListEntry]) -> list[_BuildListEnt
 # 일치할 때만(readiness blocker로 정합 검증), local은
 # KPUBDATA_BUILDER_LOCAL_PUBLISH_ROOT로 지정한 publish-root 안의 상대
 # owner/name 경로로 한정된다. GET readiness의 destination query는 선택 파라미터다.
-API_CONTRACT_VERSION = "1.20.0"
+# 1.20.0 -> 1.21.0: publish 감사 로그 조회를 추가한다(#563, additive) —
+# GET /builds/{run_id}/publish/audit(reconcile/reset 이력, 소유권 게이트).
+API_CONTRACT_VERSION = "1.21.0"
 
 
 def _quality_result_to_json(r: QualityCheckResult) -> dict[str, JsonValue]:
@@ -2123,6 +2125,23 @@ class BuilderService:
         if receipt.result is not None:
             body["result"] = cast(JsonValue, receipt.result)
         return ServiceResponse(200, body)
+
+    def publish_audit_log(self, run_id: str, *, principal: Principal) -> ServiceResponse:
+        """GET /builds/{run_id}/publish/audit (#563).
+
+        reconcile/reset 감사 이력을 소유자 단위로 반환한다 — receipt가 이미
+        reset으로 삭제된 경우도 포함한다. 항목은 최소 필드(fingerprint/action/
+        actor/recorded_at)만 담고 credential·경로 원문은 없다.
+        """
+        owner_key = principal.owner_id or principal.label
+        entries = self._publish_receipts.audit_entries(owner_key=owner_key, run_id=run_id)
+        return ServiceResponse(
+            200,
+            {
+                "run_id": run_id,
+                "entries": cast(JsonValue, entries),
+            },
+        )
 
     def reconcile_publish(
         self,

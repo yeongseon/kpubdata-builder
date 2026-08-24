@@ -1365,6 +1365,66 @@ class TestReceiptReconcile:
         )
         assert reset_resp.status_code == 403
 
+    def test_reset_audit_survives_and_audit_api_returns_history(self, tmp_path, monkeypatch):
+        """reset 후에도 감사 이력이 owner/run으로 조회되고 API가 이를 반환한다 (#563)."""
+        service = self._unknown_receipt_service(tmp_path, monkeypatch, "run-audit")
+
+        # unknown → reset(감사: reconcile_absent_reset 아닌 manual_reset 경로 사용)
+        reset = dispatch(
+            service,
+            "DELETE",
+            "/builds/run-audit/publish/receipt",
+            None,
+            query="target=huggingface&destination=kpubdata%2Fair-quality",
+        )
+        assert reset.status_code == 200
+
+        # receipt는 사라졌지만 감사 이력은 살아 있다.
+        gone = dispatch(
+            service,
+            "GET",
+            "/builds/run-audit/publish/receipt",
+            None,
+            query="target=huggingface&destination=kpubdata%2Fair-quality",
+        )
+        assert gone.status_code == 404
+
+        audit = dispatch(service, "GET", "/builds/run-audit/publish/audit", None)
+        assert audit.status_code == 200
+        actions = [entry["action"] for entry in audit.body["entries"]]
+        assert "manual_reset" in actions
+        # 감사 항목은 최소 필드만 담는다(credential/경로 원문 없음).
+        for entry in audit.body["entries"]:
+            assert set(entry) == {"fingerprint", "action", "actor", "recorded_at"}
+
+    def test_audit_api_cross_owner_is_blocked(self, tmp_path, monkeypatch):
+        """감사 조회도 run 소유권 게이트를 통과한다 (#563)."""
+        monkeypatch.setenv(_OWNERSHIP_ENV, "true")
+        owner = Principal(kind="oidc", identifier="a", owner_id="oidc:owner-a")
+        monkeypatch.setattr(app_module, "authenticate", lambda **_kwargs: owner)
+        service = self._unknown_receipt_service(tmp_path, monkeypatch, "run-audit-owned")
+
+        other = Principal(kind="oidc", identifier="b", owner_id="oidc:owner-b")
+        monkeypatch.setattr(app_module, "authenticate", lambda **_kwargs: other)
+        audit = dispatch(service, "GET", "/builds/run-audit-owned/publish/audit", None)
+        assert audit.status_code == 403
+
+    def test_reconcile_succeeded_records_owner_run_audit(self, tmp_path, monkeypatch):
+        """reconcile 성공 감사 행도 owner/run을 스스로 들고 있다 (#563)."""
+        service = self._unknown_receipt_service(tmp_path, monkeypatch, "run-rec-audit")
+        monkeypatch.setattr(service, "_probe_remote_publish_target", lambda *_args: True)
+        resp = dispatch(
+            service,
+            "POST",
+            "/builds/run-rec-audit/publish/reconcile",
+            {"target": "huggingface", "destination": "kpubdata/air-quality"},
+        )
+        assert resp.status_code == 200
+
+        audit = dispatch(service, "GET", "/builds/run-rec-audit/publish/audit", None)
+        actions = [entry["action"] for entry in audit.body["entries"]]
+        assert "reconcile_succeeded" in actions
+
 
 class TestOpenApiConformance:
     """실제 dispatch() wire 응답이 OpenAPI 스키마와 정확히 일치하는지 (ADR-0005 방식)."""
