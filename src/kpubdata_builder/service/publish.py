@@ -136,12 +136,14 @@ class PublishReceiptStore:
                     """
                 )
                 # reconcile/reset 감사 로그(#551) — credential/path/원문을 담지
-                # 않는 최소 필드만 append한다.
+                # 않는 최소 필드만 append한다. reset 후 독립 조회를 위해 owner_key와 run_id를 포함(#563).
                 connection.execute(
                     """
                     CREATE TABLE IF NOT EXISTS publish_receipt_audit (
                         seq INTEGER PRIMARY KEY AUTOINCREMENT,
                         fingerprint TEXT NOT NULL,
+                        owner_key TEXT NOT NULL,
+                        run_id TEXT NOT NULL,
                         action TEXT NOT NULL,
                         actor TEXT NOT NULL,
                         recorded_at TEXT NOT NULL
@@ -328,7 +330,7 @@ class PublishReceiptStore:
             return None
         return self._row_to_receipt(cast(tuple[object, ...], row))
 
-    def reconcile_succeeded(self, fingerprint: str, result: dict[str, object]) -> None:
+    def reconcile_succeeded(self, fingerprint: str, result: dict[str, object], owner_key: str, run_id: str) -> None:
         """원격 상태 확인으로 unknown을 succeeded로 확정한다(#551). 감사 로그를 남긴다."""
         self._initialize()
         self._set_terminal(
@@ -337,9 +339,9 @@ class PublishReceiptStore:
             result=result,
             allowed_source_states=("pending", "unknown"),
         )
-        self._append_audit(fingerprint, "reconcile_succeeded")
+        self._append_audit(fingerprint, "reconcile_succeeded", owner_key, run_id)
 
-    def reset(self, fingerprint: str, *, action: str = "reset") -> bool:
+    def reset(self, fingerprint: str, owner_key: str, run_id: str, *, action: str = "reset") -> bool:
         """receipt를 삭제해 재시도(새 claim)를 허용한다(#551). 감사 로그를 남긴다.
 
         삭제가 실제로 일어났으면 True, 해당 fingerprint가 없으면 False.
@@ -352,31 +354,41 @@ class PublishReceiptStore:
             )
             deleted = cursor.rowcount == 1
         if deleted:
-            self._append_audit(fingerprint, action)
+            self._append_audit(fingerprint, action, owner_key, run_id)
         return deleted
 
-    def _append_audit(self, fingerprint: str, action: str, *, actor: str = "operator") -> None:
+    def _append_audit(
+        self,
+        fingerprint: str,
+        action: str,
+        owner_key: str,
+        run_id: str,
+        *,
+        actor: str = "operator",
+    ) -> None:
         recorded_at = datetime_module.now(timezone.utc).isoformat(timespec="seconds")
         with self._connect() as connection:
             connection.execute(
                 """
-                INSERT INTO publish_receipt_audit(fingerprint, action, actor, recorded_at)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO publish_receipt_audit(fingerprint, owner_key, run_id, action, actor, recorded_at)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (fingerprint, action, actor, recorded_at),
+                (fingerprint, owner_key, run_id, action, actor, recorded_at),
             )
 
     def audit_entries(self, *, owner_key: str, run_id: str) -> list[dict[str, str]]:
-        """해당 owner/run의 감사 로그를 시간순으로 반환한다(조회 API용)."""
+        """해당 owner/run의 감사 로그를 시간순으로 반환한다(조회 API용).
+
+        reset 후에도 감사 로그를 유지하기 위해 owner_key/run_id를 직접 조회한다(#563).
+        """
         self._initialize()
         with self._connect() as connection:
             rows = connection.execute(
                 """
-                SELECT a.fingerprint, a.action, a.actor, a.recorded_at
-                FROM publish_receipt_audit a
-                JOIN publish_receipts r ON r.fingerprint = a.fingerprint
-                WHERE r.owner_key = ? AND r.run_id = ?
-                ORDER BY a.seq
+                SELECT fingerprint, action, actor, recorded_at
+                FROM publish_receipt_audit
+                WHERE owner_key = ? AND run_id = ?
+                ORDER BY seq
                 """,
                 (owner_key, run_id),
             ).fetchall()

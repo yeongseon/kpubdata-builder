@@ -2180,7 +2180,9 @@ class BuilderService:
                 "status": "succeeded",
             }
             try:
-                self._publish_receipts.reconcile_succeeded(receipt.fingerprint, result)
+                self._publish_receipts.reconcile_succeeded(
+                    receipt.fingerprint, result, owner_key, run_id
+                )
             except Exception as exc:
                 logger.error(
                     "publish receipt reconcile persist failed: run_id=%s target=%s error_type=%s",
@@ -2208,7 +2210,7 @@ class BuilderService:
         # 원격에 결과가 없다 — 게시가 실제로 일어나지 않았다고 확정할 수 없어도
         # receipt를 reset해 운영자 판단으로 재게시를 허용한다(감사 로그에 남긴다).
         reset_ok = self._publish_receipts.reset(
-            receipt.fingerprint, action="reconcile_absent_reset"
+            receipt.fingerprint, owner_key, run_id, action="reconcile_absent_reset"
         )
         if not reset_ok:
             return ServiceResponse(
@@ -2250,7 +2252,9 @@ class BuilderService:
             return ServiceResponse(
                 404, {"error": "publish receipt not found", "code": "receipt_not_found"}
             )
-        reset_ok = self._publish_receipts.reset(receipt.fingerprint, action="manual_reset")
+        reset_ok = self._publish_receipts.reset(
+            receipt.fingerprint, owner_key, run_id, action="manual_reset"
+        )
         if not reset_ok:
             return ServiceResponse(
                 503,
@@ -2266,6 +2270,28 @@ class BuilderService:
                 "state": "reset",
                 "retry_allowed": True,
                 "fingerprint": receipt.fingerprint,
+            },
+        )
+
+    def get_publish_audit(
+        self,
+        run_id: str,
+        *,
+        principal: Principal,
+    ) -> ServiceResponse:
+        """GET /builds/{run_id}/publish/audit (#563) — 감사 로그 조회.
+
+        해당 owner/run의 감사 로그를 시간순으로 반환한다.
+        """
+        owner_key = principal.owner_id or principal.label
+        audit_entries = self._publish_receipts.audit_entries(
+            owner_key=owner_key, run_id=run_id
+        )
+        return ServiceResponse(
+            200,
+            {
+                "run_id": run_id,
+                "audit_entries": cast(JsonValue, audit_entries),
             },
         )
 
