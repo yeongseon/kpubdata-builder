@@ -178,7 +178,7 @@ def test_extraction_script_emits_documented_json_shape() -> None:
         encoding="utf-8",
     )
     payload = json.loads(completed.stdout)
-    assert payload["contract_version"] == "1.20.0"
+    assert payload["contract_version"] == "1.21.0"
     assert len(payload["examples"]) >= 50
     assert set(payload["examples"][0]) == {
         "path",
