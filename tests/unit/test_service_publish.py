@@ -1181,6 +1181,97 @@ class TestReceiptReconcile:
             ).fetchall()
         assert audit_rows == [(fingerprint, "manual_reset")]
 
+    def test_concurrent_mark_succeeded_is_atomic(#564 원자성 경합 테스트
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """동시에 mark_succeeded를 호출해도 상태 전이가 원자적으로 보장된다(#564)."""
+        _with_credentials(monkeypatch, "huggingface")
+        failing = _SpyPublisher("huggingface", error=RuntimeError("publish failed"))
+        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "huggingface", failing)
+        service = _service(tmp_path)
+        _build(service, "run-concurrent", LICENSED_SPEC_YAML)
+
+        # 먼저 publish 시도하여 pending 상태의 receipt 생성
+        resp = _publish(service, "run-concurrent")
+        assert resp.status_code == 502  # publish 실패
+
+        # pending 상태의 receipt 확인
+        receipts = service._publish_receipts
+        import sqlite3
+        with sqlite3.connect(receipts.path) as conn:
+            fingerprint, owner_key = conn.execute(
+                "SELECT fingerprint, owner_key FROM publish_receipts WHERE run_id = 'run-concurrent'"
+            ).fetchone()
+
+    def test_concurrent_mark_succeeded_is_atomic(#564 원자성 경합 테스트
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """동시에 mark_succeeded를 호출해도 상태 전이가 원자적으로 보장된다(#564)."""
+        _with_credentials(monkeypatch, "huggingface")
+        failing = _SpyPublisher("huggingface", error=RuntimeError("publish failed"))
+        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "huggingface", failing)
+        service = _service(tmp_path)
+        _build(service, "run-concurrent", LICENSED_SPEC_YAML)
+
+        # publish 시도하여 unknown 상태의 receipt 생성
+        resp = _publish(service, "run-concurrent")
+        assert resp.status_code == 502  # publish 실패
+
+        # unknown 상태의 receipt 확인
+        receipts = service._publish_receipts
+        import sqlite3
+        with sqlite3.connect(receipts.path) as conn:
+            fingerprint, owner_key, state = conn.execute(
+                "SELECT fingerprint, owner_key, state FROM publish_receipts WHERE run_id = 'run-concurrent'"
+            ).fetchone()
+        
+        assert state == "unknown", f"Expected unknown state, got {state}"
+
+        # 동시에 mark_succeeded 호출 (unknown→succeeded)
+        import threading
+        import time
+
+        results = []
+        exceptions = []
+        success_count = 0
+        failure_count = 0
+        
+        def mark_succeeded_worker():
+            nonlocal success_count, failure_count
+            try:
+                time.sleep(0.001)  # 경합 유도
+                # unknown 상태에서도 mark_succeeded 허용하도록 테스트
+                receipts._set_terminal(fingerprint, state="succeeded", result={"result": "test"}, 
+                                        allowed_source_states=("unknown",))
+                success_count += 1
+                results.append("success")
+            except RuntimeError as e:
+                failure_count += 1
+                exceptions.append(e)
+            except Exception as e:
+                exceptions.append(e)
+        
+        threads = [threading.Thread(target=mark_succeeded_worker) for _ in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        
+        # 정확히 하나만 성공하고 나머지는 상태 검사 실패여야 함
+        assert success_count == 1, f"Expected exactly 1 success, got {success_count}, failures: {failure_count}, errors: {exceptions}"
+        assert failure_count == 4, f"Expected 4 failures, got {failure_count}"
+        
+        # receipt는 succeeded 상태여야 함
+        receipt = receipts.get_by_key(
+            owner_key=owner_key,
+            run_id="run-concurrent",
+            target="huggingface",
+            destination="kpubdata/air-quality",
+        )
+        assert receipt is not None
+        assert receipt.state == "succeeded"
+        assert receipt.result == {"result": "test"}
+
     def test_cross_owner_receipt_is_404(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

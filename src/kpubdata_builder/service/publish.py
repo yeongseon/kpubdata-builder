@@ -417,7 +417,11 @@ class PublishReceiptStore:
             else None
         )
         placeholders = ", ".join("?" for _ in allowed_source_states)
-        with self._connect() as connection:
+        
+        # BEGIN IMMEDIATE 트랜잭션으로 원자성 보장(#564)
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
             cursor = connection.execute(
                 f"""
                 UPDATE publish_receipts
@@ -428,6 +432,12 @@ class PublishReceiptStore:
             )
             if cursor.rowcount != 1:
                 raise RuntimeError("publish receipt is not pending")
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
 
 
 @dataclass(frozen=True)
