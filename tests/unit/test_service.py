@@ -11,9 +11,10 @@ from collections.abc import Iterable
 from datetime import date, datetime, timedelta, timezone
 from http.server import HTTPServer
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
+import yaml
 
 import kpubdata_builder.service.app as app_module
 from kpubdata_builder.service import BuilderService, ServiceResponse, dispatch
@@ -21,6 +22,8 @@ from kpubdata_builder.service.auth import Principal
 from kpubdata_builder.service.http import _clear_cors_cache, make_handler
 from kpubdata_builder.service.ownership import _OWNERSHIP_ENV
 from kpubdata_builder.spec import JsonValue
+
+from ._openapi import response_schema, validate
 
 VALID_SPEC_YAML = (
     """
@@ -123,7 +126,7 @@ class _CloseTrackingClient(_FakeClient):
 
 def _service(tmp_path: Path) -> BuilderService:
     client = _FakeClient({"datago.air_quality": [{"id": "1", "v": 10}, {"id": "2", "v": 20}]})
-    return BuilderService(output_root=tmp_path, client_factory=lambda: client)
+    return BuilderService(output_root=tmp_path, client_factory=lambda **_kwargs: client)
 
 
 class TestVersion:
@@ -1268,12 +1271,47 @@ class TestHttpAdapter:
         base_url, _, _ = http_server_with_auth
         with urllib.request.urlopen(f"{base_url}/healthz", timeout=2.0) as response:
             assert response.status == 200
+            request_id = response.headers["X-Request-ID"]
             body = cast(dict[str, object], json.loads(response.read()))
         assert body["status"] == "ok"
-        assert "request_id" in body
+        assert "request_id" not in body
+        assert request_id
         # 버전·서비스 메타 정보가 누출되지 않아야 한다.
         assert "api_version" not in body
         assert "service" not in body
+
+    @pytest.mark.parametrize("stage", ["bronze", "silver", "gold"])
+    def test_stage_detail_wire_response_conforms_to_openapi(
+        self,
+        http_server: tuple[str, HTTPServer, threading.Thread],
+        stage: str,
+    ) -> None:
+        base_url, _, _ = http_server
+        build_req = urllib.request.Request(
+            f"{base_url}/build",
+            data=json.dumps({"spec": VALID_SPEC_YAML, "run_id": "wire-stage-detail"}).encode(
+                "utf-8"
+            ),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(build_req, timeout=5.0) as response:
+            assert response.status == 200
+
+        url = f"{base_url}/builds/wire-stage-detail/stages/{stage}?source=datago.air_quality"
+        with urllib.request.urlopen(url, timeout=2.0) as response:
+            assert response.status == 200
+            status_code = response.status
+            request_id = response.headers["X-Request-ID"]
+            body = cast(dict[str, object], json.loads(response.read()))
+
+        assert "request_id" not in body
+        assert request_id
+        contract_path = Path(__file__).parents[2] / "contract" / "builder-api.yaml"
+        contract = cast(dict[str, Any], yaml.safe_load(contract_path.read_text(encoding="utf-8")))
+        schema = response_schema(contract, "/builds/{run_id}/stages/{stage}", "GET", status_code)
+        assert schema is not None
+        assert validate(body, schema, contract) == []
 
 
 class TestHttpUploads:

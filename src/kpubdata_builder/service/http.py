@@ -249,8 +249,6 @@ def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
                 self.send_header("Access-Control-Max-Age", "86400")
 
         def _write(self, status_code: int, body: dict[str, JsonValue]) -> None:
-            if hasattr(self, "_request_id"):
-                body.setdefault("request_id", self._request_id)
             payload = json.dumps(body, ensure_ascii=False, default=str).encode("utf-8")
             self.send_response(status_code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
