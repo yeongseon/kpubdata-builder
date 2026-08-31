@@ -19,7 +19,11 @@ from kpubdata_builder.credentials import AesGcmCredentialCipher, SQLiteCredentia
 from kpubdata_builder.service import BuilderService, dispatch
 from kpubdata_builder.service.auth import Principal, compute_owner_id
 from kpubdata_builder.service.http import _clear_cors_cache, make_handler
-from kpubdata_builder.service.providers import run_provider_test
+from kpubdata_builder.service.providers import (
+    ProviderDescriptor,
+    provider_descriptors,
+    run_provider_test,
+)
 from kpubdata_builder.spec import JsonValue
 
 _SPEC = """\
@@ -111,6 +115,67 @@ class _Factory:
         client = _Client(provider_keys or {})
         self.calls.append((dict(provider_keys or {}), timeout, cache, client))
         return client
+
+
+class _LazyRegistry:
+    def __iter__(self) -> Iterable[str]:
+        return iter(("datago", "krx"))
+
+    def get(self, name: str) -> _Provider:
+        if name == "krx":
+            raise ModuleNotFoundError("No module named 'pandas'", name="pandas")
+        return _Provider(name)
+
+
+class _OptionalProviderClient:
+    _registry = _LazyRegistry()
+
+    class _Catalog:
+        @staticmethod
+        def list(*, provider: str) -> list[_Ref]:
+            return [_Ref(provider, "dataset")]
+
+    datasets = _Catalog()
+
+    def close(self) -> None:
+        return None
+
+
+def test_provider_catalog_skips_provider_with_missing_optional_dependency() -> None:
+    assert provider_descriptors(cast(object, _OptionalProviderClient())) == (
+        ProviderDescriptor("datago", True),
+    )
+
+
+def test_providers_service_keeps_available_provider_when_krx_pandas_is_missing(
+    tmp_path: Path, repository: SQLiteCredentialRepository
+) -> None:
+    service = BuilderService(
+        output_root=tmp_path,
+        client_factory=lambda: cast(object, _OptionalProviderClient()),
+        credential_repository=repository,
+    )
+
+    response = service.providers(principal=Principal("oidc", "user-a", "oidc:owner-a"))
+
+    assert response.status_code == 200
+    assert response.body["providers"] == [
+        {"provider": "datago", "requires_credential": True, "configured": False}
+    ]
+
+
+def test_provider_catalog_does_not_hide_unexpected_missing_module() -> None:
+    class BrokenRegistry(_LazyRegistry):
+        def get(self, name: str) -> _Provider:
+            if name == "krx":
+                raise ModuleNotFoundError("No module named 'internal_krx'", name="internal_krx")
+            return _Provider(name)
+
+    class BrokenClient(_OptionalProviderClient):
+        _registry = BrokenRegistry()
+
+    with pytest.raises(ModuleNotFoundError, match="internal_krx"):
+        provider_descriptors(cast(object, BrokenClient()))
 
 
 @pytest.fixture()

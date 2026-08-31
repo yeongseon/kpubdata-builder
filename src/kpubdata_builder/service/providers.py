@@ -124,9 +124,30 @@ class CredentialResolver:
 def provider_descriptors(client: SourceClient) -> tuple[ProviderDescriptor, ...]:
     """kpubdata 공개 runtime catalog에서 Provider 목록과 인증 필요 여부를 얻는다."""
     typed_client = cast(Client, client)
-    authenticated = frozenset(p.name for p in typed_client.iter_authenticated_providers())
-    names = sorted({dataset.provider for dataset in typed_client.datasets.list()})
-    return tuple(ProviderDescriptor(name, name in authenticated) for name in names)
+    # Built-in adapters are registered lazily.  Resolve them one at a time so an
+    # optional dependency of one adapter (for example KRX -> pandas) cannot make
+    # the catalog for every other provider unavailable.
+    registry = getattr(typed_client, "_registry", None)
+    if registry is None:
+        authenticated = frozenset(p.name for p in typed_client.iter_authenticated_providers())
+        names = sorted({dataset.provider for dataset in typed_client.datasets.list()})
+        return tuple(ProviderDescriptor(name, name in authenticated) for name in names)
+
+    descriptors: list[ProviderDescriptor] = []
+    for name in registry:
+        try:
+            adapter = registry.get(name)
+            typed_client.datasets.list(provider=name)
+        except ModuleNotFoundError as exc:
+            # KRX is the sole built-in provider with this optional dependency.
+            # Do not hide a missing internal module or another provider bug.
+            if name == "krx" and exc.name == "pandas":
+                continue
+            raise
+        descriptors.append(
+            ProviderDescriptor(name, bool(getattr(adapter, "requires_api_key", True)))
+        )
+    return tuple(descriptors)
 
 
 def default_provider_test(client: SourceClient, provider: str) -> None:

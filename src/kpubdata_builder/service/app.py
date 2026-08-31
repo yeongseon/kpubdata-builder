@@ -519,8 +519,6 @@ class BuilderService:
         client = self._create_client()
         try:
             return provider_descriptors(client)
-        except Exception:
-            return ServiceResponse(502, {"error": "provider catalog unavailable"})
         finally:
             _close_request_client(client)
 
