@@ -247,9 +247,12 @@ class TestHuggingFacePublisher:
         # basename으로 폴백해야 한다 (#205).
         calls = _install_fake_hf(monkeypatch)
 
-        result = HuggingFacePublisher().publish(
-            (Path("/tmp/a/f1.parquet"), Path("/var/b/f2.parquet")), destination="org/ds"
-        )
+        if sys.platform == "win32":
+            paths = (Path("C:/tmp/a/f1.parquet"), Path("C:/var/b/f2.parquet"))
+        else:
+            paths = (Path("/tmp/a/f1.parquet"), Path("/var/b/f2.parquet"))
+
+        result = HuggingFacePublisher().publish(paths, destination="org/ds")
 
         repo_paths = {c["path_in_repo"] for c in calls["files"]}
         assert repo_paths == {"f1.parquet", "f2.parquet"}

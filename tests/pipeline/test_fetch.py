@@ -188,6 +188,38 @@ def test_save_checkpoint_writes_atomically(tmp_path: Path) -> None:
     assert not (tmp_path / "fetch_checkpoint.tmp").exists()
 
 
+def test_save_checkpoint_replaces_existing_file(tmp_path: Path) -> None:
+    cp = tmp_path / "fetch_checkpoint.json"
+    _save_checkpoint(cp, next_index=1, records=[{"id": "old"}])
+
+    _save_checkpoint(cp, next_index=2, records=[{"id": "old"}, {"id": "new"}])
+
+    data = json.loads(cp.read_text(encoding="utf-8"))
+    assert data == {
+        "next_index": 2,
+        "records": [{"id": "old"}, {"id": "new"}],
+    }
+    assert not (tmp_path / "fetch_checkpoint.tmp").exists()
+
+
+def test_save_checkpoint_cleans_temp_after_replace_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cp = tmp_path / "fetch_checkpoint.json"
+    cp.write_text('{"next_index": 1, "records": []}', encoding="utf-8")
+
+    def fail_replace(_self: Path, _target: Path) -> Path:
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(Path, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="replace failed"):
+        _save_checkpoint(cp, next_index=2, records=[{"id": "new"}])
+
+    assert json.loads(cp.read_text(encoding="utf-8")) == {"next_index": 1, "records": []}
+    assert not (tmp_path / "fetch_checkpoint.tmp").exists()
+
+
 def test_fetch_with_retry_raises_fetch_error_after_exhaustion() -> None:
     """Retryable errors raise FetchError after max_retries is exhausted."""
     failing_ds = MagicMock()

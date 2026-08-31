@@ -151,5 +151,8 @@ def _save_checkpoint(path: Path, *, next_index: int, records: list[dict[str, Any
     data = {"next_index": next_index, "records": records}
     # Write atomically via temp file
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-    tmp.rename(path)
+    try:
+        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(path)
+    finally:
+        tmp.unlink(missing_ok=True)
