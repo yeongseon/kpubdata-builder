@@ -519,6 +519,9 @@ class BuilderService:
         client = self._create_client()
         try:
             return provider_descriptors(client)
+        except Exception as exc:
+            logger.exception("provider catalog unavailable")
+            return ServiceResponse(502, {"error": f"catalog unavailable: {exc}"})
         finally:
             _close_request_client(client)
 

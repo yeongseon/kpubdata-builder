@@ -134,7 +134,7 @@ def provider_descriptors(client: SourceClient) -> tuple[ProviderDescriptor, ...]
         return tuple(ProviderDescriptor(name, name in authenticated) for name in names)
 
     descriptors: list[ProviderDescriptor] = []
-    for name in registry:
+    for name in sorted(registry):
         try:
             adapter = registry.get(name)
             typed_client.datasets.list(provider=name)
