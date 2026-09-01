@@ -25,9 +25,9 @@ from contextlib import suppress
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Protocol, cast, runtime_checkable
+from urllib.parse import unquote, urlsplit
 
 import yaml
-from kpubdata import Client
 from kpubdata.core.models import DatasetRef
 from typing_extensions import assert_never
 
@@ -89,6 +89,7 @@ from .providers import (
     default_provider_test,
     provider_descriptors,
     run_provider_test,
+    runtime_provider_catalog,
     test_result_body,
 )
 from .responses import FileResponse, ServiceResponse
@@ -172,15 +173,88 @@ def _redact_json_secrets(value: object, secrets: Iterable[str]) -> object:
     return value
 
 
-def _authenticated_provider_names(client: SourceClient) -> frozenset[str]:
-    authenticated_providers = cast(Client, client).iter_authenticated_providers()
-    return frozenset(provider.name for provider in authenticated_providers)
+_SECRET_LIKE_PARAM_NAMES = frozenset(
+    {
+        "servicekey",
+        "service_key",
+        "apikey",
+        "api_key",
+        "key",
+        "secret",
+        "token",
+        "password",
+        "authkey",
+        "auth_key",
+    }
+)
 
 
-def _requires_service_key(dataset: DatasetRef, auth_provider_names: frozenset[str]) -> bool:
-    return dataset.provider in auth_provider_names or bool(
-        dataset.raw_metadata.get("service_key_param")
-    )
+def _catalog_request_parameters(dataset: DatasetRef) -> list[JsonValue]:
+    """``raw_metadata``의 요청 파라미터 설명을 secret-free allowlist로 직렬화한다.
+
+    UI가 필수 요청 파라미터를 사전에 안내하기 위한 최소 공개 metadata다
+    (``dataset.raw_metadata["request_parameters"]``, 없으면 빈 배열).
+
+    - ``dict`` 항목만, 비어 있지 않은 문자열 ``name`` 필수.
+    - ``service_key_param``과 secret-like 이름(serviceKey/apiKey/key/secret/
+      token/password 등)은 제외한다 — serviceKey/API key 입력을 user request
+      params로 요구하지 않는다.
+    - ``name``/``required``(bool)/``description``(str|None)/``example``(str|None)만
+      담는다. provider 내부 구현 세부는 노출하지 않는다.
+    """
+    raw = dataset.raw_metadata.get("request_parameters")
+    if not isinstance(raw, (list, tuple)):
+        return []
+    service_key_param = str(dataset.raw_metadata.get("service_key_param", "")).strip().lower()
+    result: list[JsonValue] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        name_raw = item.get("name")
+        if not isinstance(name_raw, str) or not name_raw.strip():
+            continue
+        name = name_raw.strip()
+        lowered = name.lower()
+        if lowered in _SECRET_LIKE_PARAM_NAMES:
+            continue
+        if service_key_param and lowered == service_key_param:
+            continue
+        description = item.get("description")
+        example = item.get("example")
+        result.append(
+            {
+                "name": name,
+                "required": bool(item.get("required", False)),
+                "description": description
+                if isinstance(description, str) and description
+                else None,
+                "example": example if isinstance(example, str) and example else None,
+            }
+        )
+    return result
+
+
+def _catalog_application(dataset: DatasetRef) -> JsonValue:
+    """``raw_metadata.application``을 secret-free allowlist로 직렬화한다.
+
+    공공데이터포털은 API Key 발급과 특정 Dataset 활용신청이 별개일 수 있다 —
+    ``dataset.raw_metadata["application"]``(``{"required": bool, "url": str}``)이
+    있으면 그대로 전달하고, 없으면 ``null``(활용신청 여부를 알 수 없음, "필요 없음"으로
+    단정하지 않는다). ``url``이 http(s) 스킴이 아니면 노출하지 않는다(임의 스킴 차단).
+    """
+    raw = dataset.raw_metadata.get("application")
+    if not isinstance(raw, dict):
+        return None
+    required = raw.get("required")
+    if not isinstance(required, bool):
+        return None
+    url = raw.get("url")
+    if not isinstance(url, str) or not url.strip():
+        return None
+    parsed = urlsplit(url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return None
+    return {"required": required, "url": url}
 
 
 def _catalog_dataset_body(dataset: DatasetRef, requires_service_key: bool) -> dict[str, JsonValue]:
@@ -210,6 +284,8 @@ def _catalog_dataset_body(dataset: DatasetRef, requires_service_key: bool) -> di
         "operations": cast(JsonValue, sorted(op.value for op in dataset.operations)),
         "query_support": query_support,
         "requires_service_key": requires_service_key,
+        "request_parameters": cast(JsonValue, _catalog_request_parameters(dataset)),
+        "application": _catalog_application(dataset),
     }
 
 
@@ -326,6 +402,14 @@ def _strip_internal_fields(entries: list[_BuildListEntry]) -> list[_BuildListEnt
 #   - GET /quality/summary?window=24h — 최근 24h 안에서 접근 가능한 run의
 #     structured quality를 PASS/WARN/FAIL run 수로 요약(#486 도메인 quality의
 #     bounded cross-run aggregate). 시스템 observability(/monitoring)와 섞지 않는다.
+#   - GET /catalog 응답의 CatalogDataset에 request_parameters와 application(같은
+#     미머지 릴리스 범위의 additive — 기존 필드/동작 불변). raw_metadata의
+#     request_parameters를 secret-free allowlist(name/required/description/
+#     example)로 직렬화한 것으로, serviceKey 등 시크릿 파라미터는 제외된다. Add
+#     Data가 선택한 Dataset의 필수 요청 파라미터를 사전에 안내하는 데 쓴다.
+#     metadata가 없는 dataset은 빈 배열. application은 API Key 발급과 Dataset별
+#     활용신청이 별개일 수 있는 경우의 안내({required, url})로, raw_metadata에
+#     없으면 null(신청 완료/승인 여부를 Builder/Studio가 추측하지 않는다).
 API_CONTRACT_VERSION = "1.22.0"
 
 
@@ -785,38 +869,34 @@ class BuilderService:
     def catalog(self) -> ServiceResponse:
         """사용 가능한 provider/dataset 카탈로그를 반환한다 (#416, BL2, #436).
 
-        kpubdata Client의 공개 ``datasets.list()`` 로 모든 데이터셋을 조회한 뒤
-        provider별로 그룹화한다 (ADR 0011 — Builder가 provider 목록을
+        kpubdata Client의 provider별 공개 ``datasets.list(provider=...)``로 데이터셋을
+        조회한다. KRX의 명시된 optional pandas 누락만 격리하고 다른 오류는 실패로
+        드러낸다. Provider 목록은 runtime registry에서 얻는다 (ADR 0011 — Builder가
         하드코딩하지 않는다). 이전에는 ``getattr(client, "_catalog")`` private
         접근 + 8개 provider 하드코딩 튜플을 써서 kpubdata에 provider가 추가돼도
         카탈로그에 안 떴다 (#436). 시크릿 값은 노출하지 않고 필요 여부만 표시한다.
         """
         client = self._create_client()
         try:
-            all_datasets = cast(Client, client).datasets.list()
-            auth_provider_names = _authenticated_provider_names(client)
+            runtime_catalog = runtime_provider_catalog(client)
         except Exception as exc:
             return ServiceResponse(502, {"error": f"catalog unavailable: {exc}"})
         finally:
             _close_request_client(client)
 
-        # provider별 그룹화 (등록 순서 보존 위해 dict 사용).
-        grouped: dict[str, list[DatasetRef]] = {}
-        for ds in all_datasets:
-            grouped.setdefault(ds.provider, []).append(ds)
-
         providers_data: list[JsonValue] = [
             {
-                "name": provider_name,
+                "name": item.descriptor.name,
                 "datasets": [
                     _catalog_dataset_body(
-                        item,
-                        _requires_service_key(item, auth_provider_names),
+                        dataset,
+                        item.descriptor.requires_credential
+                        or bool(dataset.raw_metadata.get("service_key_param")),
                     )
-                    for item in items
+                    for dataset in item.datasets
                 ],
             }
-            for provider_name, items in grouped.items()
+            for item in runtime_catalog
         ]
         return ServiceResponse(200, {"providers": providers_data})
 
@@ -1346,8 +1426,13 @@ class BuilderService:
         if not run_dir.exists():
             return ServiceResponse(404, {"error": f"run not found: {run_id}"})
 
+        # wire에는 항상 run 디렉터리 기준 POSIX 상대 경로만 노출한다 — output_root 절대
+        # 경로나 OS별 구분자를 드러내지 않는다. `serve_artifact_file`이 받는 canonical
+        # artifact identifier가 바로 이 값이다(클라이언트는 storage layout을 알 필요 없다).
         files = sorted(
-            str(path.relative_to(run_dir)) for path in run_dir.rglob("*") if path.is_file()
+            path.relative_to(run_dir).as_posix()
+            for path in run_dir.rglob("*")
+            if path.is_file()
         )
         return ServiceResponse(200, {"run_id": run_id, "files": list(files)})
 
@@ -1438,14 +1523,29 @@ class BuilderService:
         if not run_dir.exists():
             return ServiceResponse(404, {"error": f"run not found: {run_id}"})
 
-        # file_path 검증 (경로 트래버설 방지)
+        # file_path 검증 (경로 트래버설 방지).
+        #
+        # canonical artifact identifier는 `GET /artifacts/{run_id}`가 돌려주는 run
+        # 디렉터리 기준 POSIX 상대 경로(예: "silver/datago.air_quality/table.parquet")다.
+        # HTTP 라우트는 이 경로를 URL segment 사이의 "/"로만 넘기고 각 segment는 percent
+        # 인코딩될 수 있으므로(브라우저가 non-ASCII/특수문자를 %XX로 바꾼다), 먼저 한 번
+        # percent-decode한다. decode 후에는 반드시 다시 검증한다 — "%2e%2e"/"%2f"/"%5c"
+        # 같은 인코딩된 트래버설이 decode되어 성분 검사에 걸리고, 이중 인코딩("%252e")은
+        # decode 후에도 "%"가 남아 성분 규칙에서 거부된다.
+        decoded_path = unquote(file_path)
+        segments = decoded_path.replace("\\", "/").split("/")
+        if not decoded_path.strip() or any(seg in ("", ".", "..") for seg in segments):
+            return ServiceResponse(
+                400, {"error": f"file_path is not a safe relative path: {file_path!r}"}
+            )
         try:
-            validate_path_segment(file_path, field_name="file_path")
+            for segment in segments:
+                validate_path_segment(segment, field_name="file_path")
         except ValueError as exc:
             return ServiceResponse(400, {"error": str(exc)})
 
-        # 요청된 파일의 전체 경로 계산
-        requested_file = run_dir / file_path
+        # 요청된 파일의 전체 경로 계산 (성분 검증을 통과한 상대 경로만 결합)
+        requested_file = run_dir.joinpath(*segments)
         # 경로가 run_dir 내에 있는지 확인 (심볼릭 링크도 해석하여 안전 검사)
         ensure_within(run_dir, requested_file, label="artifact file")
 

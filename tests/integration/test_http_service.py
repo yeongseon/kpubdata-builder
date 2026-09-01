@@ -38,6 +38,7 @@ from collections.abc import Iterable
 from http.server import HTTPServer
 from pathlib import Path
 from typing import cast
+from urllib.parse import quote
 
 import pytest
 
@@ -191,6 +192,114 @@ class TestArtifactsRoundTrip:
         files = body["files"]
         assert isinstance(files, list)
         assert any("manifest.json" in f for f in files)  # type: ignore[operator]
+
+
+def _http_get_bytes(url: str) -> tuple[int, bytes]:
+    """HTTP GET을 보내 (status, raw body bytes)를 돌려준다. HTTPError도 status로 정규화."""
+    try:
+        with urllib.request.urlopen(url, timeout=5.0) as resp:
+            return resp.status, resp.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read()
+
+
+def _canonical_to_url(base_url: str, run_id: str, canonical: str) -> str:
+    """canonical run-relative POSIX 경로를 Studio downloader와 동일하게 URL로 만든다:
+    "/" 구분자는 그대로 두고 각 segment만 percent-encode한다."""
+    encoded = "/".join(quote(seg, safe="") for seg in canonical.split("/"))
+    return f"{base_url}/artifacts/{quote(run_id, safe='')}/{encoded}"
+
+
+class TestArtifactDownloadRoundTrip:
+    """실제 HTTP 경계를 통과하는 개별 artifact 파일 다운로드 (#323 후속).
+
+    이전 회귀: Studio가 manifest.outputs(= output_root 절대 storage 경로, OS 구분자
+    포함)를 file_path로 그대로 써서 브라우저가 "\\"를 "%5C"로 인코딩 -> Builder가 400.
+    canonical identity는 GET /artifacts/{run_id}가 주는 run-relative POSIX 경로다.
+    """
+
+    def _build(self, base_url: str, run_id: str) -> list[str]:
+        status, body = _post(base_url, "/build", {"spec": VALID_SPEC_YAML, "run_id": run_id})
+        assert status == 200, body
+        s, listing = _http_get_bytes(f"{base_url}/artifacts/{run_id}")
+        assert s == 200
+        files = cast(list[str], json.loads(listing)["files"])
+        assert files
+        return files
+
+    def test_listing_exposes_only_posix_run_relative_paths(
+        self, http_server: str, tmp_path: Path
+    ) -> None:
+        files = self._build(http_server, "http-dl-1")
+        for wire in files:
+            assert "\\" not in wire, wire
+            assert not wire.startswith("/"), wire
+            assert str(tmp_path) not in wire, wire
+            assert "dist" not in wire.split("/")[0] or wire.split("/")[0] in {
+                "bronze",
+                "silver",
+                "gold",
+            }
+        # 빌드는 nested 산출물을 만든다.
+        assert any("/" in f for f in files)
+
+    def test_downloads_nested_artifact_by_canonical_path(
+        self, http_server: str, tmp_path: Path
+    ) -> None:
+        files = self._build(http_server, "http-dl-2")
+        nested = next(f for f in files if "/" in f and f.endswith((".jsonl", ".parquet", ".json")))
+
+        status, payload = _http_get_bytes(_canonical_to_url(http_server, "http-dl-2", nested))
+        assert status == 200
+        on_disk = (tmp_path / "http-dl-2").joinpath(*nested.split("/")).read_bytes()
+        assert payload == on_disk
+
+        # 최상위 파일(manifest.json)도 같은 흐름으로 받힌다.
+        url = _canonical_to_url(http_server, "http-dl-2", "manifest.json")
+        status, payload = _http_get_bytes(url)
+        assert status == 200
+        assert payload == (tmp_path / "http-dl-2" / "manifest.json").read_bytes()
+
+    def test_raw_storage_style_path_with_encoded_backslash_is_rejected(
+        self, http_server: str
+    ) -> None:
+        self._build(http_server, "http-dl-3")
+        # manifest.outputs가 줬던 형태: output_root dir 이름 + "\\" 구분자 (%5C).
+        bad = (
+            f"{http_server}/artifacts/http-dl-3/"
+            "dist-new-user-preview%5Chttp-dl-3%5Cbronze%5Cdatago.air_quality%5Craw_records.jsonl"
+        )
+        status, _ = _http_get_bytes(bad)
+        assert status in (400, 404)
+        assert status != 200
+
+    def test_http_traversal_requests_are_blocked(self, http_server: str) -> None:
+        self._build(http_server, "http-dl-4")
+        _post(http_server, "/build", {"spec": VALID_SPEC_YAML, "run_id": "http-dl-victim"})
+
+        for suffix in (
+            "../http-dl-victim/manifest.json",
+            "%2e%2e/http-dl-victim/manifest.json",
+            "silver%2f..%2f..%2fmanifest.json",
+            "silver%5c..%5c..%5cmanifest.json",
+            "..%2f..%2fetc%2fpasswd",
+            "silver//table.parquet",
+        ):
+            status, _ = _http_get_bytes(f"{http_server}/artifacts/http-dl-4/{suffix}")
+            assert status in (400, 403, 404), suffix
+            assert status != 200, suffix
+
+    def test_cannot_reach_other_run_via_listing(self, http_server: str, tmp_path: Path) -> None:
+        files_a = self._build(http_server, "http-dl-a")
+        self._build(http_server, "http-dl-b")
+        # run A의 canonical 경로로 run B를 요청해도 A 안에서만 resolve된다 (교차 접근 불가).
+        nested = next(f for f in files_a if "/" in f)
+        status, _ = _http_get_bytes(_canonical_to_url(http_server, "http-dl-b", nested))
+        # B에도 같은 상대 경로 파일이 있으므로 200이지만, 내용은 B의 것이어야 한다.
+        assert status == 200
+        on_disk_b = (tmp_path / "http-dl-b").joinpath(*nested.split("/")).read_bytes()
+        _, payload = _http_get_bytes(_canonical_to_url(http_server, "http-dl-b", nested))
+        assert payload == on_disk_b
 
 
 class TestBuildsRoundTrip:

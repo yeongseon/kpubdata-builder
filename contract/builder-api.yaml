@@ -76,7 +76,7 @@ info:
     미검사였음).
     v1.17.0은 build publish 표면을 추가한다(#491) — `GET /builds/{run_id}/publish/readiness`(ready/blockers/warnings)와 `POST /builds/{run_id}/publish`(idempotent publish receipt, TOCTOU 재검사)를 추가한다(additive). HTTP target은 `huggingface`로 한정한다.
     v1.21.0은 publish 감사 로그 조회를 추가한다(#563, additive) — `GET /builds/{run_id}/publish/audit`(reconcile/reset 이력, 소유권 게이트, receipt 삭제 후에도 조회).
-    v1.22.0은 `GET /datasets` 응답에 `total`을 추가한다(#488 후속, additive — 기존 필드/동작은 변경되지 않는다). `total`은 canonical dataset grouping과 ownership 필터를 적용한 뒤 pagination(limit) 이전의 접근 가능한 distinct dataset_id 개수이며, Studio Home의 DATASETS KPI가 `datasets` 길이나 limit을 total로 오인하지 않도록 authoritative aggregate를 제공한다.
+    v1.22.0은 `GET /datasets` 응답에 `total`을 추가한다(#488 후속, additive — 기존 필드/동작은 변경되지 않는다). `total`은 canonical dataset grouping과 ownership 필터를 적용한 뒤 pagination(limit) 이전의 접근 가능한 distinct dataset_id 개수이며, Studio Home의 DATASETS KPI가 `datasets` 길이나 limit을 total로 오인하지 않도록 authoritative aggregate를 제공한다. 같은 릴리스 범위에서 `/catalog` 응답의 `CatalogDataset`에 `request_parameters`와 `application`도 추가한다(additive — 기존 필드/동작은 변경되지 않는다). `raw_metadata`의 요청 파라미터 설명을 secret-free allowlist(`name`/`required`/`description`/`example`)로 직렬화한 것으로, `serviceKey` 등 시크릿 파라미터는 제외된다. Add Data가 선택한 Dataset의 필수 요청 파라미터를 사전에 안내하는 데 쓴다. metadata가 없는 dataset은 빈 배열. `application`은 공공데이터포털처럼 API Key 발급과 Dataset별 활용신청이 별개일 수 있는 경우의 안내(`{required, url}`)로, `raw_metadata.application`에서 그대로 전달하며 없으면 null이다 — Studio는 신청 완료/승인 여부를 추측하지 않는다.
     v1.20.0은 HTTP publish target 어휘를 확장한다(#550, additive) — `kaggle`(packaging의 `dataset-metadata.json` `id`가 destination과 일치해야 하며 `public` option 허용)과 `local`(`KPUBDATA_BUILDER_LOCAL_PUBLISH_ROOT` 안의 상대 `owner/name` 경로만 허용). `GET /publish/readiness`의 `destination` query는 선택이다.
     v1.19.0은 publish receipt 운영 경로를 추가한다(#551, additive) — `GET /builds/{run_id}/publish/receipt`(상태 조회, 소유자 불일치는 404), `POST /builds/{run_id}/publish/reconcile`(원격 상태 확인 후 `succeeded` 확정 또는 reset으로 재게시 허용; 판단 불가 시 503로 무변경), `DELETE /builds/{run_id}/publish/receipt`(명시적 reset, 감사 로그 기록).
     v1.18.0은 ADR 0008의 협력적 취소(cooperative cancellation)를 구현한다 —
@@ -161,6 +161,14 @@ paths:
                               time_range: true
                               max_page_size: 1000
                             requires_service_key: true
+                            request_parameters:
+                              - name: sidoName
+                                required: true
+                                description: 조회할 시·도
+                                example: 서울
+                            application:
+                              required: true
+                              url: https://www.data.go.kr/data/15073861/openapi.do
                           - name: village_fcst
                             title: 단기예보
                             description: null
@@ -170,6 +178,8 @@ paths:
                             operations: [list]
                             query_support: null
                             requires_service_key: true
+                            request_parameters: []
+                            application: null
                       - name: ecos
                         datasets:
                           - name: key_statistic_list
@@ -181,6 +191,8 @@ paths:
                             operations: [list]
                             query_support: null
                             requires_service_key: false
+                            request_parameters: []
+                            application: null
         "401":
           $ref: "#/components/responses/Unauthorized"
         "502":
@@ -2870,6 +2882,8 @@ components:
           operations,
           query_support,
           requires_service_key,
+          request_parameters,
+          application,
         ]
       description: >
         DatasetRef의 public/canonical metadata를 allowlist로 직렬화한다 (#490).
@@ -2908,6 +2922,57 @@ components:
           description: 목록 질의 capability (알려진 경우만, 없으면 null)
         requires_service_key:
           type: boolean
+        request_parameters:
+          type: array
+          items:
+            $ref: "#/components/schemas/CatalogRequestParameter"
+          description: >
+            선택한 Dataset에 전달하는 요청 파라미터의 secret-free 설명 (#490 후속,
+            additive). raw_metadata에서 allowlist로 추린 것으로 serviceKey 등 시크릿
+            파라미터는 포함되지 않는다. metadata가 없으면 빈 배열.
+        application:
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/CatalogApplication"
+          description: >
+            공공데이터포털처럼 API Key 발급과 Dataset별 활용신청이 별개일 수 있는
+            경우의 안내 (#490 후속, additive). raw_metadata.application에서
+            그대로 전달한 것으로, 없으면 null(활용신청이 필요 없다는 뜻이 아니라
+            알려진 바 없음). Studio는 신청 완료/승인 여부를 이 필드로 추측하지 않는다
+            — Preview 성공이 실제 사용 가능 여부의 최종 확인이다.
+
+    CatalogRequestParameter:
+      type: object
+      required: [name, required, description, example]
+      properties:
+        name:
+          type: string
+          description: 요청 파라미터 이름 (시크릿/serviceKey 계열은 제외됨)
+        required:
+          type: boolean
+          description: 이 파라미터가 필수인지
+        description:
+          type: [string, "null"]
+          description: 사람이 읽는 설명 (없으면 null)
+        example:
+          type: [string, "null"]
+          description: 근거 있는 예시 값 (없으면 null)
+
+    CatalogApplication:
+      type: object
+      required: [required, url]
+      description: >
+        Dataset별 활용신청 안내 (API Key 발급과 별개일 수 있음). Studio는 신청
+        완료/승인 상태를 이 필드로 만들어내지 않는다 — 알 수 없으면 알 수 없는
+        상태로 남긴다.
+      properties:
+        required:
+          type: boolean
+          description: 이 Dataset이 API Key 등록과 별도로 활용신청이 필요할 수 있는지
+        url:
+          type: string
+          format: uri
+          description: 공식 Dataset 상세/활용신청 페이지 (http/https만 허용)
 
     CatalogQuerySupport:
       type: object
