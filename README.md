@@ -107,6 +107,30 @@ build/{run_id}/
 > 로컬 개발에서 인증 없이 띄우려면 `KPUBDATA_BUILDER_DEV_MODE=1`을 명시하세요.
 > Docker 컨테이너는 `DEV_MODE` 없이 `API_KEY`가 없으면 기동 자체를 거부합니다 (`docker-entrypoint.sh`).
 
+#### Provider credential store 운영 (`KPUBDATA_BUILDER_CREDENTIAL_MASTER_KEY`)
+
+사용자별 Provider credential CRUD(`GET/PUT/DELETE /providers/{provider}/credential`)는
+암호화된 credential store를 요구하며, 이 store는 `KPUBDATA_BUILDER_CREDENTIAL_MASTER_KEY`가
+설정돼 있을 때만 활성화된다.
+
+- **master key 미설정**: 세 credential endpoint 모두 `503`
+  (`{"error": "credential store is not configured"}`)을 반환한다. 이는 **운영자가 store를
+  구성하지 않은 상태**이며, "사용자가 아직 credential을 등록하지 않음"(store는 정상이고
+  `GET`이 `200 {"configured": false, "masked": null, "updated_at": null}`)과 명확히 다른
+  상태다. Studio도 이 둘을 서로 다른 UI로 구분해서 보여준다 — 둘을 하나의 generic 실패로
+  뭉개지 않는다.
+- **key는 안정적으로 재사용한다**: credential은 이 key로 AES-GCM 암호화되어 저장된다.
+  배포·재기동 사이에 **반드시 동일한 key**를 다시 주입해야 한다.
+- **key를 바꾸면 기존 credential을 읽을 수 없다**: 다른 key로 교체하면 이전에 저장된
+  encrypted credential은 복호화에 실패한다(사실상 폐기). key rotation이 필요하면 각
+  사용자가 credential을 다시 등록해야 한다.
+- **형식**: URL-safe base64로 인코딩한 32바이트. 예:
+  `python -c "import os,base64;print(base64.urlsafe_b64encode(os.urandom(32)).decode())"`.
+- **secret은 문서/example/로그에 넣지 않는다**: OpenAPI example과 이 문서의 예시는
+  placeholder(`replace-with-your-provider-key` 등)만 쓴다. 실제 master key나 provider
+  credential 원문을 커밋하거나 로그로 남기지 않는다. `PUT` 응답도 원문을 echo하지 않고
+  마스킹 메타데이터만 반환한다.
+
 ### CLI 인자
 
 #### 전역 인자

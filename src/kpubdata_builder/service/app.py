@@ -311,7 +311,15 @@ def _strip_internal_fields(entries: list[_BuildListEntry]) -> list[_BuildListEnt
 # owner/name 경로로 한정된다. GET readiness의 destination query는 선택 파라미터다.
 # 1.20.0 -> 1.21.0: publish 감사 로그 조회를 추가한다(#563, additive) —
 # GET /builds/{run_id}/publish/audit(reconcile/reset 이력, 소유권 게이트).
-API_CONTRACT_VERSION = "1.21.0"
+# 1.21.0 -> 1.22.0: Studio Home dashboard가 임의 숫자 합성 없이 authoritative
+# aggregate를 읽도록 두 가지 additive 조회를 추가한다(기존 필드/동작 불변):
+#   - GET /datasets 응답에 total — canonical grouping + ownership 필터 이후,
+#     pagination(limit) 이전의 distinct dataset 개수. items.length/limit을 total로
+#     오인하지 않도록 한다.
+#   - GET /quality/summary?window=24h — 최근 24h 안에서 접근 가능한 run의
+#     structured quality를 PASS/WARN/FAIL run 수로 요약(#486 도메인 quality의
+#     bounded cross-run aggregate). 시스템 observability(/monitoring)와 섞지 않는다.
+API_CONTRACT_VERSION = "1.22.0"
 
 
 def _quality_result_to_json(r: QualityCheckResult) -> dict[str, JsonValue]:
@@ -1544,6 +1552,10 @@ class BuilderService:
         각 dataset은 접근 가능한 run 중 latest run(finished_at 기준, 동일 시각은
         run_id 내림차순 타이브레이크)의 canonical snapshot·manifest·stage 상태로
         요약된다. legacy run(snapshot 없음)은 grouping 대상에서 제외된다.
+
+        `total`은 canonical grouping + ownership 필터 이후, pagination(limit) 이전의
+        distinct dataset 개수다(#488 후속, additive) — limit이 무한이면 `datasets`에
+        실릴 항목 수와 같다. 다른 principal 소유 run만 있는 dataset은 포함되지 않는다.
         """
         records = self._dataset_records(principal)
         latest_by_dataset = datasets_service.group_latest_by_dataset(records)
@@ -1552,14 +1564,19 @@ class BuilderService:
             key=datasets_service.sort_key,
             reverse=True,
         )
+        # 각 dataset의 summary는 한 번만 계산해 total 카운트와 페이지 항목에 함께 쓴다
+        # (legacy/손상으로 canonical summary 복원에 실패하는 run은 목록에서도 total
+        # 에서도 동일하게 제외된다 — items.length가 limit에 걸리는 것과는 무관하다).
         items: list[JsonValue] = []
+        total = 0
         for record in ordered:
-            if len(items) >= limit:
-                break
             view = datasets_service.build_dataset_summary(self._output_root, record)
-            if view is not None:
+            if view is None:
+                continue
+            total += 1
+            if len(items) < limit:
                 items.append(view)
-        return ServiceResponse(200, {"datasets": items})
+        return ServiceResponse(200, {"datasets": items, "total": total})
 
     def get_dataset(
         self, dataset_id: str, *, principal: Principal | None = None
@@ -1654,6 +1671,59 @@ class BuilderService:
                 ),
             },
         )
+
+    def quality_summary(
+        self, *, window: str, principal: Principal | None = None
+    ) -> ServiceResponse:
+        """최근 ``window`` 안 접근 가능한 run의 structured quality를 PASS/WARN/FAIL
+        run 수로 요약한다 (#486 후속, additive — API 1.22.0).
+
+        Studio Home의 "QUALITY WARN (24H)" KPI가 임의 숫자 합성 없이 authoritative
+        aggregate를 읽도록 하는 bounded cross-run 집계다. 개별 run의
+        ``quality_results``/dataset/owner는 노출하지 않는다 — 그건 per-run
+        ``GET /builds/{run_id}/quality``의 몫이다. 시스템 observability
+        (``/monitoring``)와 도메인 quality를 한 응답에 섞지 않는다.
+
+        run 집합은 ``_dataset_records``(canonical snapshot + manifest로 재확인,
+        ENFORCE_OWNERSHIP + oidc principal이면 본인 run만)를 재사용한다 — 새로운
+        run 인덱스를 만들지 않는다. legacy run(snapshot 없음)은 애초에 structured
+        quality가 없으므로 자연히 제외된다.
+        """
+        if window != "24h":
+            return ServiceResponse(
+                400, {"error": f"unsupported window: {window!r} (only '24h')"}
+            )
+        now = datetime.now(timezone.utc)
+        base: dict[str, JsonValue] = {
+            "window": "24h",
+            "generated_at": now.isoformat(timespec="seconds"),
+        }
+        try:
+            records = self._dataset_records(principal)
+        except Exception:
+            # run enumeration 자체가 불가능한 경우에만 unavailable — "0건"과 구분한다.
+            return ServiceResponse(
+                200,
+                {
+                    **base,
+                    "availability": "unavailable",
+                    "total_runs": 0,
+                    "evaluated_runs": 0,
+                    "pass_runs": 0,
+                    "warn_runs": 0,
+                    "fail_runs": 0,
+                },
+            )
+        entries = (
+            (record, datasets_service.read_manifest(self._output_root, record.run_id))
+            for record in records
+        )
+        counts = quality_service.aggregate_quality_window(
+            entries,
+            now=now,
+            window_seconds=quality_service.QUALITY_SUMMARY_WINDOW_SECONDS,
+        )
+        return ServiceResponse(200, {**base, "availability": "available", **counts})
 
     def monitoring_summary(self) -> ServiceResponse:
         """Builder API/Queue/Worker/Artifact Store 시스템 상태 요약 (#516).

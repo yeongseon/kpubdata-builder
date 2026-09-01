@@ -393,6 +393,111 @@ class TestDatasetGrouping:
         assert resp.status_code == 400
 
 
+class TestDatasetTotal:
+    """GET /datasets `total` (#488 후속, additive, API 1.22.0).
+
+    total = canonical grouping + ownership 이후, pagination 이전의 distinct
+    dataset_id 개수. items.length/limit을 total로 쓰지 않는다.
+    """
+
+    def test_total_is_zero_when_no_datasets(self, tmp_path: Path) -> None:
+        resp = dispatch(_service(tmp_path), "GET", "/datasets", None)
+        assert resp.status_code == 200
+        assert resp.body["datasets"] == []
+        assert resp.body["total"] == 0
+
+    def test_total_counts_distinct_datasets(self, tmp_path: Path) -> None:
+        service = _service(tmp_path)
+        for i in range(3):
+            dispatch(
+                service, "POST", "/build", {"spec": _spec_yaml(f"dataset.{i}"), "run_id": f"r{i}"}
+            )
+        resp = dispatch(service, "GET", "/datasets", None)
+        assert resp.status_code == 200
+        assert len(cast(list[object], resp.body["datasets"])) == 3
+        assert resp.body["total"] == 3
+
+    def test_total_ignores_pagination_limit(self, tmp_path: Path) -> None:
+        service = _service(tmp_path)
+        for i in range(5):
+            dispatch(
+                service, "POST", "/build", {"spec": _spec_yaml(f"dataset.{i}"), "run_id": f"r{i}"}
+            )
+        resp = dispatch(service, "GET", "/datasets", None, query="limit=2")
+        assert resp.status_code == 200
+        # 페이지는 limit에 걸리지만 total은 전체 distinct 개수를 그대로 보고한다.
+        assert len(cast(list[object], resp.body["datasets"])) == 2
+        assert resp.body["total"] == 5
+
+    def test_multiple_runs_of_same_dataset_count_once(self, tmp_path: Path) -> None:
+        service = _service(tmp_path)
+        dispatch(service, "POST", "/build", {"spec": _spec_yaml("dataset.a"), "run_id": "r1"})
+        dispatch(service, "POST", "/build", {"spec": _spec_yaml("dataset.a"), "run_id": "r2"})
+        dispatch(service, "POST", "/build", {"spec": _spec_yaml("dataset.b"), "run_id": "r3"})
+        resp = dispatch(service, "GET", "/datasets", None)
+        assert resp.status_code == 200
+        assert resp.body["total"] == 2
+
+    def test_legacy_run_excluded_from_total(self, tmp_path: Path) -> None:
+        service = _service(tmp_path)
+        dispatch(service, "POST", "/build", {"spec": _spec_yaml("dataset.real"), "run_id": "r1"})
+
+        # buildspec.yaml snapshot이 없는 legacy run — grouping/total 대상이 아니다.
+        legacy_dir = tmp_path / "legacy-run"
+        legacy_dir.mkdir()
+        (legacy_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "started_at": "2020-01-01T00:00:00+00:00",
+                    "finished_at": "2020-01-01T00:05:00+00:00",
+                }
+            ),
+            encoding="utf-8",
+        )
+        service._build_index.close()
+        rebuild_index(tmp_path)
+        service2 = _service(tmp_path)
+
+        resp = dispatch(service2, "GET", "/datasets", None)
+        assert resp.status_code == 200
+        assert resp.body["total"] == 1
+        assert resp.body["total"] == len(cast(list[object], resp.body["datasets"]))
+
+    def test_total_excludes_other_users_datasets(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(_OWNERSHIP_ENV, "true")
+        service = _service(tmp_path)
+
+        def _build_as(dataset_id: str, run_id: str, identifier: str) -> None:
+            monkeypatch.setattr(
+                app_module,
+                "authenticate",
+                lambda **_kwargs: Principal(kind="oidc", identifier=identifier),
+            )
+            resp = dispatch(
+                service, "POST", "/build", {"spec": _spec_yaml(dataset_id), "run_id": run_id}
+            )
+            assert resp.status_code == 200
+
+        _build_as("dataset.a", "r-a", "userA")
+        _build_as("dataset.shared", "r-shared-a", "userA")
+        _build_as("dataset.shared", "r-shared-b", "userB")
+        _build_as("dataset.b", "r-b", "userB")
+
+        monkeypatch.setattr(
+            app_module, "authenticate", lambda **_kwargs: Principal(kind="oidc", identifier="userA")
+        )
+        resp = dispatch(service, "GET", "/datasets", None)
+        assert resp.status_code == 200
+        # userA는 dataset.a + dataset.shared(본인 run)만 본다 — dataset.b는 제외.
+        assert {d["dataset_id"] for d in cast(list[dict[str, object]], resp.body["datasets"])} == {
+            "dataset.a",
+            "dataset.shared",
+        }
+        assert resp.body["total"] == 2
+
+
 class TestDatasetOwnership:
     """#488 semantics D: 동일 dataset_id라도 타 사용자 run은 grouping/latest에서 제외."""
 

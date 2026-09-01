@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import cast
 
@@ -554,3 +555,168 @@ class TestBuildQualityAvailability:
         assert resp.status_code == 200
         assert resp.body["availability"] == "unavailable"
         assert resp.body["evaluated_checks"] == 0
+
+
+class TestQualitySummary:
+    """GET /quality/summary — 최근 24h cross-run quality aggregate (#486 후속, API 1.22.0).
+
+    WARN/PASS/FAIL run 수 집계, 24h 경계, 미평가 run 제외, ownership 필터링을 검증한다.
+    시간 기준은 서비스 내부 ``datetime.now``라서 fixture는 실제 현재 시각 기준
+    상대 timestamp를 쓴다.
+    """
+
+    @staticmethod
+    def _ago(hours: float) -> str:
+        return (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+
+    def test_empty_is_available_with_zero_counts(self, tmp_path: Path) -> None:
+        resp = dispatch(_service(tmp_path), "GET", "/quality/summary", None)
+        assert resp.status_code == 200
+        assert resp.body["window"] == "24h"
+        assert resp.body["availability"] == "available"
+        assert resp.body["total_runs"] == 0
+        assert resp.body["evaluated_runs"] == 0
+        assert resp.body["warn_runs"] == 0
+        assert resp.body["fail_runs"] == 0
+        assert resp.body["pass_runs"] == 0
+
+    def test_warn_run_counted_once_despite_multiple_warn_checks(self, tmp_path: Path) -> None:
+        _write_fixture_run(
+            tmp_path,
+            "r1",
+            dataset_id="d.a",
+            finished_at=self._ago(1),
+            quality_results={
+                "air": [
+                    _result("warn", rule="max_null_ratio"),
+                    _result("warn", rule="max_null_ratio", column="pm25"),
+                    _result("pass"),
+                ]
+            },
+        )
+        resp = dispatch(_service(tmp_path), "GET", "/quality/summary", None)
+        assert resp.body["total_runs"] == 1
+        assert resp.body["evaluated_runs"] == 1
+        assert resp.body["warn_runs"] == 1
+        assert resp.body["fail_runs"] == 0
+        assert resp.body["pass_runs"] == 0
+
+    def test_pass_only_run(self, tmp_path: Path) -> None:
+        _write_fixture_run(
+            tmp_path,
+            "r1",
+            dataset_id="d.a",
+            finished_at=self._ago(2),
+            quality_results={"air": [_result("pass"), _result("pass", rule="max_null_ratio")]},
+        )
+        resp = dispatch(_service(tmp_path), "GET", "/quality/summary", None)
+        assert resp.body["evaluated_runs"] == 1
+        assert resp.body["pass_runs"] == 1
+        assert resp.body["warn_runs"] == 0
+        assert resp.body["fail_runs"] == 0
+
+    def test_fail_only_run_not_in_warn(self, tmp_path: Path) -> None:
+        _write_fixture_run(
+            tmp_path,
+            "r1",
+            dataset_id="d.a",
+            finished_at=self._ago(2),
+            quality_results={"air": [_result("fail"), _result("pass")]},
+        )
+        resp = dispatch(_service(tmp_path), "GET", "/quality/summary", None)
+        assert resp.body["evaluated_runs"] == 1
+        assert resp.body["fail_runs"] == 1
+        assert resp.body["warn_runs"] == 0
+        assert resp.body["pass_runs"] == 0
+
+    def test_warn_and_fail_run_appears_in_both(self, tmp_path: Path) -> None:
+        _write_fixture_run(
+            tmp_path,
+            "r1",
+            dataset_id="d.a",
+            finished_at=self._ago(2),
+            quality_results={"air": [_result("warn"), _result("fail")]},
+        )
+        resp = dispatch(_service(tmp_path), "GET", "/quality/summary", None)
+        assert resp.body["evaluated_runs"] == 1
+        assert resp.body["warn_runs"] == 1
+        assert resp.body["fail_runs"] == 1
+        assert resp.body["pass_runs"] == 0
+
+    def test_unavailable_and_zero_check_runs_are_not_evaluated(self, tmp_path: Path) -> None:
+        # legacy: quality_results 필드 자체가 없음
+        _write_fixture_run(
+            tmp_path,
+            "r-legacy",
+            dataset_id="d.a",
+            finished_at=self._ago(1),
+            include_quality_key=False,
+        )
+        # available 하지만 평가된 check 0건
+        _write_fixture_run(
+            tmp_path,
+            "r-empty",
+            dataset_id="d.b",
+            finished_at=self._ago(1),
+            quality_results={},
+        )
+        resp = dispatch(_service(tmp_path), "GET", "/quality/summary", None)
+        assert resp.body["total_runs"] == 2
+        assert resp.body["evaluated_runs"] == 0
+        assert resp.body["warn_runs"] == 0
+        assert resp.body["fail_runs"] == 0
+        assert resp.body["pass_runs"] == 0
+
+    def test_24h_boundary_excludes_older_run(self, tmp_path: Path) -> None:
+        _write_fixture_run(
+            tmp_path,
+            "r-in",
+            dataset_id="d.a",
+            finished_at=self._ago(1),
+            quality_results={"air": [_result("warn")]},
+        )
+        _write_fixture_run(
+            tmp_path,
+            "r-out",
+            dataset_id="d.b",
+            finished_at=self._ago(25),
+            quality_results={"air": [_result("warn")]},
+        )
+        resp = dispatch(_service(tmp_path), "GET", "/quality/summary", None)
+        assert resp.body["total_runs"] == 1
+        assert resp.body["warn_runs"] == 1
+
+    def test_ownership_filtering_excludes_other_users_runs(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(_OWNERSHIP_ENV, "true")
+        _write_fixture_run(
+            tmp_path,
+            "r-a",
+            dataset_id="d.a",
+            created_by="oidc:userA",
+            finished_at=self._ago(1),
+            quality_results={"air": [_result("warn")]},
+        )
+        _write_fixture_run(
+            tmp_path,
+            "r-b",
+            dataset_id="d.b",
+            created_by="oidc:userB",
+            finished_at=self._ago(1),
+            quality_results={"air": [_result("warn")]},
+        )
+        monkeypatch.setattr(
+            app_module,
+            "authenticate",
+            lambda **_kwargs: Principal(kind="oidc", identifier="userA"),
+        )
+        resp = dispatch(_service(tmp_path), "GET", "/quality/summary", None)
+        assert resp.body["total_runs"] == 1
+        assert resp.body["warn_runs"] == 1
+
+    def test_rejects_unsupported_window(self, tmp_path: Path) -> None:
+        resp = dispatch(
+            _service(tmp_path), "GET", "/quality/summary", None, query="window=7d"
+        )
+        assert resp.status_code == 400

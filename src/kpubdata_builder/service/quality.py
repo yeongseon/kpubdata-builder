@@ -9,12 +9,36 @@ dataset→run 조회는 #488의 ``datasets`` 모듈 helper(``BuilderService._dat
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 from ..spec import JsonValue
 from .datasets import RunRecord
 
 Availability = Literal["available", "partial", "unavailable"]
+
+# 최근 quality aggregate가 지원하는 유일한 window (monitoring #516과 같은 어휘).
+QUALITY_SUMMARY_WINDOW_SECONDS = 24 * 3600
+
+
+def _parse_iso_utc(value: str | None) -> datetime | None:
+    """ISO 8601 문자열을 UTC ``datetime``으로 파싱한다. 실패/None이면 None.
+
+    ``monitoring._parse_iso_utc``와 같은 엄격한 규칙이다 — naive local time 비교를
+    피하려고 tz 정보가 없으면 UTC로 간주한다. monitoring이 quality를 import하는
+    방향이므로 역참조를 만들지 않도록 여기에 동일 helper를 둔다.
+    """
+    if not value:
+        return None
+    try:
+        text = value[:-1] + "+00:00" if value.endswith("Z") else value
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _validated_rows(manifest: dict[str, object]) -> int | None:
@@ -121,4 +145,70 @@ def quality_availability(
     return "available", evaluated_checks
 
 
-__all__ = ["Availability", "quality_availability", "summarize_run_quality"]
+def aggregate_quality_window(
+    entries: Iterable[tuple[RunRecord, dict[str, object] | None]],
+    *,
+    now: datetime,
+    window_seconds: int = QUALITY_SUMMARY_WINDOW_SECONDS,
+) -> dict[str, JsonValue]:
+    """``GET /quality/summary``의 PASS/WARN/FAIL run 수 aggregate (#486 후속, additive).
+
+    ``entries``는 이미 principal 접근 필터(#505 ownership)를 통과한 canonical run
+    (``RunRecord``)과 그 manifest다. 여기서는 시간창 필터와 run 단위 집계만 한다.
+
+    - 시간 기준: canonical run timestamp(``finished_at``, 없으면 ``started_at``)를
+      UTC로 파싱해 ``(now - window, now]`` 안에 드는 run만 센다. 파싱 불가능한
+      timestamp(legacy/malformed)는 창에 놓을 수 없으므로 제외한다 — naive local
+      time으로 비교하지 않는다.
+    - ``total_runs``: 창 안의 run 수(status 무관).
+    - ``evaluated_runs``: 그 중 structured quality가 실제로 평가된
+      (``evaluated_checks > 0``) run 수. unavailable/0-check run은 제외한다 —
+      미평가를 PASS로 세지 않는다.
+    - ``warn_runs``: evaluated run 중 WARN 결과가 하나 이상인 run 수. 같은 run에
+      WARN check가 여러 개여도 run은 1로 센다. Studio Home의 "QUALITY WARN (24H)"
+      KPI가 이 값이다.
+    - ``fail_runs``: evaluated run 중 FAIL 결과가 하나 이상인 run 수. WARN 요건과
+      독립이므로 ``warn_runs``와 겹칠 수 있다(WARN·FAIL이 함께 있는 run).
+    - ``pass_runs``: evaluated run 중 WARN·FAIL이 하나도 없는 run 수.
+      ``pass_runs + (WARN 또는 FAIL이 있는 run 수) == evaluated_runs``.
+    """
+    lower = now - timedelta(seconds=window_seconds)
+    total = evaluated = pass_runs = warn_runs = fail_runs = 0
+    for record, manifest in entries:
+        timestamp = _parse_iso_utc(record.finished_at or record.started_at)
+        if timestamp is None or not (lower < timestamp <= now):
+            continue
+        total += 1
+        if manifest is None:
+            continue
+        summary = summarize_run_quality(record, manifest)
+        checks = summary["evaluated_checks"]
+        if not isinstance(checks, int) or checks <= 0:
+            continue
+        evaluated += 1
+        warn = summary["warn_count"]
+        fail = summary["fail_count"]
+        has_warn = isinstance(warn, int) and warn > 0
+        has_fail = isinstance(fail, int) and fail > 0
+        if has_warn:
+            warn_runs += 1
+        if has_fail:
+            fail_runs += 1
+        if not has_warn and not has_fail:
+            pass_runs += 1
+    return {
+        "total_runs": total,
+        "evaluated_runs": evaluated,
+        "pass_runs": pass_runs,
+        "warn_runs": warn_runs,
+        "fail_runs": fail_runs,
+    }
+
+
+__all__ = [
+    "Availability",
+    "QUALITY_SUMMARY_WINDOW_SECONDS",
+    "aggregate_quality_window",
+    "quality_availability",
+    "summarize_run_quality",
+]

@@ -3,6 +3,7 @@
 ## v0.4 (Unreleased)
 
 ### 추가됨
+- **Dashboard aggregate contract (#488/#486 후속, additive)**: `GET /datasets` 응답에 `total`(canonical grouping + ownership 이후, pagination 이전의 접근 가능한 distinct dataset_id 개수) 추가 — Studio Home DATASETS KPI가 `datasets` 길이/limit을 total로 오인하지 않게 한다. 새 `GET /quality/summary?window=24h`는 최근 24h 안 접근 가능한 run의 structured quality를 `total_runs`/`evaluated_runs`/`pass_runs`/`warn_runs`/`fail_runs`로 요약(도메인 Quality의 bounded cross-run aggregate — 시스템 observability `/monitoring/*`와 분리). 두 조회 모두 ownership을 적용하며 unavailable/0-check run을 PASS로 세지 않는다. API 계약 1.21.0 → 1.22.0
 - **Multi-source Join/Composition (#506)**: `BuildSpec.composition`(`CompositionSpec`/`JoinSpec`)으로 두 source의 검증된 Silver를 equi-join해 결합 Gold dataset(`gold/{composition.name}/`) 생성. alias 필수/중복 검증, join key 존재/dtype 일치 런타임 게이트, duplicate-key many-to-many 폭증 warn/fail 게이트, manifest `composition`(`CompositionProvenance`, additive)과 `POST /build` 응답 `composition` 키로 결합 결과를 source별 결과와 구분해 노출. API 계약 1.11.0 → 1.12.0
 - **Built Dataset Catalog·Detail·Stage Summary API (#488)**: `GET /datasets`, `GET /datasets/{dataset_id}`, `GET /datasets/{dataset_id}/runs`로 `BuildSpec.dataset_id` 단위 grouping/latest run/run history 조회. `GET /builds/{run_id}/stages`, `GET /builds/{run_id}/stages/{stage}`로 source별 Bronze/Silver/Gold 상태와 안전한 summary/preview 조회
 - **인증 시스템 (B2-B5)**: Principal 추상화(#384), Google OIDC Bearer 검증(#385), 허용 목록 게이트(#386), API 계약 bearerAuth(#387)
@@ -23,6 +24,8 @@
 - 컨테이너 진입점 fail-closed (ADR 0006)
 
 ### 변경됨
+- API 계약 1.21.0 → 1.22.0 (`GET /datasets`에 `total` 추가, `GET /quality/summary` 추가, additive, #488/#486 후속)
+- README에 Provider credential store(`KPUBDATA_BUILDER_CREDENTIAL_MASTER_KEY`) 운영 절 추가 — master key 필수/재사용/rotation 시 기존 credential 복호화 불가, 503(store 미구성)과 `configured:false`(미등록) 구분, secret 비노출 원칙
 - API 계약 1.0.0 → 1.2.0 (/healthz + bearerAuth + /catalog + StructuredProblem)
 - API 계약 1.4.0 → 1.5.0 (Dataset Catalog·Detail·Stage Summary API 추가, additive, #488)
 - BuildIndex 스키마 v2 → v3 (created_by)
