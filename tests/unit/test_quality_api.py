@@ -716,7 +716,5 @@ class TestQualitySummary:
         assert resp.body["warn_runs"] == 1
 
     def test_rejects_unsupported_window(self, tmp_path: Path) -> None:
-        resp = dispatch(
-            _service(tmp_path), "GET", "/quality/summary", None, query="window=7d"
-        )
+        resp = dispatch(_service(tmp_path), "GET", "/quality/summary", None, query="window=7d")
         assert resp.status_code == 400

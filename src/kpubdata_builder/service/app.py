@@ -1690,9 +1690,7 @@ class BuilderService:
         quality가 없으므로 자연히 제외된다.
         """
         if window != "24h":
-            return ServiceResponse(
-                400, {"error": f"unsupported window: {window!r} (only '24h')"}
-            )
+            return ServiceResponse(400, {"error": f"unsupported window: {window!r} (only '24h')"})
         now = datetime.now(timezone.utc)
         base: dict[str, JsonValue] = {
             "window": "24h",
