@@ -497,6 +497,47 @@ class TestDatasetTotal:
         }
         assert resp.body["total"] == 2
 
+    def test_paginated_response_does_not_render_full_summary_past_the_page(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """limit보다 dataset이 훨씬 많아도 expensive full summary는 page 후보에만 돈다.
+
+        #488 후속 리뷰: total을 세느라 catalog 전체에 ``build_dataset_summary``
+        (snapshot+manifest 재파싱 + stage 산출물 probe)가 도는 regression 방지.
+        page 밖 dataset은 경량 ``dataset_summary_renderable``로만 센다.
+        """
+        service = _service(tmp_path)
+        for i in range(6):
+            dispatch(
+                service, "POST", "/build", {"spec": _spec_yaml(f"dataset.{i}"), "run_id": f"r{i}"}
+            )
+
+        import kpubdata_builder.service.datasets as datasets_module
+
+        summary_calls: list[str] = []
+        renderable_calls: list[str] = []
+        real_summary = datasets_module.build_dataset_summary
+        real_renderable = datasets_module.dataset_summary_renderable
+
+        def _spy_summary(output_root: Path, record: RunRecord) -> object:
+            summary_calls.append(record.run_id)
+            return real_summary(output_root, record)
+
+        def _spy_renderable(output_root: Path, record: RunRecord) -> bool:
+            renderable_calls.append(record.run_id)
+            return real_renderable(output_root, record)
+
+        monkeypatch.setattr(datasets_module, "build_dataset_summary", _spy_summary)
+        monkeypatch.setattr(datasets_module, "dataset_summary_renderable", _spy_renderable)
+
+        resp = dispatch(service, "GET", "/datasets", None, query="limit=1")
+        assert resp.status_code == 200
+        assert len(cast(list[object], resp.body["datasets"])) == 1
+        assert resp.body["total"] == 6
+        # full summary는 page(limit=1) 후보 하나에만, 나머지는 경량 검증만.
+        assert len(summary_calls) == 1
+        assert len(renderable_calls) == 5
+
 
 class TestDatasetOwnership:
     """#488 semantics D: 동일 dataset_id라도 타 사용자 run은 grouping/latest에서 제외."""

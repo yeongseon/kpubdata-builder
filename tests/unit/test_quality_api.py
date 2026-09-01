@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import cast
@@ -718,3 +719,137 @@ class TestQualitySummary:
     def test_rejects_unsupported_window(self, tmp_path: Path) -> None:
         resp = dispatch(_service(tmp_path), "GET", "/quality/summary", None, query="window=7d")
         assert resp.status_code == 400
+
+    def test_healthy_index_does_not_read_historical_manifests(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """오래된 run 다수 + 최근 run 소수일 때 historical manifest를 다시 읽지 않는다.
+
+        #486 후속 리뷰: nominally 24h endpoint가 매 요청 all-history manifest/
+        snapshot 재파싱을 하던 regression 방지. canonical manifest.json mtime으로
+        candidate를 좁힌 뒤 그 candidate만 정본으로 재검증한다.
+        """
+        from kpubdata_builder.store import rebuild_index
+
+        old_cutoff = datetime.now(timezone.utc) - timedelta(hours=200)
+        for i in range(6):
+            _write_fixture_run(
+                tmp_path,
+                f"old-{i}",
+                dataset_id=f"d.old{i}",
+                # 기본 finished_at(2025-01-01)은 24h 창 밖 — historical run.
+                quality_results={"air": [_result("warn")]},
+            )
+            # 실제 오래된 run처럼 manifest.json mtime도 과거로 돌려놓는다.
+            aged = old_cutoff.timestamp()
+            os.utime(tmp_path / f"old-{i}" / "manifest.json", (aged, aged))
+        _write_fixture_run(
+            tmp_path,
+            "recent",
+            dataset_id="d.recent",
+            finished_at=self._ago(1),
+            started_at=self._ago(1),
+            quality_results={"air": [_result("warn")]},
+        )
+        rebuild_index(tmp_path)
+
+        import kpubdata_builder.service.datasets as datasets_module
+
+        read_run_ids: list[str] = []
+        real_read_manifest = datasets_module.read_manifest
+
+        def _spy_read_manifest(output_root: Path, run_id: str) -> object:
+            read_run_ids.append(run_id)
+            return real_read_manifest(output_root, run_id)
+
+        monkeypatch.setattr(datasets_module, "read_manifest", _spy_read_manifest)
+
+        resp = dispatch(_service(tmp_path), "GET", "/quality/summary", None)
+        assert resp.status_code == 200
+        assert resp.body["availability"] == "available"
+        assert resp.body["total_runs"] == 1
+        assert resp.body["warn_runs"] == 1
+        # 요청 처리 중 historical run의 manifest는 한 번도 읽지 않는다.
+        assert not any(rid.startswith("old-") for rid in read_run_ids)
+
+    def test_empty_index_falls_back_to_filesystem_scan(self, tmp_path: Path) -> None:
+        """BuildIndex가 비어 있으면(아직 미구축) 기존 filesystem 폴백을 유지한다."""
+        _write_fixture_run(
+            tmp_path,
+            "recent",
+            dataset_id="d.recent",
+            finished_at=self._ago(1),
+            started_at=self._ago(1),
+            quality_results={"air": [_result("warn")]},
+        )
+        # rebuild_index 호출 없음 — index는 비어 있다.
+        resp = dispatch(_service(tmp_path), "GET", "/quality/summary", None)
+        assert resp.status_code == 200
+        assert resp.body["availability"] == "available"
+        assert resp.body["total_runs"] == 1
+        assert resp.body["warn_runs"] == 1
+
+    def test_stale_index_timestamp_does_not_drop_in_window_run(self, tmp_path: Path) -> None:
+        """BuildIndex row가 stale(window 밖)이어도 canonical manifest가 window 안이면
+        24h aggregate에 포함된다.
+
+        시나리오(리뷰 지정): filesystem canonical manifest.finished_at = now-1h(창 안),
+        같은 run의 BuildIndex finished_at = now-3d(stale, 창 밖), index는 비어있지 않고
+        정상 query 가능. index는 파생 검색 index일 뿐이라(ADR 0003: "권위 없음")
+        정본 manifest를 기준으로 판정되어야 하므로 이 run은 반드시 집계에 포함된다.
+        """
+        _write_fixture_run(
+            tmp_path,
+            "r-fresh",
+            dataset_id="d.a",
+            started_at=self._ago(1),
+            finished_at=self._ago(1),
+            quality_results={"air": [_result("warn")]},
+        )
+        service = _service(tmp_path)
+        stale = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+        older = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+        # 파생 index에 의도적으로 stale한 행 + window 밖 다른 행을 심는다.
+        service._build_index.insert_or_replace(
+            run_id="r-fresh",
+            status="ok",
+            started_at=stale,
+            finished_at=stale,
+            dataset_id="d.a",
+        )
+        service._build_index.insert_or_replace(
+            run_id="r-other-old",
+            status="ok",
+            started_at=older,
+            finished_at=older,
+            dataset_id="d.b",
+        )
+        resp = dispatch(service, "GET", "/quality/summary", None)
+        assert resp.status_code == 200
+        assert resp.body["availability"] == "available"
+        assert resp.body["total_runs"] == 1
+        assert resp.body["warn_runs"] == 1
+
+    def test_run_absent_from_index_still_counted(self, tmp_path: Path) -> None:
+        """index write가 유실돼 특정 run이 index에 아예 없어도(다른 run은 있음)
+        canonical manifest가 window 안이면 24h aggregate에 포함된다 (ADR 0003 폴백)."""
+        _write_fixture_run(
+            tmp_path,
+            "r-unindexed",
+            dataset_id="d.a",
+            started_at=self._ago(2),
+            finished_at=self._ago(2),
+            quality_results={"air": [_result("warn")]},
+        )
+        service = _service(tmp_path)
+        service._build_index.insert_or_replace(
+            run_id="r-indexed-old",
+            status="ok",
+            started_at=(datetime.now(timezone.utc) - timedelta(days=5)).isoformat(),
+            finished_at=(datetime.now(timezone.utc) - timedelta(days=5)).isoformat(),
+            dataset_id="d.b",
+        )
+        resp = dispatch(service, "GET", "/quality/summary", None)
+        assert resp.status_code == 200
+        assert resp.body["total_runs"] == 1
+        assert resp.body["warn_runs"] == 1

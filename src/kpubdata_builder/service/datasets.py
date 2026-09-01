@@ -19,7 +19,7 @@ legacy run(#487 이전에 만들어져 buildspec.yaml snapshot이 없는 run)의
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -264,32 +264,70 @@ def merge_run_records(
     return [merged[run_id] for run_id in sorted(merged)]
 
 
+def _canonical_record_from_run_id(
+    output_root: Path,
+    run_id: str,
+    *,
+    fallback_status: str | None = None,
+    spec_digest: str | None = None,
+) -> RunRecord | None:
+    """단일 run_id를 snapshot+manifest 정본으로 재구성한다. 재확인 불가면 None.
+
+    ``retain_canonical_run_records``(입력이 ``RunRecord``)와
+    ``canonical_records_for_run_ids``(입력이 run_id 집합)가 공유하는 판정 —
+    같은 manifest가 경로에 따라 다르게 읽히는 드리프트를 없앤다.
+    """
+    manifest = read_manifest(output_root, run_id)
+    dataset_id = read_snapshot_dataset_id(output_root, run_id)
+    if manifest is None or dataset_id is None:
+        return None
+    started_at = manifest.get("started_at")
+    finished_at = manifest.get("finished_at")
+    created_by = manifest.get("created_by")
+    owner_id = manifest.get("owner_id")
+    return RunRecord(
+        run_id=run_id,
+        dataset_id=dataset_id,
+        status=status_from_manifest(manifest, fallback_status=fallback_status),
+        started_at=started_at if isinstance(started_at, str) else None,
+        finished_at=finished_at if isinstance(finished_at, str) else None,
+        spec_digest=spec_digest,
+        created_by=created_by if isinstance(created_by, str) else None,
+        owner_id=owner_id if isinstance(owner_id, str) else None,
+    )
+
+
 def retain_canonical_run_records(
     output_root: Path, records: Sequence[RunRecord]
 ) -> list[RunRecord]:
     """snapshot+manifest로 다시 확인되는 run만 남기고 정본 metadata를 적용한다."""
     canonical: list[RunRecord] = []
     for record in records:
-        manifest = read_manifest(output_root, record.run_id)
-        dataset_id = read_snapshot_dataset_id(output_root, record.run_id)
-        if manifest is None or dataset_id is None:
-            continue
-        started_at = manifest.get("started_at")
-        finished_at = manifest.get("finished_at")
-        created_by = manifest.get("created_by")
-        owner_id = manifest.get("owner_id")
-        canonical.append(
-            RunRecord(
-                run_id=record.run_id,
-                dataset_id=dataset_id,
-                status=status_from_manifest(manifest, fallback_status=record.status),
-                started_at=started_at if isinstance(started_at, str) else None,
-                finished_at=finished_at if isinstance(finished_at, str) else None,
-                spec_digest=record.spec_digest,
-                created_by=created_by if isinstance(created_by, str) else None,
-                owner_id=owner_id if isinstance(owner_id, str) else None,
-            )
+        rebuilt = _canonical_record_from_run_id(
+            output_root,
+            record.run_id,
+            fallback_status=record.status,
+            spec_digest=record.spec_digest,
         )
+        if rebuilt is not None:
+            canonical.append(rebuilt)
+    return canonical
+
+
+def canonical_records_for_run_ids(output_root: Path, run_ids: Iterable[str]) -> list[RunRecord]:
+    """run_id 집합만 snapshot+manifest 정본으로 확정한다 (재확인 불가한 id는 제외).
+
+    ``retain_canonical_run_records``와 같은 재검증이지만 입력이 이미 만들어진
+    ``RunRecord``가 아니라 run_id다 — BuildIndex 시간창·filesystem mtime 등
+    파생 신호로 후보를 좁힌 뒤 그 subset만 정본으로 굳히는 호출자를 위한 것이다.
+    파생 신호는 정본을 바꾸지 않으므로 timestamp/ownership/status는 여기서 다시
+    manifest에서 읽는다.
+    """
+    canonical: list[RunRecord] = []
+    for run_id in run_ids:
+        rebuilt = _canonical_record_from_run_id(output_root, run_id)
+        if rebuilt is not None:
+            canonical.append(rebuilt)
     return canonical
 
 
@@ -331,6 +369,21 @@ def collect_run_records_from_filesystem(output_root: Path) -> list[RunRecord]:
     return records
 
 
+def dataset_summary_renderable(output_root: Path, record: RunRecord) -> bool:
+    """``build_dataset_summary``가 이 latest run으로 canonical dataset 요약을 만들 수
+    있는지 경량 판정한다 — snapshot spec만 재파싱해 ``dataset_id`` 정합을 확인하고,
+    manifest·stage 산출물 probe는 하지 않는다.
+
+    ``build_dataset_summary``의 ``None`` 반환 조건(snapshot을 파싱할 수 없거나
+    ``dataset_id``가 어긋남)과 정확히 같은 기준이어야 한다 — ``GET /datasets``의
+    ``total``이 페이지 밖 dataset까지 expensive full summary를 만들지 않고도
+    목록에 실릴 dataset과 동일한 집합을 세도록 한다. 두 함수의 이 조건은 함께
+    바뀌어야 한다.
+    """
+    spec = read_snapshot_spec(output_root, record.run_id)
+    return spec is not None and spec.dataset_id == record.dataset_id
+
+
 def build_dataset_summary(output_root: Path, record: RunRecord) -> dict[str, JsonValue] | None:
     """latest run의 canonical snapshot + manifest + stage 상태로 dataset 응답을 만든다.
 
@@ -346,6 +399,8 @@ def build_dataset_summary(output_root: Path, record: RunRecord) -> dict[str, Jso
     현재의 log-only 품질 경고를 임의로 PASS/WARN/FAIL로 변환하지 않는다
     (#488 semantics E).
     """
+    # 이 guard는 dataset_summary_renderable()의 판정과 동일해야 한다 — total 카운트가
+    # 목록 항목과 같은 dataset 집합을 세도록 두 조건을 함께 유지한다.
     spec = read_snapshot_spec(output_root, record.run_id)
     if spec is None or spec.dataset_id != record.dataset_id:
         return None
@@ -396,9 +451,11 @@ def build_dataset_summary(output_root: Path, record: RunRecord) -> dict[str, Jso
 __all__ = [
     "RunRecord",
     "build_dataset_summary",
+    "canonical_records_for_run_ids",
     "collect_run_records_from_filesystem",
     "collect_run_records_from_index",
     "collect_run_records_from_index_for_dataset",
+    "dataset_summary_renderable",
     "filter_ownership",
     "group_latest_by_dataset",
     "is_more_recent",

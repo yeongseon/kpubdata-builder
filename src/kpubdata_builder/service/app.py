@@ -22,7 +22,7 @@ import threading
 import time
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import suppress
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Protocol, cast, runtime_checkable
 
@@ -101,6 +101,13 @@ logger = logging.getLogger(__name__)
 _CREDENTIAL_MASTER_KEY_ENV = "KPUBDATA_BUILDER_CREDENTIAL_MASTER_KEY"
 _PROVIDER_TEST_TIMEOUT_ENV = "KPUBDATA_BUILDER_PROVIDER_TEST_TIMEOUT"
 _DEFAULT_PROVIDER_TEST_TIMEOUT = 10.0
+
+# 최근-window quality aggregate가 canonical manifest.json mtime으로 후보를 좁힐 때
+# 쓰는 여유분. mtime은 완료 시점에 만들어지는 정본 파일의 것이라 항상
+# finished_at 이상이지만, 완료 후 재기록(예: secret redaction)·시계 오차·파일시스템
+# mtime 해상도를 흡수하려 window 하한을 이만큼 더 내려 잡는다. 정확한 경계는
+# quality.aggregate_quality_window가 canonical timestamp로 다시 적용한다.
+_QUALITY_WINDOW_MTIME_MARGIN_SECONDS = 3600
 
 
 # /preview의 limit 방어적 상한 (#497). 기존에는 상한이 없었다 — Preview는 전체
@@ -1544,6 +1551,53 @@ class BuilderService:
             record for record in self._dataset_records(principal) if record.dataset_id == dataset_id
         ]
 
+    def _recent_canonical_records(
+        self, principal: Principal | None, *, now: datetime, window_seconds: int
+    ) -> list[datasets_service.RunRecord]:
+        """최근 ``window_seconds`` 안 candidate run을 canonical 정본으로 확정한다 (#488 후속 리뷰).
+
+        candidate run_id는 두 신호의 합집합이다:
+          - canonical ``manifest.json``의 mtime이 window 안(margin 포함)인 run.
+            mtime은 run 완료 시 만들어지는 정본 파일 자체의 것이라 항상
+            ``manifest.finished_at`` 이상이므로 window 안 run을 떨어뜨리지 않고,
+            ``stat``만 하므로 historical manifest/snapshot을 파싱하지 않는다.
+          - ``BuildIndex.list_between``의 window 안 run (파생 index fast lookup).
+
+        BuildIndex는 파생 검색 index이고 write는 best-effort다 (ADR 0003: "권위
+        없음", manifest와의 reconcile 시점 미정) — 누락되거나 stale한 row가 정본
+        24h aggregate를 바꾸면 안 되므로, index 단독으로 좁히지 않고 위 mtime
+        후보로 보강한다. index 조회가 실패해도 mtime 후보가 이미 전체를 커버한다.
+
+        확정된 candidate만 snapshot+manifest로 재검증하며(``canonical_records_for_run_ids``),
+        정확한 ``(now-window, now]`` 경계와 ``finished_at``/``started_at`` fallback,
+        ownership은 그 canonical 값으로 이후 단계(``aggregate_quality_window`` /
+        ``filter_ownership``)에서 적용한다.
+        """
+        margin_seconds = window_seconds + _QUALITY_WINDOW_MTIME_MARGIN_SECONDS
+        mtime_cutoff = now.timestamp() - margin_seconds
+        candidate_run_ids: set[str] = set()
+        if self._output_root.exists():
+            for run_dir in self._output_root.iterdir():
+                if not run_dir.is_dir():
+                    continue
+                try:
+                    manifest_mtime = (run_dir / "manifest.json").stat().st_mtime
+                except OSError:
+                    continue  # manifest 부재/접근 불가 — 완료된 run 아님
+                if manifest_mtime >= mtime_cutoff:
+                    candidate_run_ids.add(run_dir.name)
+        lower = (now - timedelta(seconds=margin_seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        upper = (now + timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        # 파생 index 조회가 실패해도 mtime 후보가 이미 전체 run을 커버한다.
+        with suppress(Exception):
+            candidate_run_ids.update(
+                entry.run_id for entry in self._build_index.list_between(lower, upper)
+            )
+        canonical = datasets_service.canonical_records_for_run_ids(
+            self._output_root, candidate_run_ids
+        )
+        return datasets_service.filter_ownership(canonical, principal, enforce=_enforce_ownership())
+
     def list_datasets(
         self, *, limit: int = 50, principal: Principal | None = None
     ) -> ServiceResponse:
@@ -1564,18 +1618,23 @@ class BuilderService:
             key=datasets_service.sort_key,
             reverse=True,
         )
-        # 각 dataset의 summary는 한 번만 계산해 total 카운트와 페이지 항목에 함께 쓴다
-        # (legacy/손상으로 canonical summary 복원에 실패하는 run은 목록에서도 total
-        # 에서도 동일하게 제외된다 — items.length가 limit에 걸리는 것과는 무관하다).
+        # total은 canonical/renderable dataset 개수이므로, expensive full summary
+        # (snapshot+manifest+stage 산출물 probe)는 응답 page(limit)에 실릴 후보에만
+        # 수행한다. page를 채운 뒤로는 total 카운트를 위한 경량 renderability 검증만
+        # 한다 — legacy/손상으로 canonical summary를 만들 수 없는 run은 목록에서도
+        # total에서도 동일하게 제외된다(#488 후속 리뷰: limit=1 + 대량 dataset에서
+        # catalog 전체에 full summary가 도는 regression 방지).
         items: list[JsonValue] = []
         total = 0
         for record in ordered:
-            view = datasets_service.build_dataset_summary(self._output_root, record)
-            if view is None:
-                continue
-            total += 1
             if len(items) < limit:
+                view = datasets_service.build_dataset_summary(self._output_root, record)
+                if view is None:
+                    continue
                 items.append(view)
+                total += 1
+            elif datasets_service.dataset_summary_renderable(self._output_root, record):
+                total += 1
         return ServiceResponse(200, {"datasets": items, "total": total})
 
     def get_dataset(
@@ -1684,10 +1743,13 @@ class BuilderService:
         ``GET /builds/{run_id}/quality``의 몫이다. 시스템 observability
         (``/monitoring``)와 도메인 quality를 한 응답에 섞지 않는다.
 
-        run 집합은 ``_dataset_records``(canonical snapshot + manifest로 재확인,
-        ENFORCE_OWNERSHIP + oidc principal이면 본인 run만)를 재사용한다 — 새로운
-        run 인덱스를 만들지 않는다. legacy run(snapshot 없음)은 애초에 structured
-        quality가 없으므로 자연히 제외된다.
+        run 집합은 ``_recent_canonical_records``로 얻는다 — canonical
+        ``manifest.json`` mtime(+ 파생 BuildIndex 시간창)으로 24h candidate를
+        좁힌 뒤 그 candidate만 canonical snapshot + manifest로 재확인하고
+        (ENFORCE_OWNERSHIP + oidc principal이면 본인 run만), all-history manifest
+        재파싱은 하지 않는다. index는 파생물이라 단독으로 신뢰하지 않는다(ADR 0003).
+        새로운 run 인덱스를 만들지 않는다. legacy run(snapshot 없음)은 애초에
+        structured quality가 없으므로 자연히 제외된다.
         """
         if window != "24h":
             return ServiceResponse(400, {"error": f"unsupported window: {window!r} (only '24h')"})
@@ -1697,7 +1759,11 @@ class BuilderService:
             "generated_at": now.isoformat(timespec="seconds"),
         }
         try:
-            records = self._dataset_records(principal)
+            records = self._recent_canonical_records(
+                principal,
+                now=now,
+                window_seconds=quality_service.QUALITY_SUMMARY_WINDOW_SECONDS,
+            )
         except Exception:
             # run enumeration 자체가 불가능한 경우에만 unavailable — "0건"과 구분한다.
             return ServiceResponse(
