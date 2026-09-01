@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+import time
 import urllib.request
 from collections.abc import Iterable
 from http.server import HTTPServer
@@ -18,7 +19,11 @@ from kpubdata_builder.credentials import AesGcmCredentialCipher, SQLiteCredentia
 from kpubdata_builder.service import BuilderService, dispatch
 from kpubdata_builder.service.auth import Principal, compute_owner_id
 from kpubdata_builder.service.http import _clear_cors_cache, make_handler
-from kpubdata_builder.service.providers import run_provider_test
+from kpubdata_builder.service.providers import (
+    ProviderDescriptor,
+    provider_descriptors,
+    run_provider_test,
+)
 from kpubdata_builder.spec import JsonValue
 
 _SPEC = """\
@@ -28,6 +33,20 @@ description: Provider credential resolution test
 sources:
   - provider: datago
     dataset: air_quality
+exports:
+  - kind: jsonl
+    output_path: out/data.jsonl
+"""
+
+_FILE_SPEC = """\
+dataset_id: async-file-boundary
+title: Async file boundary
+description: Async file sources remain unsupported
+sources:
+  - kind: file
+    upload_id: {upload_id}
+    format: csv
+    encoding: utf-8
 exports:
   - kind: jsonl
     output_path: out/data.jsonl
@@ -98,6 +117,67 @@ class _Factory:
         return client
 
 
+class _LazyRegistry:
+    def __iter__(self) -> Iterable[str]:
+        return iter(("datago", "krx"))
+
+    def get(self, name: str) -> _Provider:
+        if name == "krx":
+            raise ModuleNotFoundError("No module named 'pandas'", name="pandas")
+        return _Provider(name)
+
+
+class _OptionalProviderClient:
+    _registry = _LazyRegistry()
+
+    class _Catalog:
+        @staticmethod
+        def list(*, provider: str) -> list[_Ref]:
+            return [_Ref(provider, "dataset")]
+
+    datasets = _Catalog()
+
+    def close(self) -> None:
+        return None
+
+
+def test_provider_catalog_skips_provider_with_missing_optional_dependency() -> None:
+    assert provider_descriptors(cast(object, _OptionalProviderClient())) == (
+        ProviderDescriptor("datago", True),
+    )
+
+
+def test_providers_service_keeps_available_provider_when_krx_pandas_is_missing(
+    tmp_path: Path, repository: SQLiteCredentialRepository
+) -> None:
+    service = BuilderService(
+        output_root=tmp_path,
+        client_factory=lambda: cast(object, _OptionalProviderClient()),
+        credential_repository=repository,
+    )
+
+    response = service.providers(principal=Principal("oidc", "user-a", "oidc:owner-a"))
+
+    assert response.status_code == 200
+    assert response.body["providers"] == [
+        {"provider": "datago", "requires_credential": True, "configured": False}
+    ]
+
+
+def test_provider_catalog_does_not_hide_unexpected_missing_module() -> None:
+    class BrokenRegistry(_LazyRegistry):
+        def get(self, name: str) -> _Provider:
+            if name == "krx":
+                raise ModuleNotFoundError("No module named 'internal_krx'", name="internal_krx")
+            return _Provider(name)
+
+    class BrokenClient(_OptionalProviderClient):
+        _registry = BrokenRegistry()
+
+    with pytest.raises(ModuleNotFoundError, match="internal_krx"):
+        provider_descriptors(cast(object, BrokenClient()))
+
+
 @pytest.fixture()
 def repository(tmp_path: Path) -> SQLiteCredentialRepository:
     cipher = AesGcmCredentialCipher(b"k" * 32)
@@ -126,6 +206,16 @@ def _service(
         ),
         resolved_factory,
     )
+
+
+def _wait_for_terminal_job(service: BuilderService, run_id: str) -> dict[str, JsonValue]:
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        response = service.build_status(run_id)
+        if response.body.get("status") in {"succeeded", "failed", "cancelled"}:
+            return response.body
+        time.sleep(0.01)
+    raise AssertionError(f"async build did not finish: {run_id}")
 
 
 def test_credential_crud_masks_and_never_returns_raw_secret(
@@ -229,6 +319,142 @@ def test_preview_build_and_test_share_resolution_without_client_cache(
     assert credential_calls[-1] == {"datago": "credential-b"}
     assert seen_by_test == [{"datago": "credential-a"}]
     assert len({id(client) for _, _, _, client in factory.calls}) == len(factory.calls)
+
+
+def test_async_public_api_uses_submitting_user_credential_and_isolates_users(
+    tmp_path: Path, repository: SQLiteCredentialRepository, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("KPUBDATA_DATAGO_API_KEY", "different-server-default")
+    principal_a = Principal("oidc", "user-a", "oidc:owner-a")
+    principal_b = Principal("oidc", "user-b", "oidc:owner-b")
+    repository.put(cast(str, principal_a.owner_id), "datago", "credential-a")
+    repository.put(cast(str, principal_b.owner_id), "datago", "credential-b")
+    service, factory = _service(tmp_path, repository)
+
+    try:
+        assert service.preview(_SPEC, principal=principal_a).status_code == 200
+        submitted = service.submit_build(
+            _SPEC,
+            run_id="async-owner-a",
+            created_by=principal_a.label,
+            owner_id=principal_a.owner_id,
+        )
+        assert submitted.status_code == 202
+        status = _wait_for_terminal_job(service, "async-owner-a")
+
+        assert status["status"] == "succeeded"
+        assert [keys for keys, _, _, _ in factory.calls] == [
+            {"datago": "credential-a"},
+            {"datago": "credential-a"},
+        ]
+        assert all(cache is False for _, _, cache, _ in factory.calls)
+        assert all(client.closed for _, _, _, client in factory.calls)
+    finally:
+        service._async_builds.shutdown()
+
+
+def test_async_public_api_falls_back_to_server_default(
+    tmp_path: Path, repository: SQLiteCredentialRepository, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("KPUBDATA_DATAGO_API_KEY", "server-default")
+    principal = Principal("oidc", "user-without-key", "oidc:owner-without-key")
+    service, factory = _service(tmp_path, repository)
+
+    try:
+        submitted = service.submit_build(
+            _SPEC,
+            run_id="async-server-default",
+            created_by=principal.label,
+            owner_id=principal.owner_id,
+        )
+        assert submitted.status_code == 202
+        status = _wait_for_terminal_job(service, "async-server-default")
+
+        assert status["status"] == "succeeded"
+        assert factory.calls[-1][0] == {"datago": "server-default"}
+        assert factory.calls[-1][2] is False
+        assert factory.calls[-1][3].closed is True
+    finally:
+        service._async_builds.shutdown()
+
+
+def test_async_credential_is_not_persisted_or_exposed(
+    tmp_path: Path, repository: SQLiteCredentialRepository
+) -> None:
+    secret = "async-credential-must-not-leak"
+    principal = Principal("oidc", "user-a", "oidc:owner-a")
+    repository.put(cast(str, principal.owner_id), "datago", secret)
+    service, _ = _service(tmp_path, repository)
+
+    try:
+        submitted = service.submit_build(
+            _SPEC,
+            run_id="async-secret-boundary",
+            created_by=principal.label,
+            owner_id=principal.owner_id,
+        )
+        assert submitted.status_code == 202
+        status = _wait_for_terminal_job(service, "async-secret-boundary")
+        snapshot = service._async_builds.get("async-secret-boundary")
+        events = service.get_build_events("async-secret-boundary", limit=100, tail=False)
+        manifest = (tmp_path / "build" / "async-secret-boundary" / "manifest.json").read_text(
+            encoding="utf-8"
+        )
+
+        assert snapshot is not None
+        exposed = json.dumps(
+            {
+                "submission": submitted.body,
+                "status": status,
+                "snapshot": snapshot.to_body(),
+                "events": events.body,
+            }
+        )
+        assert secret not in exposed
+        assert secret not in manifest
+        assert "owner_id" not in submitted.body
+        assert "owner_id" not in snapshot.to_body()
+    finally:
+        service._async_builds.shutdown()
+
+
+def test_async_credential_owner_does_not_enable_file_source(
+    tmp_path: Path, repository: SQLiteCredentialRepository
+) -> None:
+    principal = Principal("oidc", "user-a", "oidc:owner-a")
+    service, _ = _service(tmp_path, repository)
+
+    try:
+        upload = service.create_upload(
+            b"id,value\n1,10\n",
+            format="csv",
+            encoding="utf-8",
+            original_filename="data.csv",
+            principal=principal,
+        )
+        upload_id = cast(str, upload.body["upload_id"])
+        submitted = service.submit_build(
+            _FILE_SPEC.format(upload_id=upload_id),
+            run_id="async-file-unsupported",
+            created_by=principal.label,
+            owner_id=principal.owner_id,
+        )
+        assert submitted.status_code == 202
+        status = _wait_for_terminal_job(service, "async-file-unsupported")
+
+        assert status["status"] == "failed"
+        response = cast(dict[str, JsonValue], status["response"])
+        outcomes = cast(list[dict[str, JsonValue]], response["outcomes"])
+        assert outcomes[0]["status"] == "failed"
+        assert "authenticated, stable principal owner" in cast(str, outcomes[0]["error"])
+        manifest = json.loads(
+            (tmp_path / "build" / "async-file-unsupported" / "manifest.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert manifest["owner_id"] == principal.owner_id
+    finally:
+        service._async_builds.shutdown()
 
 
 def test_preview_build_test_and_manifest_scrub_raw_secret(

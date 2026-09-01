@@ -519,8 +519,9 @@ class BuilderService:
         client = self._create_client()
         try:
             return provider_descriptors(client)
-        except Exception:
-            return ServiceResponse(502, {"error": "provider catalog unavailable"})
+        except Exception as exc:
+            logger.exception("provider catalog unavailable")
+            return ServiceResponse(502, {"error": f"catalog unavailable: {exc}"})
         finally:
             _close_request_client(client)
 
@@ -945,6 +946,7 @@ class BuilderService:
         created_by: str | None = None,
         owner_id: str | None = None,
         manifest_owner_id: str | None = None,
+        credential_owner_id: str | None = None,
         principal: Principal | None = None,
         cancellation: CancellationProbe | None = None,
     ) -> ServiceResponse:
@@ -968,6 +970,11 @@ class BuilderService:
         owner_id를 manifest/BuildIndex에는 기록하면서도 file resolver에는
         여전히 owner_id를 넘기지 않는 데 쓴다(#496 follow-up).
 
+        ``credential_owner_id``는 async worker가 submitting principal의 stable
+        identity로 public_api credential만 해석하기 위한 내부 값이다. file source
+        resolver에는 전달하지 않으며, request principal이 있으면 principal의
+        owner_id가 항상 우선한다(ADR 0012, ADR 0014).
+
         ``cancellation``은 async job(#481)에서만 전달되는 협력적 취소 probe다.
         ``None``이면(동기 ``POST /build``, CLI) 파이프라인이 취소 점검을 전혀
         하지 않아 기존 동작과 100% 동일하다 — 동기 build에 취소 상태를 강요하지
@@ -985,10 +992,11 @@ class BuilderService:
         provider_names = tuple(
             source.provider for source in spec_or_error.sources if source.kind == "public_api"
         )
+        provider_owner_id = principal.owner_id if principal is not None else credential_owner_id
         try:
             provider_keys = (
-                self._credential_resolver.provider_keys(principal.owner_id, provider_names)
-                if principal is not None
+                self._credential_resolver.provider_keys(provider_owner_id, provider_names)
+                if principal is not None or credential_owner_id is not None
                 else {}
             )
             client = self._create_client(
@@ -1288,11 +1296,12 @@ class BuilderService:
     ) -> ServiceResponse:
         """async job registry가 부르는 실제 실행 진입점 (#482, #496 follow-up).
 
-        ``build()``에 ``owner_id``는 전달하지 않는다(``None`` 그대로) —
+        ``build()``에 file resolver용 ``owner_id``는 전달하지 않는다(``None`` 그대로) —
         ``kind="file"`` source resolver는 async 경로에서 여전히 stable owner
-        identity를 알지 못한다(#498 async limitation 유지). 대신
-        ``manifest_owner_id``로 registry snapshot에 이미 보존된(``submit_build``
-        가 채운) submitting principal의 owner_id를 넘긴다 — persisted manifest
+        identity를 알지 못한다(#498 async limitation 유지). registry snapshot에
+        이미 보존된(``submit_build``가 채운) submitting principal의 owner_id는
+        public_api credential 해석용 ``credential_owner_id``와 persisted manifest
+        ownership용 ``manifest_owner_id``로만 넘긴다 — persisted manifest
         (및 그 manifest를 그대로 읽어 채우는 BuildIndex, #505 SSOT)는
         ``build()`` 내부에서 단 한 번의 write로 정확한 owner_id를 갖게 되고,
         build 종료 후 manifest를 별도로 사후 수정할 필요가 없다.
@@ -1304,6 +1313,7 @@ class BuilderService:
             run_id=run_id,
             created_by=created_by,
             manifest_owner_id=manifest_owner_id,
+            credential_owner_id=manifest_owner_id,
             # 협력적 취소 probe(#481)를 그대로 pipeline까지 내려보낸다 — service
             # 개념(registry/HTTP/Principal)은 pipeline domain으로 넘기지 않는다.
             cancellation=cancellation,

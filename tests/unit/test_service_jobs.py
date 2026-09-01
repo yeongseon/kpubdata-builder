@@ -86,6 +86,7 @@ class _ObservedBuildService(BuilderService):
         created_by: str | None = None,
         owner_id: str | None = None,
         manifest_owner_id: str | None = None,
+        credential_owner_id: str | None = None,
         principal: Principal | None = None,
         cancellation: CancellationProbe | None = None,
     ) -> ServiceResponse:
@@ -96,6 +97,7 @@ class _ObservedBuildService(BuilderService):
                 created_by=created_by,
                 owner_id=owner_id,
                 manifest_owner_id=manifest_owner_id,
+                credential_owner_id=credential_owner_id,
                 principal=principal,
                 cancellation=cancellation,
             )

@@ -64,6 +64,14 @@ class _FailingJWKSClient:
         raise ConnectionError("jwks endpoint unreachable")
 
 
+class _ParsingJWKSClient(_FakeJWKSClient):
+    """PyJWKClient처럼 키 선택 전에 JWT header를 파싱한다."""
+
+    def get_signing_key_from_jwt(self, token: str) -> _FakeSigningKey:
+        jwt.get_unverified_header(token)
+        return super().get_signing_key_from_jwt(token)
+
+
 @pytest.fixture()
 def rsa_keypair() -> tuple[bytes, object]:
     private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -120,6 +128,30 @@ class TestValidBearerToken:
 
 
 class TestInvalidTokens:
+    @pytest.mark.parametrize(
+        "token",
+        [
+            "invalid-token",
+            "one.two",
+            "not-base64.payload.signature",
+        ],
+    )
+    def test_malformed_jwt_returns_401(
+        self,
+        token: str,
+        monkeypatch: pytest.MonkeyPatch,
+        oidc_env: bytes,
+        rsa_keypair: tuple[bytes, object],
+    ) -> None:
+        import kpubdata_builder.service.auth as auth_module
+
+        _, public_key = rsa_keypair
+        monkeypatch.setattr(auth_module, "_get_jwks_client", lambda: _ParsingJWKSClient(public_key))
+
+        result = authenticate(bearer_token=f"Bearer {token}")
+
+        assert result == AuthError(reason="invalid token", status_code=401)
+
     def test_invalid_signature(self, oidc_env: bytes) -> None:
         # 다른 키로 서명 → fixture의 public key로 검증 실패
         other = rsa.generate_private_key(public_exponent=65537, key_size=2048)

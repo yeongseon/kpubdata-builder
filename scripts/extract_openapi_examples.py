@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -105,6 +107,8 @@ def main() -> None:
     document = yaml.safe_load(args.contract.read_text(encoding="utf-8"))
     if not isinstance(document, dict):
         raise ValueError("OpenAPI document must be a mapping")
+    if isinstance(sys.stdout, io.TextIOWrapper):
+        sys.stdout.reconfigure(encoding="utf-8")
     print(json.dumps(extract_examples(document), ensure_ascii=False, indent=2))
 
 
