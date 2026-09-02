@@ -1430,9 +1430,7 @@ class BuilderService:
         # 경로나 OS별 구분자를 드러내지 않는다. `serve_artifact_file`이 받는 canonical
         # artifact identifier가 바로 이 값이다(클라이언트는 storage layout을 알 필요 없다).
         files = sorted(
-            path.relative_to(run_dir).as_posix()
-            for path in run_dir.rglob("*")
-            if path.is_file()
+            path.relative_to(run_dir).as_posix() for path in run_dir.rglob("*") if path.is_file()
         )
         return ServiceResponse(200, {"run_id": run_id, "files": list(files)})
 
