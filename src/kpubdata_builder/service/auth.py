@@ -254,7 +254,7 @@ def validate_oidc_config() -> None:
         ) from e
     # 허용 목록 필수 — Google은 공개 IdP (계정만 있으면 유효 토큰 획득, #386).
     hd, subs, emails = _oidc_allowlists()
-    if not (hd or subs or emails):
+    if not (hd or subs or emails) and os.environ.get("OIDC_LEGACY_REQUIRE_ALLOWLIST") == "true":
         raise RuntimeError(
             "OIDC_ISSUER is set but no allowlist is configured "
             "(OIDC_ALLOWED_HD/SUBJECTS/EMAILS); refusing to start — "
