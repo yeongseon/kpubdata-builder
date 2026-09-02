@@ -1,0 +1,103 @@
+# docker-compose.prod.app.yml — OCI 단일 VM(app-01) 프로덕션 스택.
+#
+# ADR 0016(풀스택 배포 토폴로지)에 따라 Builder는 단일 app VM에서 Docker로
+# 운영한다. our-tax의 split-topology(ADR-0005)와 달리 별도 DB VM(db-01)이나
+# Alembic migration one-shot, ETL 프로파일이 없다 — Builder는 외부 RDBMS 없이
+# /data 볼륨(매니페스트 + 파생 SQLite 인덱스, ADR 0003/0010)만으로 상태를
+# 영속화하기 때문이다.
+#
+# app-01에서의 사용:
+#   cp .env.app.example .env
+#   # .env 편집 (KPUBDATA_BUILDER_API_KEY, ALLOWED_ORIGINS, CREDENTIAL_MASTER_KEY, ...)
+#   docker compose -f docker-compose.prod.app.yml up -d
+#
+#   # Caddy(공개 TLS 진입)를 함께 띄우려면:
+#   docker compose -f docker-compose.prod.app.yml --profile caddy up -d
+#
+# 이미지는 프로덕션에서 GHCR(deploy 워크플로가 BUILDER_IMAGE로 주입)에서 pull한다.
+# 로컬 검증 시에는 build 컨텍스트(.)로 fallback한다.
+
+services:
+  builder:
+    image: ${BUILDER_IMAGE:-ghcr.io/yeongseon/kpubdata-builder:latest}
+    build:
+      context: .
+    container_name: kpubdata-builder
+    restart: unless-stopped
+    environment:
+      # fail-closed (ADR 0006): API 키 없이는 컨테이너가 기동을 거부한다.
+      KPUBDATA_BUILDER_API_KEY: ${KPUBDATA_BUILDER_API_KEY:?KPUBDATA_BUILDER_API_KEY is required (fail-closed, ADR 0006)}
+      KPUBDATA_BUILDER_HOST: 0.0.0.0
+      KPUBDATA_BUILDER_PORT: "8000"
+      # 빌드 산출물/매니페스트/파생 SQLite 인덱스의 영속 루트. builder-data 볼륨에 매핑.
+      KPUBDATA_BUILDER_OUTPUT_DIR: /data
+      # CORS default-deny (ADR 0006): Studio(Cloudflare Pages) 오리진만 명시.
+      KPUBDATA_BUILDER_ALLOWED_ORIGINS: ${KPUBDATA_BUILDER_ALLOWED_ORIGINS:-}
+      # 사용자별 Provider credential AES-GCM master key (ADR 0012). 재기동 사이에
+      # 반드시 동일 값을 재주입한다 — 교체 시 기존 credential 복호화 불가.
+      KPUBDATA_BUILDER_CREDENTIAL_MASTER_KEY: ${KPUBDATA_BUILDER_CREDENTIAL_MASTER_KEY:-}
+    ports:
+      # Caddy 프로파일 사용 시에는 127.0.0.1로 제한하는 것을 권장하나, IP-only
+      # 배포(Caddy 미사용)에서는 모든 인터페이스에 노출해 헬스체크를 가능케 한다.
+      - "${BUILDER_BIND:-8000}:8000"
+    networks:
+      - app-net
+    volumes:
+      # /data는 반드시 로컬 블록 볼륨이어야 한다. SQLite를 네트워크 FS(NFS/Azure
+      # Files)에 올리면 파일 잠금이 불안정하다 (ADR 0010 §5, deploy.md §6).
+      - builder-data:/data
+    healthcheck:
+      # 무인증 /healthz (#372). python-slim에는 curl/wget이 없으므로 이미지에
+      # 포함된 python urllib로 프로브한다 (Dockerfile HEALTHCHECK와 동일 방식).
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # 공개 진입 리버스 프록시. Cloudflare → Caddy → builder.
+  # Cloudflare SSL mode: Full(strict). `--profile caddy`로 opt-in.
+  caddy:
+    image: caddy:2.8-alpine
+    container_name: kpubdata-builder-caddy
+    restart: unless-stopped
+    profiles:
+      - caddy
+    depends_on:
+      builder:
+        condition: service_healthy
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:-localhost}
+      BACKEND_UPSTREAM: builder:8000
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./ops/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - app-net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  builder-data:
+  caddy-data:
+  caddy-config:
+
+networks:
+  app-net:
+    name: kpubdata-builder-app-net
