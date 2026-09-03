@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: KPubData Builder Service API
-  version: "1.21.0"
+  version: "1.22.0"
   description: >-
     Builder 중심 서비스 계약. BuildSpec 검증, preview, build 실행, artifact 조회,
     계약 버전 조회를 제공한다. CLI와 HTTP service mode(#36)가 동일한 도메인 계약을
@@ -76,6 +76,7 @@ info:
     미검사였음).
     v1.17.0은 build publish 표면을 추가한다(#491) — `GET /builds/{run_id}/publish/readiness`(ready/blockers/warnings)와 `POST /builds/{run_id}/publish`(idempotent publish receipt, TOCTOU 재검사)를 추가한다(additive). HTTP target은 `huggingface`로 한정한다.
     v1.21.0은 publish 감사 로그 조회를 추가한다(#563, additive) — `GET /builds/{run_id}/publish/audit`(reconcile/reset 이력, 소유권 게이트, receipt 삭제 후에도 조회).
+    v1.22.0은 `GET /datasets` 응답에 `total`을 추가한다(#488 후속, additive — 기존 필드/동작은 변경되지 않는다). `total`은 canonical dataset grouping과 ownership 필터를 적용한 뒤 pagination(limit) 이전의 접근 가능한 distinct dataset_id 개수이며, Studio Home의 DATASETS KPI가 `datasets` 길이나 limit을 total로 오인하지 않도록 authoritative aggregate를 제공한다. 같은 릴리스 범위에서 `/catalog` 응답의 `CatalogDataset`에 `request_parameters`와 `application`도 추가한다(additive — 기존 필드/동작은 변경되지 않는다). `raw_metadata`의 요청 파라미터 설명을 secret-free allowlist(`name`/`required`/`description`/`example`)로 직렬화한 것으로, `serviceKey` 등 시크릿 파라미터는 제외된다. Add Data가 선택한 Dataset의 필수 요청 파라미터를 사전에 안내하는 데 쓴다. metadata가 없는 dataset은 빈 배열. `application`은 공공데이터포털처럼 API Key 발급과 Dataset별 활용신청이 별개일 수 있는 경우의 안내(`{required, url}`)로, `raw_metadata.application`에서 그대로 전달하며 없으면 null이다 — Studio는 신청 완료/승인 여부를 추측하지 않는다.
     v1.20.0은 HTTP publish target 어휘를 확장한다(#550, additive) — `kaggle`(packaging의 `dataset-metadata.json` `id`가 destination과 일치해야 하며 `public` option 허용)과 `local`(`KPUBDATA_BUILDER_LOCAL_PUBLISH_ROOT` 안의 상대 `owner/name` 경로만 허용). `GET /publish/readiness`의 `destination` query는 선택이다.
     v1.19.0은 publish receipt 운영 경로를 추가한다(#551, additive) — `GET /builds/{run_id}/publish/receipt`(상태 조회, 소유자 불일치는 404), `POST /builds/{run_id}/publish/reconcile`(원격 상태 확인 후 `succeeded` 확정 또는 reset으로 재게시 허용; 판단 불가 시 503로 무변경), `DELETE /builds/{run_id}/publish/receipt`(명시적 reset, 감사 로그 기록).
     v1.18.0은 ADR 0008의 협력적 취소(cooperative cancellation)를 구현한다 —
@@ -160,6 +161,14 @@ paths:
                               time_range: true
                               max_page_size: 1000
                             requires_service_key: true
+                            request_parameters:
+                              - name: sidoName
+                                required: true
+                                description: 조회할 시·도
+                                example: 서울
+                            application:
+                              required: true
+                              url: https://www.data.go.kr/data/15073861/openapi.do
                           - name: village_fcst
                             title: 단기예보
                             description: null
@@ -169,6 +178,8 @@ paths:
                             operations: [list]
                             query_support: null
                             requires_service_key: true
+                            request_parameters: []
+                            application: null
                       - name: ecos
                         datasets:
                           - name: key_statistic_list
@@ -180,6 +191,8 @@ paths:
                             operations: [list]
                             query_support: null
                             requires_service_key: false
+                            request_parameters: []
+                            application: null
         "401":
           $ref: "#/components/responses/Unauthorized"
         "502":
@@ -1250,6 +1263,7 @@ paths:
                 BuiltDatasets:
                   summary: dataset_id별 latest accessible run 요약
                   value:
+                    total: 1
                     datasets:
                       - dataset_id: seoul-air-quality
                         title: 서울 대기질 관측
@@ -2036,6 +2050,57 @@ paths:
                   value:
                     error: "manifest not found: missing-run"
 
+  /quality/summary:
+    get:
+      operationId: getQualitySummary
+      summary: >-
+        최근 window(24h) cross-run quality aggregate (#486 후속, additive — API
+        1.22.0). 접근 가능한 run들의 structured quality를 PASS/WARN/FAIL run 수로
+        요약한다. Studio Home의 "QUALITY WARN (24H)" KPI가 임의 숫자 합성 없이
+        authoritative aggregate를 읽도록 하는 bounded 집계다. 개별 run의
+        `quality_results`/dataset/owner는 노출하지 않는다 — 그건 per-run
+        `GET /builds/{run_id}/quality`의 몫이다. 시스템 observability
+        (`GET /monitoring/summary`·`GET /monitoring/builds`, #516)와 도메인
+        quality를 한 응답에 섞지 않는다. ENFORCE_OWNERSHIP+oidc principal이면
+        본인이 접근 가능한 run만 집계한다(#505). legacy run(BuildSpec snapshot
+        없음)은 structured quality가 없으므로 자연히 제외된다.
+      parameters:
+        - name: window
+          in: query
+          required: false
+          description: "집계 기간. 현재 24h만 지원 (기본값: 24h)"
+          schema:
+            type: string
+            enum: [24h]
+            default: 24h
+      responses:
+        "200":
+          description: 최근 window의 PASS/WARN/FAIL run 수
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QualitySummaryResponse"
+              examples:
+                RecentWindow:
+                  summary: 최근 24h에 평가된 run 요약
+                  value:
+                    window: 24h
+                    generated_at: "2026-09-01T09:30:00+00:00"
+                    availability: available
+                    total_runs: 7
+                    evaluated_runs: 5
+                    pass_runs: 3
+                    warn_runs: 2
+                    fail_runs: 1
+        "400":
+          description: 지원하지 않는 window 값
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
   /query:
     post:
       operationId: queryBuiltDataset
@@ -2817,6 +2882,8 @@ components:
           operations,
           query_support,
           requires_service_key,
+          request_parameters,
+          application,
         ]
       description: >
         DatasetRef의 public/canonical metadata를 allowlist로 직렬화한다 (#490).
@@ -2855,6 +2922,57 @@ components:
           description: 목록 질의 capability (알려진 경우만, 없으면 null)
         requires_service_key:
           type: boolean
+        request_parameters:
+          type: array
+          items:
+            $ref: "#/components/schemas/CatalogRequestParameter"
+          description: >
+            선택한 Dataset에 전달하는 요청 파라미터의 secret-free 설명 (#490 후속,
+            additive). raw_metadata에서 allowlist로 추린 것으로 serviceKey 등 시크릿
+            파라미터는 포함되지 않는다. metadata가 없으면 빈 배열.
+        application:
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/CatalogApplication"
+          description: >
+            공공데이터포털처럼 API Key 발급과 Dataset별 활용신청이 별개일 수 있는
+            경우의 안내 (#490 후속, additive). raw_metadata.application에서
+            그대로 전달한 것으로, 없으면 null(활용신청이 필요 없다는 뜻이 아니라
+            알려진 바 없음). Studio는 신청 완료/승인 여부를 이 필드로 추측하지 않는다
+            — Preview 성공이 실제 사용 가능 여부의 최종 확인이다.
+
+    CatalogRequestParameter:
+      type: object
+      required: [name, required, description, example]
+      properties:
+        name:
+          type: string
+          description: 요청 파라미터 이름 (시크릿/serviceKey 계열은 제외됨)
+        required:
+          type: boolean
+          description: 이 파라미터가 필수인지
+        description:
+          type: [string, "null"]
+          description: 사람이 읽는 설명 (없으면 null)
+        example:
+          type: [string, "null"]
+          description: 근거 있는 예시 값 (없으면 null)
+
+    CatalogApplication:
+      type: object
+      required: [required, url]
+      description: >
+        Dataset별 활용신청 안내 (API Key 발급과 별개일 수 있음). Studio는 신청
+        완료/승인 상태를 이 필드로 만들어내지 않는다 — 알 수 없으면 알 수 없는
+        상태로 남긴다.
+      properties:
+        required:
+          type: boolean
+          description: 이 Dataset이 API Key 등록과 별도로 활용신청이 필요할 수 있는지
+        url:
+          type: string
+          format: uri
+          description: 공식 Dataset 상세/활용신청 페이지 (http/https만 허용)
 
     CatalogQuerySupport:
       type: object
@@ -3311,6 +3429,64 @@ components:
           description: newest first.
           items:
             $ref: "#/components/schemas/DatasetQualityHistoryEntry"
+
+    QualitySummaryResponse:
+      type: object
+      description: >-
+        최근 window cross-run quality aggregate (#486 후속). 시간 기준은 canonical
+        run timestamp(finished_at, 없으면 started_at)를 UTC로 파싱한
+        `(generated_at - window, generated_at]`이며, 파싱 불가능한 timestamp를 가진
+        run은 창에 놓을 수 없어 제외된다. 미평가/unavailable run을 PASS로 세지
+        않는다.
+      required:
+        - window
+        - generated_at
+        - availability
+        - total_runs
+        - evaluated_runs
+        - pass_runs
+        - warn_runs
+        - fail_runs
+      additionalProperties: false
+      properties:
+        window:
+          type: string
+          enum: [24h]
+        generated_at:
+          type: string
+          description: 집계 기준 시각(UTC, ISO 8601, 초 단위).
+        availability:
+          type: string
+          enum: [available, unavailable]
+          description: >-
+            available: 집계 성공(run 0건이어도 유효). unavailable: 접근 가능한 run
+            목록 자체를 열거하지 못함 — 이때 모든 count는 0이며 "0건"과 구분된다.
+        total_runs:
+          type: integer
+          minimum: 0
+          description: window 안의 접근 가능한 canonical run 수(status 무관).
+        evaluated_runs:
+          type: integer
+          minimum: 0
+          description: >-
+            그 중 structured quality가 실제로 평가된(evaluated_checks > 0) run 수.
+        pass_runs:
+          type: integer
+          minimum: 0
+          description: evaluated run 중 WARN·FAIL 결과가 하나도 없는 run 수.
+        warn_runs:
+          type: integer
+          minimum: 0
+          description: >-
+            evaluated run 중 WARN 결과가 하나 이상인 run 수(같은 run의 WARN check
+            여러 개여도 1). Studio Home "QUALITY WARN (24H)" KPI. fail_runs와
+            독립적이라 겹칠 수 있다.
+        fail_runs:
+          type: integer
+          minimum: 0
+          description: >-
+            evaluated run 중 FAIL 결과가 하나 이상인 run 수. `pass_runs +
+            (WARN 또는 FAIL이 있는 run 수) == evaluated_runs`.
 
     TableStatistics:
       type: object
@@ -3993,12 +4169,21 @@ components:
 
     DatasetsResponse:
       type: object
-      required: [datasets]
+      required: [datasets, total]
       properties:
         datasets:
           type: array
           items:
             $ref: "#/components/schemas/DatasetSummary"
+        total:
+          type: integer
+          minimum: 0
+          description: >-
+            canonical dataset grouping과 ownership/visibility 필터를 적용한 뒤,
+            pagination(limit)을 적용하기 전의 접근 가능한 distinct dataset_id
+            개수(#488 후속, additive). limit이 무한이면 `datasets` 길이와 같다.
+            `datasets` 길이·요청한 limit·기본 page 크기를 total로 사용하지 않는다.
+            다른 principal 소유 run만 있는 dataset은 포함되지 않는다.
 
     DatasetRunSummary:
       type: object

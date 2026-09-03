@@ -100,3 +100,8 @@
 - owner_key 마이그레이션 매핑 방식(일괄 스크립트 vs 이중 허용 기간) — 전환 시점에 결정.
 - Keycloak 고가용성/백업 정책 — 운영 도입 시 `deploy.md`에 보강.
 - `account_type`/`organization_name`의 저장 위치(IdP claim vs Builder 프로필).
+# 2026-09 정책 보충
+
+Keycloak realm의 account/signup 정책은 공개 사용자 접근의 1차 경계다. Builder OIDC
+allowlist는 필요한 제한 배포에서 활성화하는 선택적 2차 제한이며, allowlist를 비워도
+OIDC 검증(issuer, audience, JWKS 서명, exp, RS256 fail-closed)을 우회하지 않는다.

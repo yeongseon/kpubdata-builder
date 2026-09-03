@@ -244,11 +244,12 @@ class TestValidateOidcConfig:
         with pytest.raises(RuntimeError, match="OIDC_AUDIENCE"):
             validate_oidc_config()
 
-    def test_rejects_when_no_allowlist(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_accepts_no_allowlist_for_valid_oidc_configuration(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("OIDC_ISSUER", _ISSUER)
         monkeypatch.setenv("OIDC_AUDIENCE", _AUDIENCE)
-        with pytest.raises(RuntimeError, match="allowlist"):
-            validate_oidc_config()
+        validate_oidc_config()
 
 
 class TestAllowlistGate:

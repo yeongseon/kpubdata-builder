@@ -177,3 +177,15 @@ startup 비용 대신 강한 취소·수명 격리를 선택한다. 비동기 bu
 - ADR 0010(PR #399) — 상태 백엔드 분리(제안됨)
 - [ADR 0008](./adrs/0008-async-build-job-model.md) — 비동기 build job 모델(제안됨)
 - [API_CONTRACT.md](./API_CONTRACT.md) — `/healthz`, 401/403/503 응답
+# Keycloak 공개 사용자 설정
+
+클라우드 배포에서 Studio는 public SPA로 Keycloak의 Authorization Code + PKCE(S256)를 사용한다.
+Builder는 `OIDC_ISSUER`와 `OIDC_AUDIENCE`가 모두 설정된 정상 OIDC 토큰만 수락하며,
+issuer·audience·JWKS 서명·만료 검증은 항상 fail-closed로 유지한다. `OIDC_ALLOWED_HD`,
+`OIDC_ALLOWED_SUBJECTS`, `OIDC_ALLOWED_EMAILS`는 필수가 아니라 제한 배포에서만 쓰는
+선택적 2차 인가 규칙이다. 하나라도 설정하면 일치하지 않는 principal은 403이다.
+
+Keycloak Admin Console에서 realm의 User registration과 Verify email을 켜고 적절한
+password policy를 설정한다. Google Identity Broker를 사용하려면 broker의 Store Tokens는
+꺼 둔다. Studio가 Google token을 Builder에 직접 전달하지 않으며, signup/password UI는
+Keycloak hosted UI가 담당한다. 스케줄러 등 service principal은 기존 `X-API-Key`를 계속 사용한다.

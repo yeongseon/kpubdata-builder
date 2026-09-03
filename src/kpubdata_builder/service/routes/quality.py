@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
+from urllib.parse import parse_qs
 
 from ...spec import JsonValue
 from ...stages._path_safety import validate_path_segment
@@ -24,7 +25,13 @@ def route(
     query: str,
     principal: Principal,
 ) -> RouteResponse | None:
-    del body, query
+    del body
+    # 최근 24h cross-run quality aggregate (#486 후속, API 1.22.0). per-run
+    # /builds/{id}/quality와 같은 quality 계열이라 같은 adapter에서 처리한다 —
+    # run_id 경로가 아니라 고정 경로이고 ownership은 service가 principal로 판정한다.
+    if method == "GET" and path == "/quality/summary":
+        window = parse_qs(query).get("window", ["24h"])[-1]
+        return service.quality_summary(window=window, principal=principal)
     if method != "GET" or not path.startswith("/builds/") or not path.endswith("/quality"):
         return None
     run_id = path[len("/builds/") : -len("/quality")]

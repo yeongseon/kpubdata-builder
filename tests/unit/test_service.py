@@ -1698,6 +1698,73 @@ class TestArtifactFileServing:
         assert resp.status_code == 200
         assert resp.filename == "manifest.json"
 
+    def test_serves_nested_relative_path(self, tmp_path: Path) -> None:
+        """GET /artifacts/{run_id}가 돌려주는 run 디렉터리 기준 상대 경로(슬래시 포함)를
+        serve_artifact_file도 그대로 받아야 한다 (#323 후속). 이전에는 file_path 전체를
+        한 세그먼트로 검증해 'silver/air/table.parquet' 같은 값이 전부 400이었다."""
+        from kpubdata_builder.service import FileResponse
+
+        service = _service(tmp_path)
+        dispatch(service, "POST", "/build", {"spec": VALID_SPEC_YAML, "run_id": "run1"})
+
+        nested = tmp_path / "run1" / "silver" / "air" / "table.parquet"
+        nested.parent.mkdir(parents=True, exist_ok=True)
+        nested.write_bytes(b"PAR1nested")
+
+        listed = service.artifacts("run1")
+        assert isinstance(listed, ServiceResponse)
+        # wire 목록은 항상 POSIX "/" 기반이어야 한다 (OS 구분자·output_root prefix 없음).
+        for wire_path in listed.body["files"]:
+            assert "\\" not in wire_path
+            assert not wire_path.startswith("/")
+            assert str(tmp_path) not in wire_path
+        assert "silver/air/table.parquet" in set(listed.body["files"])
+
+        resp = service.serve_artifact_file("run1", "silver/air/table.parquet")
+        assert isinstance(resp, FileResponse)
+        assert resp.status_code == 200
+        assert resp.filename == "table.parquet"
+        assert resp.file_path.read_bytes() == b"PAR1nested"
+
+        route_resp = dispatch(service, "GET", "/artifacts/run1/silver/air/table.parquet", None)
+        assert isinstance(route_resp, FileResponse)
+        assert route_resp.status_code == 200
+
+    def test_blocks_backslash_in_nested_path(self, tmp_path: Path) -> None:
+        service = _service(tmp_path)
+        dispatch(service, "POST", "/build", {"spec": VALID_SPEC_YAML, "run_id": "run1"})
+
+        resp = service.serve_artifact_file("run1", "silver\\..\\..\\secret.txt")
+        assert isinstance(resp, ServiceResponse)
+        assert resp.status_code == 400
+
+    def test_blocks_percent_encoded_traversal(self, tmp_path: Path) -> None:
+        """percent-encode된 트래버설/구분자는 decode 후 다시 검증되어 차단된다."""
+        service = _service(tmp_path)
+        dispatch(service, "POST", "/build", {"spec": VALID_SPEC_YAML, "run_id": "run1"})
+        dispatch(service, "POST", "/build", {"spec": VALID_SPEC_YAML, "run_id": "run2"})
+
+        for encoded in (
+            "%2e%2e/run2/manifest.json",  # ../run2/manifest.json
+            "silver%2f..%2f..%2fmanifest.json",  # silver/../../manifest.json
+            "silver%5c..%5c..%5cmanifest.json",  # silver\..\..\manifest.json
+            "%252e%252e/run2/manifest.json",  # double-encoded ..
+            "..%2f..%2fetc%2fpasswd",
+        ):
+            resp = service.serve_artifact_file("run1", encoded)
+            assert isinstance(resp, ServiceResponse), encoded
+            assert resp.status_code == 400, encoded
+
+    def test_blocks_cross_run_and_double_slash(self, tmp_path: Path) -> None:
+        service = _service(tmp_path)
+        dispatch(service, "POST", "/build", {"spec": VALID_SPEC_YAML, "run_id": "run1"})
+        dispatch(service, "POST", "/build", {"spec": VALID_SPEC_YAML, "run_id": "run2"})
+
+        # 다른 run 파일: '..'로만 접근 가능하므로 차단된다.
+        assert service.serve_artifact_file("run1", "../run2/manifest.json").status_code == 400
+        # double slash -> 빈 성분
+        assert service.serve_artifact_file("run1", "silver//table.parquet").status_code == 400
+
     def test_mime_type_detection(self, tmp_path: Path) -> None:
         from kpubdata_builder.service.http import _get_mime_type
 
@@ -1985,6 +2052,67 @@ class TestCatalog:
         client = _FakeClient({}, catalog_items=refs, auth_provider_names=auth_provider_names)
         return BuilderService(output_root=tmp_path, client_factory=lambda: client)
 
+    def _service_with_lazy_provider_catalog(
+        self,
+        tmp_path: Path,
+        *,
+        missing_provider: str | None = None,
+        missing_module: str = "pandas",
+    ) -> BuilderService:
+        refs = {
+            "datago": [_FakeCatalogRef("datago", "air_quality", "대기오염")],
+            "krx": [_FakeCatalogRef("krx", "stock", "주식")],
+        }
+
+        class Registry:
+            def __iter__(self) -> Iterable[str]:
+                return iter(("datago", "krx"))
+
+            def get(self, name: str) -> object:
+                if name == missing_provider:
+                    raise ModuleNotFoundError(
+                        f"No module named '{missing_module}'", name=missing_module
+                    )
+                return type("Adapter", (), {"requires_api_key": name == "datago"})()
+
+        class Catalog:
+            @staticmethod
+            def list(*, provider: str) -> list[object]:
+                return refs[provider]
+
+        class Client:
+            _registry = Registry()
+            datasets = Catalog()
+
+            def close(self) -> None:
+                return None
+
+        return BuilderService(output_root=tmp_path, client_factory=Client)
+
+    def test_catalog_skips_only_krx_when_optional_pandas_is_missing(self, tmp_path: Path) -> None:
+        response = self._service_with_lazy_provider_catalog(
+            tmp_path, missing_provider="krx"
+        ).catalog()
+
+        assert response.status_code == 200
+        providers = cast(list[dict[str, object]], response.body["providers"])
+        assert [provider["name"] for provider in providers] == ["datago"]
+
+    def test_catalog_does_not_hide_other_provider_missing_module(self, tmp_path: Path) -> None:
+        response = self._service_with_lazy_provider_catalog(
+            tmp_path, missing_provider="datago", missing_module="internal_datago"
+        ).catalog()
+
+        assert response.status_code == 502
+        assert "internal_datago" in cast(str, response.body["error"])
+
+    def test_catalog_keeps_krx_when_optional_dependency_is_available(self, tmp_path: Path) -> None:
+        response = self._service_with_lazy_provider_catalog(tmp_path).catalog()
+
+        assert response.status_code == 200
+        providers = cast(list[dict[str, object]], response.body["providers"])
+        assert [provider["name"] for provider in providers] == ["datago", "krx"]
+
     def test_catalog_groups_datasets_by_provider(self, tmp_path: Path) -> None:
         refs = [
             _FakeCatalogRef("datago", "air_quality", "대기오염", service_key=True),
@@ -2085,6 +2213,90 @@ class TestCatalog:
         assert dataset["operations"] == []
         assert dataset["query_support"] is None
         assert dataset["requires_service_key"] is False
+        assert dataset["request_parameters"] == []
+        assert dataset["application"] is None
+
+    def test_catalog_serializes_application_when_declared(self, tmp_path: Path) -> None:
+        """raw_metadata.application을 그대로 전달한다 (활용신청 안내, secret 없음)."""
+        ref = _FakeCatalogRef(
+            "datago",
+            "air_quality",
+            "대기오염",
+            service_key=True,
+            raw_metadata_extra={
+                "application": {
+                    "required": True,
+                    "url": "https://www.data.go.kr/data/15073861/openapi.do",
+                },
+            },
+        )
+        resp = self._service_with_catalog(tmp_path, [ref]).catalog()
+
+        assert resp.status_code == 200
+        providers = cast(list[dict[str, object]], resp.body["providers"])
+        dataset = cast(dict[str, object], providers[0]["datasets"][0])
+        assert dataset["application"] == {
+            "required": True,
+            "url": "https://www.data.go.kr/data/15073861/openapi.do",
+        }
+
+    def test_catalog_rejects_non_http_application_url(self, tmp_path: Path) -> None:
+        """application.url이 http(s)가 아니면 통째로 노출하지 않는다(임의 스킴 차단)."""
+        ref = _FakeCatalogRef(
+            "datago",
+            "air_quality",
+            "대기오염",
+            raw_metadata_extra={
+                "application": {"required": True, "url": "javascript:alert(1)"},
+            },
+        )
+        resp = self._service_with_catalog(tmp_path, [ref]).catalog()
+
+        assert resp.status_code == 200
+        providers = cast(list[dict[str, object]], resp.body["providers"])
+        dataset = cast(dict[str, object], providers[0]["datasets"][0])
+        assert dataset["application"] is None
+
+    def test_catalog_serializes_request_parameters_without_secrets(self, tmp_path: Path) -> None:
+        """raw_metadata.request_parameters를 secret-free allowlist로 직렬화한다."""
+        ref = _FakeCatalogRef(
+            "datago",
+            "air_quality",
+            "대기오염",
+            service_key=True,
+            raw_metadata_extra={
+                "request_parameters": [
+                    {
+                        "name": "sidoName",
+                        "required": True,
+                        "description": "조회할 시·도",
+                        "example": "서울",
+                        "internal_hint": "leak me",
+                    },
+                    # service_key_param / secret-like 이름은 제외된다.
+                    {"name": "serviceKey", "required": True},
+                    {"name": "apiKey", "required": True},
+                    # name 없는 항목은 버린다.
+                    {"required": True},
+                    "not-a-dict",
+                ],
+            },
+        )
+        resp = self._service_with_catalog(tmp_path, [ref]).catalog()
+
+        assert resp.status_code == 200
+        providers = cast(list[dict[str, object]], resp.body["providers"])
+        dataset = cast(dict[str, object], providers[0]["datasets"][0])
+        assert dataset["request_parameters"] == [
+            {
+                "name": "sidoName",
+                "required": True,
+                "description": "조회할 시·도",
+                "example": "서울",
+            }
+        ]
+        assert "internal_hint" not in json.dumps(resp.body, ensure_ascii=False)
+        assert "leak me" not in json.dumps(resp.body, ensure_ascii=False)
 
     def test_catalog_never_exposes_raw_metadata_or_secrets(self, tmp_path: Path) -> None:
         """raw_metadata와 secret-like 값은 응답에 절대 노출되지 않는다 (#490)."""
@@ -2122,6 +2334,8 @@ class TestCatalog:
             "operations",
             "query_support",
             "requires_service_key",
+            "request_parameters",
+            "application",
         }
         # service_key_param 존재 여부는 requires_service_key 불리언으로만 전달된다.
         assert dataset["requires_service_key"] is True
