@@ -145,9 +145,14 @@ class TestVerifyResult:
 class TestDatasetStatus:
     def test_all_statuses(self) -> None:
         expected = {
-            "HEALTHY", "NEEDS_APPLICATION", "WAITING_APPROVAL",
-            "INVALID_KEY", "RATE_LIMITED", "BROKEN_ENDPOINT",
-            "SCHEMA_CHANGED", "SKIPPED",
+            "HEALTHY",
+            "NEEDS_APPLICATION",
+            "WAITING_APPROVAL",
+            "INVALID_KEY",
+            "RATE_LIMITED",
+            "BROKEN_ENDPOINT",
+            "SCHEMA_CHANGED",
+            "SKIPPED",
         }
         actual = {s.value for s in DatasetStatus}
         assert actual == expected

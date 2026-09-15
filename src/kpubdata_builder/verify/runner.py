@@ -128,33 +128,52 @@ def verify_dataset(
         _params, payload = executor.fetch(spec, query, format_hint=getattr(example, "format", None))
         fetch_latency = (time.monotonic() - t0) * 1000
     except (AuthError, RateLimitError) as exc:
-        result.checks.append(CheckResult(
-            CheckName.AUTH, passed=False, detail=str(exc)[:120],
-        ))
+        result.checks.append(
+            CheckResult(
+                CheckName.AUTH,
+                passed=False,
+                detail=str(exc)[:120],
+            )
+        )
         result.status = _classify_auth_error(exc)
         result.error = str(exc)[:200]
         result.total_latency_ms = (time.monotonic() - total_t0) * 1000
         _fill_skipped(result, after=CheckName.AUTH)
         return result
     except TransportError as exc:
-        result.checks.append(CheckResult(
-            CheckName.AUTH, passed=True, detail="transport reached",
-        ))
-        result.checks.append(CheckResult(
-            CheckName.RESPONSE, passed=False, detail=str(exc)[:120],
-        ))
+        result.checks.append(
+            CheckResult(
+                CheckName.AUTH,
+                passed=True,
+                detail="transport reached",
+            )
+        )
+        result.checks.append(
+            CheckResult(
+                CheckName.RESPONSE,
+                passed=False,
+                detail=str(exc)[:120],
+            )
+        )
         result.status = DatasetStatus.BROKEN_ENDPOINT
         result.error = str(exc)[:200]
         result.total_latency_ms = (time.monotonic() - total_t0) * 1000
         _fill_skipped(result, after=CheckName.RESPONSE)
         return result
     except PublicDataError as exc:
-        result.checks.append(CheckResult(
-            CheckName.AUTH, passed=True,
-        ))
-        result.checks.append(CheckResult(
-            CheckName.RESPONSE, passed=False, detail=str(exc)[:120],
-        ))
+        result.checks.append(
+            CheckResult(
+                CheckName.AUTH,
+                passed=True,
+            )
+        )
+        result.checks.append(
+            CheckResult(
+                CheckName.RESPONSE,
+                passed=False,
+                detail=str(exc)[:120],
+            )
+        )
         result.status = DatasetStatus.BROKEN_ENDPOINT
         result.error = str(exc)[:200]
         result.total_latency_ms = (time.monotonic() - total_t0) * 1000
@@ -162,17 +181,25 @@ def verify_dataset(
         return result
 
     # Auth passed (we got a response)
-    result.checks.append(CheckResult(
-        CheckName.AUTH, passed=True, latency_ms=fetch_latency,
-    ))
+    result.checks.append(
+        CheckResult(
+            CheckName.AUTH,
+            passed=True,
+            latency_ms=fetch_latency,
+        )
+    )
 
     # 3. Response — check envelope error codes
     try:
         check_payload_error(spec, payload)
     except PublicDataError as exc:
-        result.checks.append(CheckResult(
-            CheckName.RESPONSE, passed=False, detail=str(exc)[:120],
-        ))
+        result.checks.append(
+            CheckResult(
+                CheckName.RESPONSE,
+                passed=False,
+                detail=str(exc)[:120],
+            )
+        )
         auth_status = _classify_auth_error(exc)
         result.status = auth_status
         result.error = str(exc)[:200]
@@ -187,20 +214,26 @@ def verify_dataset(
         items = extract_items(spec, payload)
         total_count = extract_total_count(spec, payload)
     except Exception as exc:  # noqa: BLE001
-        result.checks.append(CheckResult(
-            CheckName.PARSER, passed=False, detail=str(exc)[:120],
-        ))
+        result.checks.append(
+            CheckResult(
+                CheckName.PARSER,
+                passed=False,
+                detail=str(exc)[:120],
+            )
+        )
         result.status = DatasetStatus.BROKEN_ENDPOINT
         result.error = str(exc)[:200]
         result.total_latency_ms = (time.monotonic() - total_t0) * 1000
         _fill_skipped(result, after=CheckName.PARSER)
         return result
 
-    result.checks.append(CheckResult(
-        CheckName.PARSER,
-        passed=True,
-        detail=f"{len(items)} items, total={total_count}",
-    ))
+    result.checks.append(
+        CheckResult(
+            CheckName.PARSER,
+            passed=True,
+            detail=f"{len(items)} items, total={total_count}",
+        )
+    )
     result.records_tested = len(items)
 
     # 5. Pagination — verify total_count is plausible
@@ -218,9 +251,13 @@ def verify_dataset(
     else:
         pagination_detail = "empty response, pagination untestable"
 
-    result.checks.append(CheckResult(
-        CheckName.PAGINATION, passed=pagination_ok, detail=pagination_detail,
-    ))
+    result.checks.append(
+        CheckResult(
+            CheckName.PAGINATION,
+            passed=pagination_ok,
+            detail=pagination_detail,
+        )
+    )
 
     # 6. Schema — hash field structure and compare
     if items:
@@ -229,21 +266,31 @@ def verify_dataset(
         result.previous_schema_hash = previous_hash
 
         if previous_hash and previous_hash != current_hash:
-            result.checks.append(CheckResult(
-                CheckName.SCHEMA,
-                passed=False,
-                detail=f"changed: {previous_hash[:8]}.. -> {current_hash[:8]}..",
-            ))
+            result.checks.append(
+                CheckResult(
+                    CheckName.SCHEMA,
+                    passed=False,
+                    detail=f"changed: {previous_hash[:8]}.. -> {current_hash[:8]}..",
+                )
+            )
             result.status = DatasetStatus.SCHEMA_CHANGED
         else:
             schema_detail = "unchanged" if previous_hash else f"baseline {current_hash[:8]}.."
-            result.checks.append(CheckResult(
-                CheckName.SCHEMA, passed=True, detail=schema_detail,
-            ))
+            result.checks.append(
+                CheckResult(
+                    CheckName.SCHEMA,
+                    passed=True,
+                    detail=schema_detail,
+                )
+            )
     else:
-        result.checks.append(CheckResult(
-            CheckName.SCHEMA, passed=True, detail="no items to hash",
-        ))
+        result.checks.append(
+            CheckResult(
+                CheckName.SCHEMA,
+                passed=True,
+                detail="no items to hash",
+            )
+        )
 
     result.total_latency_ms = (time.monotonic() - total_t0) * 1000
     return result

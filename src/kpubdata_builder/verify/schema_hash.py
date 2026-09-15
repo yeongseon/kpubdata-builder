@@ -61,8 +61,6 @@ def schema_diff(
 
     added = sorted(new_keys - old_keys)
     removed = sorted(old_keys - new_keys)
-    changed = sorted(
-        k for k in old_keys & new_keys if old_struct[k] != new_struct[k]
-    )
+    changed = sorted(k for k in old_keys & new_keys if old_struct[k] != new_struct[k])
 
     return {"added": added, "removed": removed, "type_changed": changed}

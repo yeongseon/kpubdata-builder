@@ -569,7 +569,9 @@ def _run_verify(
             print(f"error: spec not found: {dataset}", file=sys.stderr)
             return 1
         result = _verify_runner.verify_dataset(
-            spec, previous_hash=previous_hashes.get(dataset), page_size=page_size,
+            spec,
+            previous_hash=previous_hashes.get(dataset),
+            page_size=page_size,
         )
         print(result.format_report())
         results = [result]
@@ -579,7 +581,9 @@ def _run_verify(
             print("error: no specs discovered", file=sys.stderr)
             return 1
         results = _verify_runner.verify_datasets(
-            specs, previous_hashes=previous_hashes, page_size=page_size,
+            specs,
+            previous_hashes=previous_hashes,
+            page_size=page_size,
         )
         # Print summary
         healthy = sum(1 for r in results if r.passed)
