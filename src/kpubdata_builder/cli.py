@@ -614,9 +614,11 @@ def _run_monitor(*, state_file: str, add: str | None, check: bool) -> int:
             status = check_approval(p.dataset_id)
             old_status = p.status
             p.status = status
-            p.last_checked = __import__("datetime").datetime.now(
-                __import__("datetime").timezone.utc
-            ).strftime("%Y-%m-%dT%H:%M:%SZ")
+            p.last_checked = (
+                __import__("datetime")
+                .datetime.now(__import__("datetime").timezone.utc)
+                .strftime("%Y-%m-%dT%H:%M:%SZ")
+            )
 
             icon = "APPROVED" if status == "HEALTHY" else status
             print(f"  {p.dataset_id:40s} {old_status} -> {icon}")
@@ -723,11 +725,15 @@ def dispatch(args: argparse.Namespace) -> int:
         return _run_discover(args.url, dataset_id=args.dataset_id, output=args.output)
     if command == "monitor":
         return _run_monitor(
-            state_file=args.state_file, add=args.add, check=args.check,
+            state_file=args.state_file,
+            add=args.add,
+            check=args.check,
         )
     if command == "pipeline":
         return _run_pipeline(
-            args.dataset, kpubdata_root=args.kpubdata_root, skip_pr=args.skip_pr,
+            args.dataset,
+            kpubdata_root=args.kpubdata_root,
+            skip_pr=args.skip_pr,
         )
     # 일반적인 CLI 경로로는 도달할 수 없지만(argparse가 알 수 없는 하위 명령을 거부함),
     # 프로그래밍 방식 호출자를 위한 방어적 대체 경로로 유지한다.

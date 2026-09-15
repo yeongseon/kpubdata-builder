@@ -48,31 +48,37 @@ class DiscoveryResult:
         ]
         if self.description:
             lines.append(f"description: {self.description}")
-        lines.extend([
-            "source:",
-            f"  url: {self.data_go_kr_url}",
-            "endpoint:",
-            f"  base_url: {self.base_url}",
-            f"  operation: {self.operation}",
-            "  method: GET",
-        ])
+        lines.extend(
+            [
+                "source:",
+                f"  url: {self.data_go_kr_url}",
+                "endpoint:",
+                f"  base_url: {self.base_url}",
+                f"  operation: {self.operation}",
+                "  method: GET",
+            ]
+        )
         if self.format_json or self.format_xml:
             # Guess the format param name — data.go.kr uses various names
-            lines.extend([
-                "  format_param:",
-                "    name: dataType",
-                "    values:",
-            ])
+            lines.extend(
+                [
+                    "  format_param:",
+                    "    name: dataType",
+                    "    values:",
+                ]
+            )
             if self.format_json:
                 lines.append("      json: json")
             if self.format_xml:
                 lines.append("      xml: xml")
-        lines.extend([
-            "auth:",
-            "  type: query_param",
-            "  param_name: serviceKey",
-            "  provider_key: datago",
-        ])
+        lines.extend(
+            [
+                "auth:",
+                "  type: query_param",
+                "  param_name: serviceKey",
+                "  provider_key: datago",
+            ]
+        )
         if self.params:
             lines.append("params:")
             for p in self.params:
@@ -83,34 +89,38 @@ class DiscoveryResult:
                     lines.append(f"  description: '{p.description}'")
                 if p.example:
                     lines.append(f"  example: '{p.example}'")
-        lines.extend([
-            "response:",
-            "  format: json",
-            "  envelope: datago_standard",
-            "  items_path: response.body.items.item",
-            "  total_count_path: response.body.totalCount",
-            "  error:",
-            "    style: header_result_code",
-            "    code_path: response.header.resultCode",
-            "    ok_values:",
-            "    - '00'",
-            "    - '000'",
-            "    - 0",
-            "pagination:",
-            "  type: page_no_rows",
-            "  page_param: pageNo",
-            "  size_param: numOfRows",
-            "  max_size: 1000",
-        ])
+        lines.extend(
+            [
+                "response:",
+                "  format: json",
+                "  envelope: datago_standard",
+                "  items_path: response.body.items.item",
+                "  total_count_path: response.body.totalCount",
+                "  error:",
+                "    style: header_result_code",
+                "    code_path: response.header.resultCode",
+                "    ok_values:",
+                "    - '00'",
+                "    - '000'",
+                "    - 0",
+                "pagination:",
+                "  type: page_no_rows",
+                "  page_param: pageNo",
+                "  size_param: numOfRows",
+                "  max_size: 1000",
+            ]
+        )
         if self.response_fields:
             lines.append("fields:")
             for fname in self.response_fields:
                 lines.append(f"- name: {fname}")
                 lines.append("  type: string")
-        lines.extend([
-            "status: unstable",
-            "# TODO: 활용신청 승인 후 fixture 기록 → status: active 전환",
-        ])
+        lines.extend(
+            [
+                "status: unstable",
+                "# TODO: 활용신청 승인 후 fixture 기록 → status: active 전환",
+            ]
+        )
         return "\n".join(lines) + "\n"
 
 
@@ -147,9 +157,7 @@ def discover_from_url(url: str) -> DiscoveryResult:
 
     # Try to extract endpoint from page content
     # data.go.kr pages often contain the API URL in various formats
-    endpoint_match = re.search(
-        r"(https?://apis\.data\.go\.kr/[^\s\"'<]+)", html
-    )
+    endpoint_match = re.search(r"(https?://apis\.data\.go\.kr/[^\s\"'<]+)", html)
     if endpoint_match:
         full_url = endpoint_match.group(1).rstrip("/")
         # Split into base_url and operation

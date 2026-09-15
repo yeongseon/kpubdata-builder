@@ -24,7 +24,10 @@ class PipelineResult:
 
 
 def _run(
-    cmd: list[str], *, cwd: Path | None = None, timeout: int = 120,
+    cmd: list[str],
+    *,
+    cwd: Path | None = None,
+    timeout: int = 120,
 ) -> subprocess.CompletedProcess[str]:
     """Run a subprocess and return the result."""
     return subprocess.run(
@@ -60,7 +63,8 @@ def run_pipeline(
     # Step 1: Check spec exists
     result = _run(
         [
-            sys.executable, "-c",
+            sys.executable,
+            "-c",
             f"from kpubdata.core.spec import find_spec; "
             f"s = find_spec('{dataset_id}'); assert s is not None",
         ],
@@ -139,11 +143,13 @@ def run_pipeline(
 
     pr = _run(
         [
-            "gh", "pr", "create",
-            "--title", f"feat({provider}): add {key} spec + fixtures (agent pipeline)",
+            "gh",
+            "pr",
+            "create",
+            "--title",
+            f"feat({provider}): add {key} spec + fixtures (agent pipeline)",
             "--body",
-            f"Automated by `kpubdata-builder agent pipeline`.\n\n"
-            f"Dataset: `{dataset_id}`\nRef #448",
+            f"Automated by `kpubdata-builder agent pipeline`.\n\nDataset: `{dataset_id}`\nRef #448",
         ],
         cwd=kpubdata_root,
     )

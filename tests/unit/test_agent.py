@@ -91,10 +91,16 @@ class TestDiscoverCLI:
 
     def test_discover_with_output(self) -> None:
         parser = build_parser()
-        args = parser.parse_args([
-            "discover", "https://example.com", "--output", "out.yaml",
-            "--dataset-id", "datago.custom",
-        ])
+        args = parser.parse_args(
+            [
+                "discover",
+                "https://example.com",
+                "--output",
+                "out.yaml",
+                "--dataset-id",
+                "datago.custom",
+            ]
+        )
         assert args.output == "out.yaml"
         assert args.dataset_id == "datago.custom"
 
