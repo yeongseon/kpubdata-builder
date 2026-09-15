@@ -27,7 +27,7 @@ def _check_endpoint(spec: SpecDefinition) -> CheckResult:
         # Many public APIs reject HEAD but accept GET — a connection
         # error is what we actually want to detect here.
         err_str = str(exc)
-        if "403" in err_str or "405" in err_str or "404" in err_str:
+        if any(code in err_str for code in ("400", "403", "404", "405", "500", "502", "503")):
             return CheckResult(
                 CheckName.ENDPOINT,
                 passed=True,
