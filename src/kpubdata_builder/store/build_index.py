@@ -1,7 +1,12 @@
-"""SQLite 기반 빌드 인덱스 (#309, ADR 0003).
+"""빌드 인덱스 (#309, ADR 0003; 백엔드 분리 ADR 0010/0016).
 
 완료된 빌드의 메타데이터를 인덱싱하여 목록 조회 성능을 개선한다.
 manifest.json이 정본이며, 이 인덱스는 파생물이다.
+
+``BuildIndex`` 는 Protocol(인터페이스)이고, 기본 구현체는 단일 파일 SQLite 기반
+``SqliteBuildIndex`` 다(무외부의존 기본값). CUBRID 백엔드(``CubridBuildIndex``,
+ADR 0016)는 ``build_index_cubrid`` 에 있으며 ``make_build_index()`` 팩토리가
+``KPUBDATA_BUILDER_STORAGE_BACKEND`` 에 따라 선택한다.
 """
 
 from __future__ import annotations
@@ -12,7 +17,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 if TYPE_CHECKING:
     _BaseConn = sqlite3.Connection
@@ -51,8 +56,49 @@ class BuildEntry:
     owner_id: str | None = None
 
 
-class BuildIndex:
-    """SQLite 기반 빌드 인덱스.
+class BuildIndex(Protocol):
+    """빌드 인덱스 인터페이스 (ADR 0010/0016).
+
+    ``SqliteBuildIndex``(기본)와 ``CubridBuildIndex`` 가 이 Protocol 을 구현한다.
+    ADR 0003 계약: manifest.json 이 정본, 인덱스는 파생물이며 인덱스 쓰기 실패가
+    빌드 실패의 원인이 되어서는 안 된다(``insert_or_replace``/``delete`` 는 예외를
+    삼킨다).
+    """
+
+    def insert_or_replace(
+        self,
+        run_id: str,
+        status: BuildStatus,
+        started_at: str | None,
+        finished_at: str | None,
+        spec_digest: str | None = None,
+        error: str | None = None,
+        created_by: str | None = None,
+        dataset_id: str | None = None,
+        owner_id: str | None = None,
+    ) -> None: ...
+
+    def list_builds(self, limit: int | None = 50) -> list[BuildEntry]: ...
+
+    def list_by_dataset(self, dataset_id: str, limit: int | None = None) -> list[BuildEntry]: ...
+
+    def list_recent_owned(
+        self, *, limit: int, principal_owner_id: str | None, principal_label: str
+    ) -> list[BuildEntry]: ...
+
+    def list_between(self, start_iso: str, end_iso: str) -> list[BuildEntry]: ...
+
+    def latest_successful_finished_at(self) -> str | None: ...
+
+    def get(self, run_id: str) -> BuildEntry | None: ...
+
+    def delete(self, run_id: str) -> None: ...
+
+    def close(self) -> None: ...
+
+
+class SqliteBuildIndex:
+    """단일 파일 SQLite 기반 빌드 인덱스 (ADR 0003, 기본 구현체).
 
     ADR 0003에 따라:
     - manifest.json이 정본이며, 이 인덱스는 파생물이다
@@ -467,18 +513,12 @@ class BuildIndex:
             delattr(self._local, "conn")
 
 
-def rebuild_index(output_root: Path) -> int:
-    """파일시스템 스캔으로 인덱스를 재구축한다.
+def _iter_manifest_entries(output_root: Path) -> Iterator[BuildEntry]:
+    """output_root 아래 manifest.json 들을 스캔해 ``BuildEntry`` 를 산출한다.
 
-    output_root 아래의 모든 manifest.json을 스캔하여 새 인덱스를 .tmp 파일에
-    빌드한 뒤, 기존 인덱스를 .bak으로 백업하고 .tmp를 원자적으로 rename하여
-    교체한다 (#366). 스캔 도중 실패해도 기존 인덱스는 그대로 남는다.
-
-    Args:
-        output_root: 빌드 출력 루트 디렉터리
-
-    Returns:
-        재구축된 빌드 수
+    정본(manifest.json + BuildSpec snapshot)에서 파생 인덱스 값을 계산한다. 손상/누락
+    run 은 건너뛴다 — 인덱스는 파생물이라 일부 run 이 빠져도 정본에 영향이 없다. 백엔드
+    (sqlite/cubrid)와 무관하게 재구축 소스로 공유된다.
     """
     import json
 
@@ -487,6 +527,68 @@ def rebuild_index(output_root: Path) -> int:
     from ..manifest import status_from_manifest
     from ..spec.serializer import BUILDSPEC_SNAPSHOT_FILENAME, compute_spec_digest
 
+    if not output_root.exists():
+        return
+
+    for run_dir in output_root.iterdir():
+        if not run_dir.is_dir():
+            continue
+        manifest_path = run_dir / "manifest.json"
+        if not manifest_path.exists():
+            continue
+
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+            continue
+
+        # manifest.json이 정본이므로 파생 규칙은 manifest 패키지가 소유한다 (#481) —
+        # 취소된 run은 errors가 비어 있을 수 있어, 기존 "errors 유무" 파생만으로는
+        # 재구축 시 성공(ok)으로 잘못 승격된다.
+        status = cast(BuildStatus, status_from_manifest(manifest))
+        snapshot_path = run_dir / BUILDSPEC_SNAPSHOT_FILENAME
+        spec_digest: str | None = None
+        dataset_id: str | None = None
+        # is_file()은 symlink를 따라가므로, 워크스페이스 밖 파일을
+        # 해시하는 것을 막기 위해 symlink는 명시적으로 거부한다.
+        if snapshot_path.is_file() and not snapshot_path.is_symlink():
+            try:
+                snapshot_bytes: bytes | None = snapshot_path.read_bytes()
+            except OSError:
+                snapshot_bytes = None
+            if snapshot_bytes is not None:
+                spec_digest = compute_spec_digest(snapshot_bytes)
+                # dataset_id는 파생 검색값일 뿐이다 (#488). snapshot YAML을
+                # 읽거나 파싱할 수 없으면 추측하지 않고 None으로 남긴다 —
+                # 인덱스 손상/누락이 정본(BuildSpec snapshot)을 바꾸지 않는다.
+                try:
+                    snapshot_doc = yaml.safe_load(snapshot_bytes.decode("utf-8"))
+                except (UnicodeDecodeError, yaml.YAMLError):
+                    snapshot_doc = None
+                if isinstance(snapshot_doc, dict):
+                    raw_dataset_id = snapshot_doc.get("dataset_id")
+                    if isinstance(raw_dataset_id, str) and raw_dataset_id:
+                        dataset_id = raw_dataset_id
+
+        yield BuildEntry(
+            run_id=run_dir.name,
+            status=status,
+            started_at=manifest.get("started_at"),
+            finished_at=manifest.get("finished_at"),
+            spec_digest=spec_digest,
+            error=None,
+            created_by=manifest.get("created_by"),
+            dataset_id=dataset_id,
+            owner_id=manifest.get("owner_id"),
+        )
+
+
+def _rebuild_sqlite(output_root: Path) -> int:
+    """SQLite 인덱스를 .tmp 에 새로 빌드한 뒤 원자적으로 교체한다 (#366).
+
+    스캔 도중 실패해도 기존 인덱스는 그대로 남는다. 원자적 rename 은 단일 파일
+    SQLite 에만 유효한 방식이라 cubrid 경로와 분리한다.
+    """
     if not output_root.exists():
         return 0
 
@@ -497,60 +599,19 @@ def rebuild_index(output_root: Path) -> int:
     # 이전 실행이 중단되어 남은 임시 파일 정리
     tmp_path.unlink(missing_ok=True)
 
-    index = BuildIndex(output_root, index_path=tmp_path)
+    index = SqliteBuildIndex(output_root, index_path=tmp_path)
     try:
         count = 0
-        for run_dir in output_root.iterdir():
-            if not run_dir.is_dir():
-                continue
-            manifest_path = run_dir / "manifest.json"
-            if not manifest_path.exists():
-                continue
-
-            try:
-                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, UnicodeDecodeError, OSError):
-                continue
-
-            # manifest.json이 정본이므로 파생 규칙은 manifest 패키지가 소유한다
-            # (#481) — 취소된 run은 errors가 비어 있을 수 있어, 기존 "errors 유무"
-            # 파생만으로는 재구축 시 성공(ok)으로 잘못 승격된다.
-            status = status_from_manifest(manifest)
-            started_at = manifest.get("started_at")
-            finished_at = manifest.get("finished_at")
-            snapshot_path = run_dir / BUILDSPEC_SNAPSHOT_FILENAME
-            spec_digest: str | None = None
-            dataset_id: str | None = None
-            # is_file()은 symlink를 따라가므로, 워크스페이스 밖 파일을
-            # 해시하는 것을 막기 위해 symlink는 명시적으로 거부한다.
-            if snapshot_path.is_file() and not snapshot_path.is_symlink():
-                try:
-                    snapshot_bytes = snapshot_path.read_bytes()
-                except OSError:
-                    snapshot_bytes = None
-                if snapshot_bytes is not None:
-                    spec_digest = compute_spec_digest(snapshot_bytes)
-                    # dataset_id는 파생 검색값일 뿐이다 (#488). snapshot YAML을
-                    # 읽거나 파싱할 수 없으면 추측하지 않고 None으로 남긴다 —
-                    # 인덱스 손상/누락이 정본(BuildSpec snapshot)을 바꾸지 않는다.
-                    try:
-                        snapshot_doc = yaml.safe_load(snapshot_bytes.decode("utf-8"))
-                    except (UnicodeDecodeError, yaml.YAMLError):
-                        snapshot_doc = None
-                    if isinstance(snapshot_doc, dict):
-                        raw_dataset_id = snapshot_doc.get("dataset_id")
-                        if isinstance(raw_dataset_id, str) and raw_dataset_id:
-                            dataset_id = raw_dataset_id
-
+        for entry in _iter_manifest_entries(output_root):
             index.insert_or_replace(
-                run_id=run_dir.name,
-                status=status,  # type: ignore[arg-type]
-                started_at=started_at,
-                finished_at=finished_at,
-                spec_digest=spec_digest,
-                created_by=manifest.get("created_by"),
-                dataset_id=dataset_id,
-                owner_id=manifest.get("owner_id"),
+                run_id=entry.run_id,
+                status=entry.status,
+                started_at=entry.started_at,
+                finished_at=entry.finished_at,
+                spec_digest=entry.spec_digest,
+                created_by=entry.created_by,
+                dataset_id=entry.dataset_id,
+                owner_id=entry.owner_id,
             )
             count += 1
     finally:
@@ -574,4 +635,59 @@ def rebuild_index(output_root: Path) -> int:
     return count
 
 
-__all__ = ["BuildIndex", "BuildEntry", "rebuild_index", "SCHEMA_VERSION"]
+def _rebuild_cubrid(output_root: Path) -> int:
+    """CUBRID 인덱스를 FS 매니페스트 스캔으로 재구축한다 (truncate + reinsert)."""
+    from .backend import get_engine
+    from .build_index_cubrid import CubridBuildIndex
+
+    index = CubridBuildIndex(get_engine())
+    try:
+        return index.rebuild(_iter_manifest_entries(output_root))
+    finally:
+        index.close()
+
+
+def rebuild_index(output_root: Path) -> int:
+    """파일시스템 스캔으로 인덱스를 재구축한다 (백엔드 인지, ADR 0016).
+
+    manifest.json 정본을 스캔해 파생 인덱스를 다시 채운다. 백엔드에 따라:
+    - sqlite: .tmp 에 빌드 후 원자적 rename 교체(#366).
+    - cubrid: builds 테이블을 truncate 후 단일 트랜잭션으로 reinsert.
+
+    Args:
+        output_root: 빌드 출력 루트 디렉터리
+
+    Returns:
+        재구축된 빌드 수
+    """
+    from .backend import storage_backend
+
+    if storage_backend() == "cubrid":
+        return _rebuild_cubrid(output_root)
+    return _rebuild_sqlite(output_root)
+
+
+def make_build_index(output_root: Path) -> BuildIndex:
+    """선택된 백엔드에 맞는 ``BuildIndex`` 구현체를 생성한다 (ADR 0016).
+
+    sqlite(기본) → ``SqliteBuildIndex(output_root)``; cubrid → 전역 Engine 을 공유하는
+    ``CubridBuildIndex``. cubrid 모듈(및 sqlalchemy)은 cubrid 분기에서만 import 된다.
+    """
+    from .backend import storage_backend
+
+    if storage_backend() == "cubrid":
+        from .backend import get_engine
+        from .build_index_cubrid import CubridBuildIndex
+
+        return CubridBuildIndex(get_engine())
+    return SqliteBuildIndex(output_root)
+
+
+__all__ = [
+    "BuildEntry",
+    "BuildIndex",
+    "SCHEMA_VERSION",
+    "SqliteBuildIndex",
+    "make_build_index",
+    "rebuild_index",
+]

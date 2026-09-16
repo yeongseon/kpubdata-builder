@@ -100,6 +100,8 @@ build/{run_id}/
 | `KPUBDATA_BUILDER_ALLOWED_ORIGINS` | CORS 허용 오리진 (콤마 구분, default-deny) | 미설정 | 선택 |
 | `KPUBDATA_BUILDER_CREDENTIAL_MASTER_KEY` | 사용자별 Provider credential AES-GCM master key (URL-safe base64 32 bytes) | 미설정 | credential CRUD 사용 시 필수 |
 | `KPUBDATA_BUILDER_PROVIDER_TEST_TIMEOUT` | Provider connection test 전송 timeout(초) | `10` | 선택 |
+| `KPUBDATA_BUILDER_STORAGE_BACKEND` | 상태 백엔드 (`sqlite`=로컬 기본, `cubrid`=CUBRID, ADR 0016) | `sqlite` | 선택 |
+| `KPUBDATA_BUILDER_CUBRID_URL` | CUBRID SQLAlchemy URL (예: `cubrid+pycubrid://user:pass@host:33000/db?charset=utf8`) | 미설정 | `STORAGE_BACKEND=cubrid` 시 필수 |
 | `KPUBDATA_BUILDER_CANCELLED_RUN_TTL_HOURS` | `prune-cancelled --apply`가 cancelled partial run을 정리하기까지의 보존 시간(시간). 미설정이면 정리 대상 없음(#549) | 미설정 | 선택 |
 | `KPUBDATA_BUILDER_LOCAL_PUBLISH_ROOT` | HTTP `local` publish target의 루트 디렉터리(절대 경로). destination은 이 안의 상대 `owner/name`로 한정된다(#550). 미설정이면 local target blocker | 미설정 | local publish 사용 시 필수 |
 
@@ -236,6 +238,8 @@ ADR 0006). 설정은 환경변수로 주입합니다 — `docker-entrypoint.sh`�
 | `KPUBDATA_BUILDER_ALLOWED_ORIGINS` | CORS 허용 오리진 (콤마 구분, default-deny) | 미설정 | 선택 |
 | `KPUBDATA_BUILDER_CREDENTIAL_MASTER_KEY` | 사용자별 Provider credential AES-GCM master key (URL-safe base64 32 bytes) | 미설정 | credential CRUD 사용 시 필수 |
 | `KPUBDATA_BUILDER_PROVIDER_TEST_TIMEOUT` | Provider connection test 전송 timeout(초) | `10` | 선택 |
+| `KPUBDATA_BUILDER_STORAGE_BACKEND` | 상태 백엔드 (`sqlite`=로컬 기본, `cubrid`=CUBRID, ADR 0016) | `sqlite` | 선택 |
+| `KPUBDATA_BUILDER_CUBRID_URL` | CUBRID SQLAlchemy URL (예: `cubrid+pycubrid://user:pass@host:33000/db?charset=utf8`) | 미설정 | `STORAGE_BACKEND=cubrid` 시 필수 |
 | `KPUBDATA_BUILDER_CANCELLED_RUN_TTL_HOURS` | `prune-cancelled --apply`가 cancelled partial run을 정리하기까지의 보존 시간(시간). 미설정이면 정리 대상 없음(#549) | 미설정 | 선택 |
 | `KPUBDATA_BUILDER_LOCAL_PUBLISH_ROOT` | HTTP `local` publish target의 루트 디렉터리(절대 경로). destination은 이 안의 상대 `owner/name`로 한정된다(#550). 미설정이면 local target blocker | 미설정 | local publish 사용 시 필수 |
 | `OIDC_ISSUER` | Google OIDC 발급자 (설정 시 Bearer 활성, ADR 0009) | 미설정 | 선택 |

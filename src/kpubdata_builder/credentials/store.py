@@ -25,6 +25,21 @@ def normalize_provider(provider: str) -> str:
     return normalized
 
 
+def associated_data(owner_id: str, provider: str) -> bytes:
+    """AES-GCM AAD. owner_id·provider 에 credential 을 바인딩한다.
+
+    백엔드(SQLite/CUBRID)와 무관하게 **동일한** 값이어야 암복호가 호환된다 —
+    두 저장소가 이 단일 함수를 공유한다.
+    """
+    return f"{owner_id}\0{provider}".encode()
+
+
+def validate_owner_id(owner_id: str) -> None:
+    """stable owner_id 필수(빈 값 거부, fail-closed)."""
+    if not owner_id:
+        raise ValueError("stable owner_id is required")
+
+
 class CredentialRepository(Protocol):
     """owner_id + provider를 key로 하는 credential repository abstraction."""
 
@@ -68,17 +83,8 @@ class SQLiteCredentialRepository:
                 """
             )
 
-    @staticmethod
-    def _associated_data(owner_id: str, provider: str) -> bytes:
-        return f"{owner_id}\0{provider}".encode()
-
-    @staticmethod
-    def _validate_owner_id(owner_id: str) -> None:
-        if not owner_id:
-            raise ValueError("stable owner_id is required")
-
     def get_metadata(self, owner_id: str, provider: str) -> CredentialMetadata:
-        self._validate_owner_id(owner_id)
+        validate_owner_id(owner_id)
         provider = normalize_provider(provider)
         with self._lock, self._connect() as connection:
             row = connection.execute(
@@ -90,7 +96,7 @@ class SQLiteCredentialRepository:
         return CredentialMetadata(provider, True, _MASK, str(row[0]))
 
     def get_secret(self, owner_id: str, provider: str) -> str | None:
-        self._validate_owner_id(owner_id)
+        validate_owner_id(owner_id)
         provider = normalize_provider(provider)
         with self._lock, self._connect() as connection:
             row = connection.execute(
@@ -100,11 +106,11 @@ class SQLiteCredentialRepository:
         if row is None:
             return None
         return self._cipher.decrypt(
-            bytes(row[0]), associated_data=self._associated_data(owner_id, provider)
+            bytes(row[0]), associated_data=associated_data(owner_id, provider)
         )
 
     def list_configured_providers(self, owner_id: str) -> Sequence[str]:
-        self._validate_owner_id(owner_id)
+        validate_owner_id(owner_id)
         with self._lock, self._connect() as connection:
             rows = connection.execute(
                 "SELECT provider FROM provider_credentials WHERE owner_id = ? ORDER BY provider",
@@ -113,13 +119,13 @@ class SQLiteCredentialRepository:
         return tuple(str(row[0]) for row in rows)
 
     def put(self, owner_id: str, provider: str, credential: str) -> CredentialMetadata:
-        self._validate_owner_id(owner_id)
+        validate_owner_id(owner_id)
         provider = normalize_provider(provider)
         if not credential or not credential.strip():
             raise ValueError("credential must be a non-empty string")
         updated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
         ciphertext = self._cipher.encrypt(
-            credential, associated_data=self._associated_data(owner_id, provider)
+            credential, associated_data=associated_data(owner_id, provider)
         )
         with self._lock, self._connect() as connection:
             connection.execute(
@@ -135,7 +141,7 @@ class SQLiteCredentialRepository:
         return CredentialMetadata(provider, True, _MASK, updated_at)
 
     def delete(self, owner_id: str, provider: str) -> bool:
-        self._validate_owner_id(owner_id)
+        validate_owner_id(owner_id)
         provider = normalize_provider(provider)
         with self._lock, self._connect() as connection:
             cursor = connection.execute(
@@ -145,4 +151,10 @@ class SQLiteCredentialRepository:
         return cursor.rowcount > 0
 
 
-__all__ = ["CredentialRepository", "SQLiteCredentialRepository", "normalize_provider"]
+__all__ = [
+    "CredentialRepository",
+    "SQLiteCredentialRepository",
+    "associated_data",
+    "normalize_provider",
+    "validate_owner_id",
+]

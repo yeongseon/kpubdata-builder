@@ -1,0 +1,80 @@
+name: CUBRID integration
+
+# 실 CUBRID 서버 대상 백엔드 계약 테스트 (ADR 0016).
+#
+# 기본 CI(ci.yml)는 sqlite/local 만 검증한다. CUBRID dialect 의 실제 동작
+# (upsert/LOB/CLOB/DDL 타입매핑·LIMIT·트랜잭션)은 여기서 실 CUBRID 로 확인한다.
+# CUBRID 공식 이미지는 --privileged 를 요구해 GitHub Actions service container 로는
+# 띄울 수 없으므로 `docker run --privileged` 로 기동한다(러너에 docker 존재).
+#
+# --no-sources: [tool.uv.sources]의 editable ../kpubdata 오버라이드를 무시하고
+# pyproject 핀(>=0.5.0,<0.6)대로 PyPI 에서 kpubdata 를 해석한다(ci.yml 과 동일).
+
+on:
+  pull_request:
+    paths:
+      - "src/kpubdata_builder/store/**"
+      - "src/kpubdata_builder/credentials/**"
+      - "src/kpubdata_builder/service/app.py"
+      - "tests/cubrid/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/cubrid.yml"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cubrid-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cubrid:
+    name: CUBRID backend contract tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Start CUBRID
+        run: |
+          docker run -d --name cubrid --privileged \
+            -e CUBRID_DB=kpubdata -p 33000:33000 cubrid/cubrid:11.3
+
+      - name: Wait for CUBRID readiness
+        run: |
+          for i in $(seq 1 40); do
+            if docker exec cubrid sh -lc 'csql -u dba -c "SELECT 1;" kpubdata' >/dev/null 2>&1; then
+              echo "CUBRID is ready"
+              exit 0
+            fi
+            echo "waiting for CUBRID to accept SQL... (${i}/40)"
+            sleep 6
+          done
+          echo "::error::CUBRID did not become ready in time"
+          docker logs cubrid | tail -80
+          exit 1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+
+      - name: Install dependencies (py3.12 + cubrid extra)
+        run: uv sync --extra dev --extra cubrid --no-sources --python 3.12
+
+      - name: Run CUBRID contract tests
+        env:
+          # 실 배포와 동일한 백엔드 선택 경로(#587): cubrid 마커 테스트는 URL 을 직접
+          # 쓰지 않고 STORAGE_BACKEND 를 참조하는 컴포넌트(fail-closed 게이트 등)도 있다.
+          KPUBDATA_BUILDER_STORAGE_BACKEND: cubrid
+          # CUBRID 기본 dba/빈 비밀번호(개발용). broker 포트 33000.
+          KPUBDATA_BUILDER_CUBRID_URL: cubrid+pycubrid://dba:@127.0.0.1:33000/kpubdata?charset=utf8
+        run: uv run --no-sources pytest tests/cubrid -m cubrid -v
+
+      - name: CUBRID logs on failure
+        if: failure()
+        run: docker logs cubrid | tail -120

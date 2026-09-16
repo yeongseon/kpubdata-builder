@@ -25,6 +25,7 @@ from typing import Any, cast
 from urllib.parse import urlsplit
 
 from ..spec import JsonValue
+from ..store.backend import validate_storage_config
 from ..uploads import resolve_max_upload_bytes
 from .app import BuilderService, FileResponse, dispatch
 from .auth import validate_oidc_config
@@ -369,6 +370,9 @@ def serve(
     """
     # 기동 시 OIDC 설정 검증 (fail-closed, #385). OIDC 비활성 시 no-op.
     validate_oidc_config()
+    # 기동 시 상태 백엔드 설정 검증 (fail-closed, ADR 0016). sqlite 기본 시 no-op;
+    # cubrid 이면 URL·드라이버를 조기에 확인한다.
+    validate_storage_config()
     server = BoundedThreadingHTTPServer(
         (host, port), make_handler(service), max_workers=max_workers
     )

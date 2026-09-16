@@ -64,7 +64,9 @@ from ..spec.serializer import BUILDSPEC_SNAPSHOT_FILENAME, compute_spec_digest
 from ..spec.validator import validate_spec
 from ..stages._path_safety import ensure_within, validate_path_segment
 from ..stages.bronze.build import SourceClient
-from ..store import BuildIndex
+from ..store import make_build_index
+from ..store.artifacts import make_artifact_store
+from ..store.backend import storage_backend
 from ..tabular import DEFAULT_PREVIEW_LIMIT
 from ..uploads import (
     SQLiteUploadRepository,
@@ -128,11 +130,20 @@ def _raise_provider_test_error(client: SourceClient, provider: str) -> None:
 
 
 def _credential_repository_from_env(output_root: Path) -> CredentialRepository | None:
-    """master key가 설정된 경우에만 encrypted repository를 활성화한다."""
+    """master key가 설정된 경우에만 encrypted repository를 활성화한다.
+
+    백엔드는 KPUBDATA_BUILDER_STORAGE_BACKEND 를 따른다 (ADR 0016): cubrid 이면 전역
+    Engine 을 공유하는 CubridCredentialRepository, 아니면 기본 SQLite 파일.
+    """
     encoded_key = os.environ.get(_CREDENTIAL_MASTER_KEY_ENV)
     if not encoded_key:
         return None
     cipher = AesGcmCredentialCipher.from_base64(encoded_key)
+    if storage_backend() == "cubrid":
+        from ..credentials.store_cubrid import CubridCredentialRepository
+        from ..store.backend import get_engine
+
+        return CubridCredentialRepository(get_engine(), cipher)
     return SQLiteCredentialRepository(
         output_root / ".service" / "provider-credentials.sqlite3", cipher
     )
@@ -496,7 +507,8 @@ class BuilderService:
     ) -> None:
         self._output_root = output_root
         self._client_factory = client_factory
-        self._build_index = BuildIndex(output_root)  # #309, ADR 0003
+        self._build_index = make_build_index(output_root)  # #309, ADR 0003/0016
+        self._store = make_artifact_store(output_root)  # ADR 0010/0016 (manifest 정본)
         # run event timeline 저장소(#496). `_upload_repository`와 동일하게 지연
         # 생성한다 — preview는 build를 전혀 실행하지 않아 event를 남길 일이
         # 없으므로("Preview writes no files" 기존 계약, #497 범위 밖 #496도
@@ -1194,8 +1206,12 @@ class BuilderService:
                 # (snapshot과 동일한 값) — 파생 검색값일 뿐이므로 별도로 추측하지 않는다 (#488).
                 dataset_id=spec_or_error.dataset_id,
             )
+            # ADR 0016: manifest 문서를 authoritative store 로 승격한다. sqlite/local 은
+            # FS 파일이 정본이라 동일 내용 재기록(무해), cubrid 는 CUBRID 행 정본 + FS 미러.
+            # best-effort — FS 에 이미 정본/미러가 있으므로 승격 실패가 빌드를 실패시키지 않는다.
+            self._store.put_manifest(result.context.run_id, manifest_data)
         except Exception:
-            # 인덱스 갱신 실패는 무시 (ADR 0003)
+            # 인덱스 갱신/manifest 승격 실패는 무시 (ADR 0003)
             pass
 
         return ServiceResponse(status_code, body)
@@ -1446,21 +1462,11 @@ class BuilderService:
         except ValueError as exc:
             return ServiceResponse(400, {"error": str(exc)})
 
-        run_dir = self._output_root / run_id
-        ensure_within(self._output_root, run_dir, label="run directory")
-        manifest_path = run_dir / "manifest.json"
-        ensure_within(run_dir, manifest_path, label="manifest file")
-        if not manifest_path.exists():
+        # ADR 0016: manifest 정본은 store 를 통해 조회한다(cubrid=CUBRID 행 우선, FS 폴백;
+        # local=FS). get_manifest 는 경로 안전·손상·미존재를 모두 None 으로 합친다.
+        manifest = self._store.get_manifest(run_id)
+        if manifest is None:
             return ServiceResponse(404, {"error": f"manifest not found: {run_id}"})
-
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            return ServiceResponse(500, {"error": f"invalid manifest JSON: {exc.msg}"})
-        except OSError as exc:
-            return ServiceResponse(500, {"error": f"failed to read manifest: {exc}"})
-        if not isinstance(manifest, dict):
-            return ServiceResponse(500, {"error": "invalid manifest: expected object"})
         manifest.pop("owner_id", None)
         return ServiceResponse(200, cast(dict[str, JsonValue], manifest))
 
@@ -1793,7 +1799,7 @@ class BuilderService:
         ordered = sorted(records, key=datasets_service.sort_key, reverse=True)[:limit]
         runs: list[JsonValue] = []
         for r in ordered:
-            manifest = datasets_service.read_manifest(self._output_root, r.run_id) or {}
+            manifest = self._store.get_manifest(r.run_id) or {}
             runs.append(cast(JsonValue, quality_service.summarize_run_quality(r, manifest)))
         return ServiceResponse(200, {"dataset_id": dataset_id, "runs": runs})
 
@@ -1805,7 +1811,7 @@ class BuilderService:
         `availability`/`evaluated_checks`는 빈 매핑이 "평가했지만 0건"인지
         "애초에 계산된 적이 없음"(legacy/partial run)인지 구분한다(#514).
         """
-        manifest = datasets_service.read_manifest(self._output_root, run_id)
+        manifest = self._store.get_manifest(run_id)
         if manifest is None:
             return ServiceResponse(404, {"error": f"manifest not found: {run_id}"})
         known_sources = stages_service.known_source_keys(manifest)
@@ -1996,7 +2002,7 @@ class BuilderService:
         호출 전에 run_id 검증·존재 확인·ownership 게이팅이 끝나 있어야 한다
         (dispatch가 다른 /builds/{run_id}/* 라우트와 동일한 순서로 처리한다).
         """
-        manifest = datasets_service.read_manifest(self._output_root, run_id)
+        manifest = self._store.get_manifest(run_id)
         if manifest is None:
             return ServiceResponse(404, {"error": f"manifest not found: {run_id}"})
         summaries = stages_service.list_run_stages(self._output_root, run_id, manifest)
@@ -2024,7 +2030,7 @@ class BuilderService:
             return ServiceResponse(
                 400, {"error": f"invalid stage: {stage!r}; must be one of bronze/silver/gold"}
             )
-        manifest = datasets_service.read_manifest(self._output_root, run_id)
+        manifest = self._store.get_manifest(run_id)
         if manifest is None:
             return ServiceResponse(404, {"error": f"manifest not found: {run_id}"})
         summary = stages_service.stage_status_for_source(

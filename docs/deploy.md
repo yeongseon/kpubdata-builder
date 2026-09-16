@@ -61,6 +61,32 @@ Builder HTTP 서비스를 로컬 개발 이상으로 운영하기 위한 배포�
 
 멀티 replica는 ADR 0010(`ArtifactStore` 추상화 + 백엔드 분리) 이행 후 가능하다.
 
+### 6.1 CUBRID 상태 백엔드 (ADR 0016)
+
+기본 백엔드는 sqlite/local(무외부의존)이다. 조직 요구로 CUBRID 를 쓰려면
+(OCI Compute VM + Docker 단일 인스턴스 전제):
+
+```bash
+# 이미지에 CUBRID extra 포함
+docker build --build-arg EXTRAS="publish cubrid" -t kpubdata-builder:cubrid .
+
+# 실행 (env 로 백엔드 선택)
+docker run --rm -p 8000:8000 \
+  -e KPUBDATA_BUILDER_API_KEY="$API_KEY" \
+  -e KPUBDATA_BUILDER_STORAGE_BACKEND=cubrid \
+  -e KPUBDATA_BUILDER_CUBRID_URL="cubrid+pycubrid://user:pass@cubrid-host:33000/kpubdata?charset=utf8" \
+  -v /mnt/blockvol/data:/data \
+  kpubdata-builder:cubrid
+```
+
+- **BuildIndex·Credential·manifest 문서**가 CUBRID 에 저장된다. **산출물 바이트는 여전히
+  `/data`(블록 볼륨)** 에 둔다 — 쿼리 엔진이 실제 parquet 경로를 요구하고 대용량 BLOB 을
+  RDBMS 에 넣지 않기 위함(ADR 0016). 따라서 `/data` 볼륨 마운트는 CUBRID 백엔드에서도 필수다.
+- serve 시작 시 `KPUBDATA_BUILDER_CUBRID_URL` 미설정·드라이버 미설치면 fail-closed 로 기동을 거부한다.
+- 마이그레이션(FS→CUBRID)·정본 이전·리스크는 [ADR 0016](./adrs/0016-cubrid-state-backend.md) 참조.
+- CUBRID 는 OCI 관리형 서비스가 없으므로 같은 VM 에 컨테이너로 함께 띄운다(예: docker-compose,
+  `infra/oci/` 참조).
+
 ## 7. 헬스체크·종료
 
 - `GET /healthz` — 무인증 liveness probe (#372). 프로브가 API 키를 못 실을 때 사용.
