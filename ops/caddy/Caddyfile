@@ -1,0 +1,33 @@
+# Caddyfile — app-01 공개 진입 리버스 프록시 (ADR 0016).
+#
+# Cloudflare(proxied DNS, SSL Full(strict)) → Caddy(80/443) → builder:8000.
+# APP_DOMAIN / BACKEND_UPSTREAM은 compose에서 환경변수로 주입한다.
+#
+# TLS: Caddy가 Let's Encrypt로 origin 인증서를 자동 발급/갱신한다. Cloudflare를
+# proxied(orange-cloud)로 두면 Full(strict) 모드에서 origin 인증서를 검증한다.
+
+{
+	# 운영 이메일(ACME 계정). 필요 시 compose 환경변수/빌드 시 치환.
+	# email ops@example.com
+	# 로컬/IP-only 검증 시 자동 HTTPS를 끄려면 아래 주석을 해제한다.
+	# auto_https off
+}
+
+# Caddy 자체 헬스 엔드포인트 (compose healthcheck 및 Cloudflare 상태 확인용).
+:80 {
+	@healthz path /healthz
+	respond @healthz "ok" 200
+}
+
+{$APP_DOMAIN} {
+	encode gzip zstd
+
+	# 무인증 liveness 프로브는 그대로 통과 (Builder /healthz, #372).
+	# 그 외 모든 요청은 Builder 백엔드로 프록시. 인증(X-API-Key / Bearer)은
+	# Builder가 직접 검증한다 (ADR 0006/0015) — Caddy는 인증을 대행하지 않는다.
+	reverse_proxy {$BACKEND_UPSTREAM} {
+		health_uri /healthz
+		health_interval 15s
+		health_timeout 5s
+	}
+}
