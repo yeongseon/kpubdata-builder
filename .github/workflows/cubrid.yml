@@ -68,6 +68,9 @@ jobs:
 
       - name: Run CUBRID contract tests
         env:
+          # 실 배포와 동일한 백엔드 선택 경로(#587): cubrid 마커 테스트는 URL 을 직접
+          # 쓰지 않고 STORAGE_BACKEND 를 참조하는 컴포넌트(fail-closed 게이트 등)도 있다.
+          KPUBDATA_BUILDER_STORAGE_BACKEND: cubrid
           # CUBRID 기본 dba/빈 비밀번호(개발용). broker 포트 33000.
           KPUBDATA_BUILDER_CUBRID_URL: cubrid+pycubrid://dba:@127.0.0.1:33000/kpubdata?charset=utf8
         run: uv run --no-sources pytest tests/cubrid -m cubrid -v

@@ -53,7 +53,7 @@ huggingface = ["huggingface-hub>=0.23,<2"]
 # list(=여러 issuer)를 jwt.decode(issuer=...)로 넘기므로, 하한을 되돌리면
 # 2.8.x 환경에서 모든 토큰이 InvalidIssuerError 로 거부된다.
 auth = ["pyjwt[crypto]>=2.9,<3"]
-# CUBRID 상태 백엔드(선택, ADR 0013). sqlalchemy-cubrid 는 순수 파이썬 드라이버
+# CUBRID 상태 백엔드(선택, ADR 0016). sqlalchemy-cubrid 는 순수 파이썬 드라이버
 # pycubrid 와 SQLAlchemy 2.x(>=2.0,<2.3)를 유입한다. 기본 백엔드(sqlite/local FS)는
 # 이 extra 없이 동작하므로 코어 dependencies 에는 넣지 않는다 — 무외부의존 기본값 유지.
 # 드라이버가 Python 3.12+ 를 요구하므로, 3.10/3.11 에서 `[cubrid]` 를 명시 설치하면
@@ -93,7 +93,7 @@ strict = true
 warn_unused_configs = true
 mypy_path = ["src"]
 
-# CUBRID 백엔드 의존성은 optional(Python 3.12+ 전용, ADR 0013)이라 기본 dev 환경
+# CUBRID 백엔드 의존성은 optional(Python 3.12+ 전용, ADR 0016)이라 기본 dev 환경
 # (3.10/3.11)에는 설치되지 않는다. 미설치 시 "cannot find module" 로 실패하지 않도록
 # missing import 를 무시한다 — 설치된 3.12 환경에서는 각 패키지의 실제 타입(py.typed)을
 # 그대로 사용하므로 타입 검사 정확도는 유지된다.
@@ -107,7 +107,7 @@ ignore_missing_imports = true
 addopts = "-ra -m 'not cubrid'"
 testpaths = ["tests"]
 markers = [
-  "cubrid: CUBRID 백엔드 계약/통합 테스트 (기본 제외; sqlalchemy 필요, ADR 0013).",
+  "cubrid: CUBRID 백엔드 계약/통합 테스트 (기본 제외; sqlalchemy 필요, ADR 0016).",
 ]
 
 [tool.uv.sources]

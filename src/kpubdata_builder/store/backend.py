@@ -73,9 +73,9 @@ def validate_storage_config() -> None:
     """serve 시작 시 호출 (fail-fast, ADR 0016).
 
     - sqlite 백엔드 → no-op.
-    - cubrid 백엔드 → URL 미설정이거나 ``sqlalchemy-cubrid`` 미설치면 기동 거부.
-      (인덱스/매니페스트 쓰기 실패는 런타임에 best-effort 로 삼키지만, 기동 시
-      설정 오류는 조기에 드러내야 한다.)
+    - cubrid 백엔드 → URL 미설정, ``sqlalchemy-cubrid`` 미설치, 실 연결 실패 중
+      하나라도 해당하면 기동 거부. (인덱스/매니페스트 쓰기 실패는 런타임에
+      best-effort 로 삼키지만, 기동 시 설정 오류는 조기에 드러내야 한다.)
     """
     if storage_backend() != "cubrid":
         return
@@ -86,6 +86,18 @@ def validate_storage_config() -> None:
         raise RuntimeError(
             "KPUBDATA_BUILDER_STORAGE_BACKEND=cubrid but sqlalchemy-cubrid is not "
             "installed; install with: uv sync --extra cubrid (requires Python 3.12+)."
+        ) from exc
+    # 실 연결 확인(#587): URL·드라이버가 있어도 서버가 내려가 있으면 첫 요청까지
+    # 실패가 미뤄진다. serve 는 기동 시점에 실제 커넥션을 한 번 열어 fail-closed 한다.
+    # 검증용 커넥션은 즉시 닫으며, 풀은 이후 정상 요청에 재사용된다.
+    try:
+        with get_engine().connect():
+            pass
+    except Exception as exc:
+        dispose_engine()
+        raise RuntimeError(
+            f"{_BACKEND_ENV}=cubrid but the CUBRID server is not reachable "
+            f"({_CUBRID_URL_ENV}); refusing to start. Underlying error: {exc}"
         ) from exc
 
 
