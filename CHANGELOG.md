@@ -25,6 +25,7 @@
 - 컨테이너 진입점 fail-closed (ADR 0006)
 
 ### 변경됨
+- **quality 도메인 서비스 분리 (#596 다섯 번째 조각)**: run별 structured quality(#486/#514)와 24h window 집계를 `service/quality_api.py` 의 `QualityApiService` 로 옮기고 `BuilderService` 는 얇은 위임으로 남긴다. 24h 집계의 run 집합은 `DatasetsApiService` 의 canonical record 수집을 **재사용**한다 — 앞 조각에서 그 헬퍼를 public 으로 둔 이유다. `monitoring_summary` 는 여기 들어오지 않는다: 도메인 quality 와 시스템 observability 를 한 응답에 섞지 않는다는 경계를 유지한다. wire 계약 변화 없음
 - **dataset 도메인 서비스 분리 (#596 네 번째 조각)**: built dataset 조회 표면(`/datasets`, `/datasets/{id}`, `/runs`, quality 이력)을 `service/datasets_api.py` 의 `DatasetsApiService` 로 옮기고 `BuilderService` 는 얇은 위임으로 남긴다. run record 수집 헬퍼는 quality 도메인이 함께 쓰므로 **public 으로 노출**해 다음 조각이 복제 대신 의존할 수 있게 했다. ownership 필터를 grouping/latest 선정보다 먼저 적용하는 규칙(#488 semantics D)은 파일 docstring 에 명시했다. wire 계약 변화 없음
 - **query 도메인 서비스 분리 (#596 세 번째 조각)**: `POST /query` 를 `service/query_service_api.py` 의 `QueryApiService` 로 옮기고 `BuilderService` 는 얇은 위임으로 남긴다. 요청 본문 파서도 함께 옮겨, 권한·아티팩트 부재·문맥 오류·안전하지 않은 SQL·혼잡·타임아웃·실행 실패가 각각 어떤 상태 코드와 `code` 가 되는지 한 곳에서 읽힌다. 모듈명이 `query_service_api` 인 이유는 `kpubdata_builder.query.service` 에 이미 실행 엔진 쪽 `QueryService` 가 있어서다. wire 계약 변화 없음
 - **upload 도메인 서비스 분리 (#596 두 번째 조각)**: `create_upload`/`get_upload`/`delete_upload` 를 `service/uploads_service.py` 의 `UploadsService` 로 옮기고 `BuilderService` 는 얇은 위임으로 남긴다. 저장소를 객체가 아니라 **호출 가능한 provider**(람다)로 넘겨, upload 를 쓰지 않는 워크스페이스에 `.service/uploads.sqlite3` 가 생기지 않는 지연 생성(#498)을 그대로 보존한다. wire 계약 변화 없음

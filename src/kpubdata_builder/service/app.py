@@ -68,7 +68,6 @@ from . import events as events_service
 from . import monitoring as monitoring_service
 from . import ownership as ownership_module
 from . import publish as publish_service
-from . import quality as quality_service
 from . import stages as stages_service
 from .auth import AuthError, Principal, authenticate
 from .auth_throttle import AuthFailureThrottle
@@ -83,6 +82,7 @@ from .providers import (
     runtime_provider_catalog,
 )
 from .providers_service import ProvidersService
+from .quality_api import QualityApiService
 from .query_service_api import QueryApiService
 from .responses import FileResponse, ServiceResponse
 from .routes import ROUTE_ADAPTERS
@@ -540,6 +540,9 @@ class BuilderService:
         self._query_api = QueryApiService(output_root=self._output_root, engine=self._query_service)
         self._datasets_api = DatasetsApiService(
             output_root=self._output_root, build_index=self._build_index, store=self._store
+        )
+        self._quality_api = QualityApiService(
+            output_root=self._output_root, store=self._store, datasets=self._datasets_api
         )
         self._async_builds = AsyncBuildExecutor(
             max_workers=async_max_workers,
@@ -1497,94 +1500,14 @@ class BuilderService:
         )
 
     def get_build_quality(self, run_id: str) -> ServiceResponse:
-        """run의 구조화된 Quality 결과와 schema drift를 조회한다 (#486, #514).
-
-        manifest.json에 이미 저장된 source_key별 quality_results/schema_drift를
-        그대로 노출한다 — 별도 계산을 다시 하지 않는다(정본은 manifest).
-        `availability`/`evaluated_checks`는 빈 매핑이 "평가했지만 0건"인지
-        "애초에 계산된 적이 없음"(legacy/partial run)인지 구분한다(#514).
-        """
-        manifest = self._store.get_manifest(run_id)
-        if manifest is None:
-            return ServiceResponse(404, {"error": f"manifest not found: {run_id}"})
-        known_sources = stages_service.known_source_keys(manifest)
-        availability, evaluated_checks = quality_service.quality_availability(
-            manifest, known_sources
-        )
-        quality_results = manifest.get("quality_results")
-        schema_drift = manifest.get("schema_drift")
-        return ServiceResponse(
-            200,
-            {
-                "run_id": run_id,
-                "availability": availability,
-                "evaluated_checks": evaluated_checks,
-                "quality_results": cast(
-                    JsonValue, quality_results if isinstance(quality_results, dict) else {}
-                ),
-                "schema_drift": cast(
-                    JsonValue, schema_drift if isinstance(schema_drift, dict) else {}
-                ),
-            },
-        )
+        """run의 구조화된 Quality 결과와 schema drift를 조회한다 (#486, #514)."""
+        return self._quality_api.get_build_quality(run_id)
 
     def quality_summary(
         self, *, window: str, principal: Principal | None = None
     ) -> ServiceResponse:
-        """최근 ``window`` 안 접근 가능한 run의 structured quality를 PASS/WARN/FAIL
-        run 수로 요약한다 (#486 후속, additive — API 1.22.0).
-
-        Studio Home의 "QUALITY WARN (24H)" KPI가 임의 숫자 합성 없이 authoritative
-        aggregate를 읽도록 하는 bounded cross-run 집계다. 개별 run의
-        ``quality_results``/dataset/owner는 노출하지 않는다 — 그건 per-run
-        ``GET /builds/{run_id}/quality``의 몫이다. 시스템 observability
-        (``/monitoring``)와 도메인 quality를 한 응답에 섞지 않는다.
-
-        run 집합은 ``_recent_canonical_records``로 얻는다 — canonical
-        ``manifest.json`` mtime(+ 파생 BuildIndex 시간창)으로 24h candidate를
-        좁힌 뒤 그 candidate만 canonical snapshot + manifest로 재확인하고
-        (ENFORCE_OWNERSHIP + oidc principal이면 본인 run만), all-history manifest
-        재파싱은 하지 않는다. index는 파생물이라 단독으로 신뢰하지 않는다(ADR 0003).
-        새로운 run 인덱스를 만들지 않는다. legacy run(snapshot 없음)은 애초에
-        structured quality가 없으므로 자연히 제외된다.
-        """
-        if window != "24h":
-            return ServiceResponse(400, {"error": f"unsupported window: {window!r} (only '24h')"})
-        now = datetime.now(timezone.utc)
-        base: dict[str, JsonValue] = {
-            "window": "24h",
-            "generated_at": now.isoformat(timespec="seconds"),
-        }
-        try:
-            records = self._recent_canonical_records(
-                principal,
-                now=now,
-                window_seconds=quality_service.QUALITY_SUMMARY_WINDOW_SECONDS,
-            )
-        except Exception:
-            # run enumeration 자체가 불가능한 경우에만 unavailable — "0건"과 구분한다.
-            return ServiceResponse(
-                200,
-                {
-                    **base,
-                    "availability": "unavailable",
-                    "total_runs": 0,
-                    "evaluated_runs": 0,
-                    "pass_runs": 0,
-                    "warn_runs": 0,
-                    "fail_runs": 0,
-                },
-            )
-        entries = (
-            (record, datasets_service.read_manifest(self._output_root, record.run_id))
-            for record in records
-        )
-        counts = quality_service.aggregate_quality_window(
-            entries,
-            now=now,
-            window_seconds=quality_service.QUALITY_SUMMARY_WINDOW_SECONDS,
-        )
-        return ServiceResponse(200, {**base, "availability": "available", **counts})
+        """최근 window 안 접근 가능한 run의 structured quality 집계 (#486 후속)."""
+        return self._quality_api.quality_summary(window=window, principal=principal)
 
     def monitoring_summary(self) -> ServiceResponse:
         """Builder API/Queue/Worker/Artifact Store 시스템 상태 요약 (#516).
