@@ -1,4 +1,4 @@
-# ADR 0016 — 풀스택 배포 토폴로지: OCI 단일 VM(Builder) + Cloudflare Pages(Studio)
+# ADR 0017 — 풀스택 배포 토폴로지: OCI 단일 VM(Builder) + Cloudflare Pages(Studio)
 
 - 상태: 제안됨(Proposed)
 - 관련 이슈: —

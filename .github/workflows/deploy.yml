@@ -1,6 +1,6 @@
 # Deploy to OCI (single VM: app-01)
 #
-# ADR 0016(풀스택 배포 토폴로지)의 배포 자동화. our-tax의 split-topology
+# ADR 0017(풀스택 배포 토폴로지)의 배포 자동화. our-tax의 split-topology
 # deploy.yml(ADR-0005)에서 db-01 배포 job, Alembic migration one-shot, ETL job,
 # CUBRID 관련 secret을 모두 제거한 단순화 버전이다. Builder는 외부 RDBMS 없이
 # /data 볼륨만으로 상태를 영속화하므로 DB 배포/마이그레이션 단계가 없다.

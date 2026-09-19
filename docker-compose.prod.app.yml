@@ -1,6 +1,6 @@
 # docker-compose.prod.app.yml — OCI 단일 VM(app-01) 프로덕션 스택.
 #
-# ADR 0016(풀스택 배포 토폴로지)에 따라 Builder는 단일 app VM에서 Docker로
+# ADR 0017(풀스택 배포 토폴로지)에 따라 Builder는 단일 app VM에서 Docker로
 # 운영한다. our-tax의 split-topology(ADR-0005)와 달리 별도 DB VM(db-01)이나
 # Alembic migration one-shot, ETL 프로파일이 없다 — Builder는 외부 RDBMS 없이
 # /data 볼륨(매니페스트 + 파생 SQLite 인덱스, ADR 0003/0010)만으로 상태를

@@ -199,10 +199,10 @@ startup 비용 대신 강한 취소·수명 격리를 선택한다. 비동기 bu
 포함되는 파일이 바뀌어야 재스캔이 의미 있음). 문서·테스트 전용 변경은 스캔을
 트리거하지 않으므로 기능 PR과 독립적인 신호를 유지한다.
 
-## 9. OCI 단일 VM 프로덕션 배포 (ADR 0016)
+## 9. OCI 단일 VM 프로덕션 배포 (ADR 0017)
 
 풀스택(Studio 프론트엔드 + Builder 백엔드)을 OCI에 배포하는 참조 토폴로지는
-[ADR 0016](./adrs/0016-fullstack-oci-deployment.md)에 정의되어 있다. 핵심은 our-tax의
+[ADR 0017](./adrs/0017-fullstack-oci-deployment.md)에 정의되어 있다. 핵심은 our-tax의
 split-topology(별도 CUBRID DB VM)와 달리 **DB 서버 없이 단일 app VM + `/data` 볼륨**만
 쓴다는 점이다 — Builder는 매니페스트(source of truth) + 파생 SQLite 인덱스를 파일로
 영속화하기 때문이다(§6, ADR 0003/0010).
@@ -257,7 +257,7 @@ docker compose -f docker-compose.prod.app.yml --profile caddy up -d  # 공개 TL
 ## 관련
 
 - [ADR 0006](./adrs/0006-service-auth-and-deployment.md) — 인증·배포(fail-closed, Docker)
-- [ADR 0016](./adrs/0016-fullstack-oci-deployment.md) — 풀스택 배포 토폴로지(OCI 단일 VM + Cloudflare Pages, 제안됨)
+- [ADR 0017](./adrs/0017-fullstack-oci-deployment.md) — 풀스택 배포 토폴로지(OCI 단일 VM + Cloudflare Pages, 제안됨)
 - ADR 0009(PR #398) — 사용자 인증(Google OIDC, 제안됨)
 - ADR 0010(PR #399) — 상태 백엔드 분리(제안됨)
 - [ADR 0008](./adrs/0008-async-build-job-model.md) — 비동기 build job 모델(제안됨)
