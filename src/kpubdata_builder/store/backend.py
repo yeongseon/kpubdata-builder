@@ -138,9 +138,14 @@ def validate_storage_config() -> None:
     """serve 시작 시 호출 (fail-fast, ADR 0016).
 
     - sqlite 백엔드 → no-op.
-    - cubrid 백엔드 → URL 미설정/드라이버 불일치이거나 ``sqlalchemy-cubrid``·
-      ``pycubrid`` 가 없으면 기동 거부. (인덱스/매니페스트 쓰기 실패는 런타임에
-      best-effort 로 삼키지만, 기동 시 설정 오류는 조기에 드러내야 한다.)
+    - cubrid 백엔드 → URL 미설정/드라이버 불일치, ``sqlalchemy-cubrid``·``pycubrid``
+      미설치, **실 연결 실패** 중 하나라도 해당하면 기동 거부. (인덱스/매니페스트
+      쓰기 실패는 런타임에 best-effort 로 삼키지만, 기동 시 설정 오류는 조기에
+      드러내야 한다.)
+
+    설정만 맞고 서버가 내려가 있으면 기동은 성공한 것처럼 보이고 첫 요청에서야
+    터진다 — 그때는 이미 쓰기가 best-effort 로 삼켜지는 경로라 상태가 조용히
+    유실된다. 그래서 여기서 커넥션을 한 번 실제로 연다 (#587).
     """
     if storage_backend() != "cubrid":
         return
@@ -160,6 +165,19 @@ def validate_storage_config() -> None:
             "KPUBDATA_BUILDER_STORAGE_BACKEND=cubrid but the pycubrid driver is not "
             "installed; install with: uv sync --extra cubrid (sqlalchemy-cubrid alone "
             "does not pull a driver — ADR 0016 uses sqlalchemy-cubrid[pycubrid])."
+        ) from exc
+    try:
+        # 검증용 커넥션은 즉시 반납하지만 Engine 은 남긴다 — serve 가 이어서 쓰는
+        # 그 풀이므로, 기동 직후 첫 요청이 커넥션을 새로 맺지 않아도 된다.
+        with get_engine().connect():
+            pass
+    except Exception as exc:
+        # 실패한 Engine 을 남겨두면 다음 호출이 같은 죽은 풀을 되쓴다. 폐기해서
+        # 재시도가 URL 부터 다시 읽도록 한다.
+        dispose_engine()
+        raise RuntimeError(
+            f"{_BACKEND_ENV}=cubrid but the CUBRID server at {_CUBRID_URL_ENV} is not "
+            f"reachable; refusing to start. Underlying error: {exc}"
         ) from exc
 
 
