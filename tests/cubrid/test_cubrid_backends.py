@@ -222,23 +222,10 @@ def test_artifact_store_manifest_authoritative(tmp_path, engine) -> None:  # typ
     assert {"cbx-run", "cbx-fsonly"} <= ids
 
 
-def test_startup_validation_accepts_a_reachable_backend(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """실 CUBRID CI 에서 serve 기동 전 설정 검증이 통과해야 한다 (#587 fail-closed).
-
-    ``validate_storage_config`` 는 URL 정규화 + 드라이버 설치 여부까지 본다. 로컬
-    SQLite 폴백에서는 검증할 URL 자체가 없으므로 실 CUBRID 잡에서만 의미가 있다.
-    """
-    url = os.environ.get("KPUBDATA_BUILDER_CUBRID_URL")
-    if not url:
-        pytest.skip("real CUBRID URL not configured")
-
-    from kpubdata_builder.store.backend import validate_storage_config
-
-    monkeypatch.setenv("KPUBDATA_BUILDER_STORAGE_BACKEND", "cubrid")
-    monkeypatch.setenv("KPUBDATA_BUILDER_CUBRID_URL", url)
-    validate_storage_config()
+# 기동 게이트의 "정상 연결" 검증은 tests/cubrid/test_cubrid_fail_closed.py 로 옮겼다.
+# validate_storage_config() 가 실 커넥션까지 열게 되면서(#587) 이 자리의 버전은
+# (a) 그 파일의 테스트에 그대로 포섭되고, (b) 전역 Engine 을 폐기하지 않아 뒤따르는
+# 테스트로 새어 나갔다. 폐기 fixture 를 갖춘 쪽으로 단일화한다.
 
 
 def test_startup_validation_refuses_a_bare_cubrid_url(monkeypatch: pytest.MonkeyPatch) -> None:
