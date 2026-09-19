@@ -1,6 +1,8 @@
-"""상태 백엔드 선택과 CUBRID URL 정규화 (ADR 0016).
+"""상태 백엔드 선택, CUBRID URL 정규화, serve 기동 게이트 (ADR 0016).
 
-여기서는 SQLAlchemy 도 CUBRID 도 필요 없다 — 백엔드 선택과 URL 계약만 검증한다.
+여기서는 SQLAlchemy 도 CUBRID 도 필요 없다 — 백엔드 선택과 URL 계약, 그리고
+``validate_storage_config()`` 가 **실 연결에 도달하기 전에** 거부하는 분기만
+검증한다. 연결까지 가는 경로는 ``tests/cubrid/test_cubrid_fail_closed.py``.
 """
 
 from __future__ import annotations
@@ -9,7 +11,12 @@ import logging
 
 import pytest
 
-from kpubdata_builder.store.backend import cubrid_url, normalize_cubrid_url, storage_backend
+from kpubdata_builder.store.backend import (
+    cubrid_url,
+    normalize_cubrid_url,
+    storage_backend,
+    validate_storage_config,
+)
 
 _BACKEND_ENV = "KPUBDATA_BUILDER_STORAGE_BACKEND"
 _URL_ENV = "KPUBDATA_BUILDER_CUBRID_URL"
@@ -85,3 +92,40 @@ class TestCubridUrlFromEnv:
         monkeypatch.setenv(_BACKEND_ENV, "cubrid")
         monkeypatch.setenv(_URL_ENV, f"  cubrid://{_TAIL}  ")
         assert cubrid_url() == f"cubrid+pycubrid://{_TAIL}"
+
+
+class TestValidateStorageConfig:
+    """``serve()`` 기동 게이트의 계약 (#587, ADR 0016).
+
+    여기서 검증하는 분기는 전부 **실 연결 이전**에 끝난다 — 기본 dev 환경
+    (sqlalchemy 미설치 가능)에서도 돌아야 하므로, 연결까지 가는 경로는
+    ``tests/cubrid/test_cubrid_fail_closed.py`` 로 분리했다.
+    """
+
+    def test_is_noop_for_the_default_backend(self) -> None:
+        # sqlite 기본 경로는 optional 의존성 없이 통과해야 한다(무외부의존 계약).
+        assert validate_storage_config() is None
+
+    def test_is_noop_for_explicit_sqlite(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(_BACKEND_ENV, "sqlite")
+        assert validate_storage_config() is None
+
+    def test_refuses_to_start_without_a_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(_BACKEND_ENV, "cubrid")
+        with pytest.raises(RuntimeError, match=_URL_ENV):
+            validate_storage_config()
+
+    @pytest.mark.parametrize("driver", ["cubriddb", "cubrid", "aiopycubrid"])
+    def test_refuses_to_start_on_an_unsupported_driver(
+        self, driver: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # 드라이버 거부는 URL 정규화 단계에서 끝나므로 서버도 sqlalchemy 도 필요 없다.
+        monkeypatch.setenv(_BACKEND_ENV, "cubrid")
+        monkeypatch.setenv(_URL_ENV, f"cubrid+{driver}://{_TAIL}")
+        with pytest.raises(RuntimeError):
+            validate_storage_config()
+
+    def test_refuses_to_start_on_an_unknown_backend(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(_BACKEND_ENV, "postgres")
+        with pytest.raises(RuntimeError, match="must be 'sqlite' or 'cubrid'"):
+            validate_storage_config()
