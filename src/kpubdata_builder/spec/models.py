@@ -35,11 +35,38 @@ class SchemaContract:
         casts: 정규화 시 적용할 컬럼별 캐스팅 (문자열). normalize_table 의 casts 로
             전달. 캐스팅으로 인한 null 손실은 audit=True 로 감지돼 TabularError 로
             표면화된다 (#188).
+        rename: 원 필드명 → canonical 컬럼명 매핑 (#611). 캐스팅보다 먼저 적용되므로
+            dtypes/casts/derived 는 모두 rename 이후의 이름을 가리킨다.
+        derived: 기존 컬럼에서 새 컬럼을 만드는 규칙 (#611). 캐스팅 뒤에 적용된다.
     """
 
     required: tuple[str, ...] = ()
     dtypes: dict[str, str] = field(default_factory=dict)
     casts: dict[str, str] = field(default_factory=dict)
+    rename: dict[str, str] = field(default_factory=dict)
+    derived: tuple[DerivedColumn, ...] = ()
+
+
+#: 지원하는 DerivedColumn.kind 값 (#611). 자유형 표현식 대신 typed rule로 표현한다
+#: — RangeRule/CompareColumnsRule의 관례를 따른다.
+DERIVED_KINDS: tuple[str, ...] = ("date_parts", "join_key")
+
+
+@dataclass(frozen=True)
+class DerivedColumn:
+    """기존 컬럼에서 새 컬럼을 만드는 규칙 (#611).
+
+    속성:
+        name: 만들어질 컬럼명.
+        kind: 파생 방식. ``"date_parts"`` 는 연/월/일 세 컬럼을 Date로 합치고,
+            ``"join_key"`` 는 여러 컬럼을 하나의 문자열 복합키로 합친다.
+        columns: 입력 컬럼명. ``date_parts`` 는 (year, month, day) 순서로 정확히 3개,
+            ``join_key`` 는 1개 이상.
+    """
+
+    name: str
+    kind: str
+    columns: tuple[str, ...]
 
 
 #: 지원하는 SourceRef.kind 값 (#498). 알 수 없는 kind는 loader가 즉시 거부한다.
@@ -344,6 +371,8 @@ class BuildSpec:
 
 __all__ = [
     "BuildSpec",
+    "DERIVED_KINDS",
+    "DerivedColumn",
     "CompositionSpec",
     "ExportTarget",
     "JoinSpec",

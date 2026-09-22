@@ -22,6 +22,7 @@ from .models import (
     BuildSpec,
     CompareColumnsRule,
     CompositionSpec,
+    DerivedColumn,
     ExportTarget,
     JoinSpec,
     JsonValue,
@@ -381,7 +382,37 @@ def _parse_schema(value: object, *, prefix: str) -> SchemaContract:
         dict[str, str],
         _parse_string_dict(mapping.get("casts", {}), field_name=f"{prefix}.schema.casts"),
     )
-    return SchemaContract(required=required, dtypes=dtypes, casts=casts)
+    rename = cast(
+        dict[str, str],
+        _parse_string_dict(mapping.get("rename", {}), field_name=f"{prefix}.schema.rename"),
+    )
+    derived = _parse_derived(mapping.get("derived", []), prefix=f"{prefix}.schema.derived")
+    return SchemaContract(
+        required=required, dtypes=dtypes, casts=casts, rename=rename, derived=derived
+    )
+
+
+def _parse_derived(value: object, *, prefix: str) -> tuple[DerivedColumn, ...]:
+    """schema.derived 배열을 DerivedColumn 튜플로 변환한다 (#611).
+
+    구조만 검사한다 — kind 어휘와 컬럼 개수의 의미 검증은 validator.py 가 한다.
+    """
+    if not isinstance(value, list):
+        raise TypeError(f"{prefix} must be a list")
+    rules: list[DerivedColumn] = []
+    for index, item in enumerate(cast(list[object], value)):
+        mapping = _ensure_mapping(item, field_name=f"{prefix}[{index}]")
+        name = mapping.get("name")
+        kind = mapping.get("kind")
+        if not isinstance(name, str) or not name:
+            raise TypeError(f"{prefix}[{index}].name must be a non-empty string")
+        if not isinstance(kind, str) or not kind:
+            raise TypeError(f"{prefix}[{index}].kind must be a non-empty string")
+        columns = _parse_string_list(
+            mapping.get("columns", []), field_name=f"{prefix}[{index}].columns"
+        )
+        rules.append(DerivedColumn(name=name, kind=kind, columns=columns))
+    return tuple(rules)
 
 
 def _parse_exports(value: object) -> tuple[ExportTarget, ...]:

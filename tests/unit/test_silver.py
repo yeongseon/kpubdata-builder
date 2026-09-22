@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import cast
 
@@ -17,6 +17,7 @@ from kpubdata_builder.stages.silver import (
     SilverDataset,
     ValidationResult,
     build_silver_dataset,
+    normalize_table,
     persist_silver_dataset,
 )
 from kpubdata_builder.tabular import (
@@ -297,3 +298,126 @@ class TestPersistSilverDataset:
         )
         rows = cast(list[dict[str, JsonValue]], preview["rows"])
         assert rows[0]["ts"] == "2025-01-01T12:30:00.123456"
+
+
+class TestColumnRename:
+    """원 API 필드명을 canonical 컬럼명으로 바꾼다 (#611).
+
+    논문 실험의 Silver 계층은 ``sggCd`` 같은 원 필드명을 ``district_code`` 로
+    바꾼 canonical dataset이어야 한다. 지금까지 BuildSpec 경로에는 rename 수단이
+    없어 배포용 스크립트(scripts/pipeline/transform.py)에만 존재했다.
+    """
+
+    def test_renames_declared_columns(self) -> None:
+        bronze = _bronze(({"sggCd": "11110", "aptNm": "은마"},))
+
+        table = normalize_table(bronze, rename={"sggCd": "district_code", "aptNm": "apt_name"})
+
+        assert table.columns == ["district_code", "apt_name"]
+
+    def test_missing_source_column_surfaces_as_tabular_error(self) -> None:
+        # R2(source evolution)는 상류 필드가 사라진 상황을 schema breakage로 세야
+        # 한다. polars의 ColumnNotFoundError가 그대로 새어 나가면 어떤 컬럼이
+        # 사라졌는지 호출자가 읽을 수 없다.
+        from kpubdata_builder.errors import TabularError
+
+        bronze = _bronze(({"sggCd": "11110"},))
+
+        with pytest.raises(TabularError) as exc:
+            normalize_table(bronze, rename={"aptNm": "apt_name"})
+
+        assert "aptNm" in str(exc.value)
+
+
+class TestFormattedNumericCast:
+    """천단위 구분자가 섞인 금액 문자열을 숫자로 캐스팅한다 (#611).
+
+    ``dealAmount: int`` 를 선언하면 ``"120,000"`` 이 전부 null이 되어 #188의
+    data-loss 가드가 빌드를 실패시킨다. 원천 공공데이터가 금액을 이 형식으로
+    주므로, 선언으로 표현할 수단이 없으면 Silver 빌드 자체가 성립하지 않는다.
+    """
+
+    def test_comma_separated_amount_casts_to_integer(self) -> None:
+        bronze = _bronze(({"dealAmount": "120,000"}, {"dealAmount": "82,500"}))
+
+        table = normalize_table(bronze, casts={"dealAmount": "int_comma"})
+
+        assert table["dealAmount"].to_list() == [120000, 82500]
+
+
+class TestDerivedColumns:
+    """기존 컬럼에서 새 컬럼을 만든다 (#611).
+
+    원천 데이터는 거래일을 연/월/일 세 컬럼으로 분리해 주고, 데이터셋 간 조인에
+    쓸 키도 제공하지 않는다. 둘 다 선언으로 표현할 수 없으면 Silver가 canonical
+    dataset이 되지 못한다.
+    """
+
+    def test_date_parts_compose_a_date_column(self) -> None:
+        from kpubdata_builder.spec import DerivedColumn
+
+        bronze = _bronze(({"dealYear": "2026", "dealMonth": "9", "dealDay": "8"},))
+
+        table = normalize_table(
+            bronze,
+            derived=(
+                DerivedColumn(
+                    name="deal_date",
+                    kind="date_parts",
+                    columns=("dealYear", "dealMonth", "dealDay"),
+                ),
+            ),
+        )
+
+        assert table["deal_date"].to_list() == [date(2026, 9, 8)]
+
+    def test_join_key_concatenates_columns_into_one(self) -> None:
+        # T3(매매×전월세)는 4개 키로 조인해야 하는데 composition의 equi-join은
+        # 단일 컬럼만 받는다. Silver에서 복합키를 만들어 두면 compose.py를
+        # 건드리지 않고 같은 조인을 표현할 수 있다.
+        from kpubdata_builder.spec import DerivedColumn
+
+        bronze = _bronze(({"district_code": "11110", "year_month": "202609"},))
+
+        table = normalize_table(
+            bronze,
+            derived=(
+                DerivedColumn(
+                    name="join_key",
+                    kind="join_key",
+                    columns=("district_code", "year_month"),
+                ),
+            ),
+        )
+
+        assert table["join_key"].to_list() == ["11110|202609"]
+
+
+class TestSchemaContractReachesNormalization:
+    """BuildSpec의 rename/derived 선언이 실제 Silver 테이블에 도달한다 (#611).
+
+    normalize_table이 기능을 갖고 있어도 build_silver_dataset이 넘겨주지 않으면
+    선언은 아무 효과가 없다. 그 경계를 고정한다.
+    """
+
+    def test_build_silver_dataset_applies_rename_and_derived(self) -> None:
+        from kpubdata_builder.spec import DerivedColumn
+
+        bronze = _bronze(
+            ({"sggCd": "11110", "dealYear": "2026", "dealMonth": "9", "dealDay": "8"},)
+        )
+
+        dataset = build_silver_dataset(
+            bronze,
+            rename={"sggCd": "district_code"},
+            derived=(
+                DerivedColumn(
+                    name="deal_date",
+                    kind="date_parts",
+                    columns=("dealYear", "dealMonth", "dealDay"),
+                ),
+            ),
+        )
+
+        assert "district_code" in dataset.table.columns
+        assert dataset.table["deal_date"].to_list() == [date(2026, 9, 8)]

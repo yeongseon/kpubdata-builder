@@ -660,3 +660,43 @@ class TestSourceKinds:
         assert preview.source_key == "feed"
         assert preview.status == "ok"
         assert preview.preview.total_rows == 2
+
+
+def test_preview_applies_the_same_transform_rules_as_build() -> None:
+    """Preview와 Build가 같은 선언에 같은 컬럼을 보여준다 (#611).
+
+    Preview는 사용자가 Build 전에 결과를 확인하는 경로다. rename/derived가
+    Preview에만 빠지면 "미리보기에는 없던 컬럼이 빌드 산출물에는 있는" 상태가
+    되어, #486이 세운 Preview↔Build 동일 판정 원칙이 깨진다.
+    """
+    from kpubdata_builder.spec.models import DerivedColumn
+
+    spec = _spec(
+        SourceRef(
+            provider="datago",
+            dataset="apt_trade",
+            schema=SchemaContract(
+                rename={"sggCd": "district_code"},
+                derived=(
+                    DerivedColumn(
+                        name="deal_date",
+                        kind="date_parts",
+                        columns=("dealYear", "dealMonth", "dealDay"),
+                    ),
+                ),
+            ),
+        )
+    )
+    client = _FakeClient(
+        {
+            "datago.apt_trade": [
+                {"sggCd": "11110", "dealYear": "2026", "dealMonth": "9", "dealDay": "8"}
+            ]
+        }
+    )
+
+    result = preview_build(spec, client=client, limit=5)
+
+    columns = [c.name for c in result.previews[0].schema.columns]
+    assert "district_code" in columns
+    assert "deal_date" in columns
