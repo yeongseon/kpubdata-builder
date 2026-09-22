@@ -337,6 +337,16 @@ class TestFormattedNumericCast:
     주므로, 선언으로 표현할 수단이 없으면 Silver 빌드 자체가 성립하지 않는다.
     """
 
+    def test_comma_separated_decimal_casts_to_float(self) -> None:
+        # 면적·금액 컬럼은 1,000 이상일 때만 구분자가 붙는 경우가 있다. 같은 컬럼
+        # 안에서 표기가 갈리므로, 구분자를 처리하지 않으면 큰 값만 결측이 되어
+        # 평균이 아래로 왜곡된다.
+        bronze = _bronze(({"area": "84.5"}, {"area": "2,436.26"}))
+
+        table = normalize_table(bronze, casts={"area": "float_comma"})
+
+        assert table["area"].to_list() == [84.5, 2436.26]
+
     def test_comma_separated_amount_casts_to_integer(self) -> None:
         bronze = _bronze(({"dealAmount": "120,000"}, {"dealAmount": "82,500"}))
 
@@ -462,3 +472,73 @@ class TestSchemaContractReachesNormalization:
 
         assert "district_code" in dataset.table.columns
         assert dataset.table["deal_date"].to_list() == [date(2026, 9, 8)]
+
+
+class TestSourceTypeDeclaration:
+    """원천 컬럼을 어떤 타입으로 읽을지 선언한다 (#611 후속).
+
+    국토부 실거래가는 같은 컬럼을 레코드마다 다른 타입으로 준다 — ``jibun``은
+    대부분 문자열이지만 일부 레코드에서 정수다. records_to_dataframe()은 조용한
+    강제변환을 거부하고 TabularError를 던지므로(#187), 선언 없이는 Silver 빌드가
+    성립하지 않는다. 거부를 없애는 것이 아니라, 선언된 컬럼만 허용한다.
+    """
+
+    def test_mixed_type_column_without_declaration_still_fails(self) -> None:
+        from kpubdata_builder.errors import TabularError
+
+        bronze = _bronze(({"jibun": "702"}, {"jibun": 69}))
+
+        with pytest.raises(TabularError, match="heterogeneous"):
+            normalize_table(bronze)
+
+    def test_declared_column_is_read_as_text(self) -> None:
+        bronze = _bronze(({"jibun": "702"}, {"jibun": 69}))
+
+        table = normalize_table(bronze, read_as={"jibun": "str"})
+
+        assert table["jibun"].to_list() == ["702", "69"]
+
+    def test_declaration_preserves_nulls(self) -> None:
+        # aptDong은 65%가 null이다. 선언이 null을 "None" 문자열로 만들면
+        # 결측률 측정이 통째로 망가진다.
+        bronze = _bronze(({"aptDong": "105"}, {"aptDong": 205}, {"aptDong": None}))
+
+        table = normalize_table(bronze, read_as={"aptDong": "str"})
+
+        assert table["aptDong"].to_list() == ["105", "205", None]
+
+
+class TestNullTokenNormalization:
+    """결측을 나타내는 원천 표기를 null로 바꾼다 (#611 후속).
+
+    결측을 빈 문자열과 None 두 가지로 표기하는 소스가 있다. 빈 문자열을 그대로
+    두고 숫자 캐스팅을 선언하면 #188의 data-loss 가드가 빌드를 실패시킨다 — 값이
+    null로 떨어졌기 때문인데, 그 값은 애초에 데이터가 아니라 "없음"의 표기였다.
+
+    결측을 지우는 것이 아니라 *하나의 표기로 모으는* 것이다. 몇 개가 결측인지는
+    그대로 남아 품질 지표가 센다.
+    """
+
+    def test_empty_string_blocks_a_numeric_cast_without_declaration(self) -> None:
+        from kpubdata_builder.errors import TabularError
+
+        bronze = _bronze(({"area": "84.5"}, {"area": ""}))
+
+        with pytest.raises(TabularError, match="data loss"):
+            normalize_table(bronze, casts={"area": "float"})
+
+    def test_declared_null_token_becomes_null_before_casting(self) -> None:
+        bronze = _bronze(({"area": "84.5"}, {"area": ""}))
+
+        table = normalize_table(bronze, casts={"area": "float"}, null_tokens=("",))
+
+        assert table["area"].to_list() == [84.5, None]
+
+    def test_null_tokens_do_not_touch_undeclared_values(self) -> None:
+        # "-"를 결측으로 선언하지 않았다면 그대로 둔다. 무엇을 결측으로 볼지는
+        # 데이터셋마다 다르고, builder가 임의로 정하면 측정 대상이 오염된다.
+        bronze = _bronze(({"grade": "-"}, {"grade": "A"}))
+
+        table = normalize_table(bronze, null_tokens=("",))
+
+        assert table["grade"].to_list() == ["-", "A"]

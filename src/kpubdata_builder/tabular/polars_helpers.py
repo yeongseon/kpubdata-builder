@@ -27,6 +27,7 @@ DtypeSpec = str | pl.DataType | type[pl.DataType]
 #: 되어 #188의 data-loss 가드가 빌드를 실패시킨다.
 _FORMATTED_CASTS: Mapping[str, pl.DataType] = {
     "int_comma": pl.Int64(),
+    "float_comma": pl.Float64(),
 }
 
 _TRUE_TOKENS = {"1", "t", "true", "y", "yes"}
