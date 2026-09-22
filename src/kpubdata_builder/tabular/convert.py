@@ -103,7 +103,33 @@ def _unify(a: object, b: object) -> object:
     return _CONFLICT
 
 
-def records_to_dataframe(records: Sequence[dict[str, JsonValue]]) -> pl.DataFrame:
+def _apply_read_as(
+    record: dict[str, JsonValue], declared: Mapping[str, str]
+) -> dict[str, JsonValue]:
+    """선언된 컬럼의 값을 해당 타입으로 바꾼 사본을 만든다.
+
+    null은 null로 남긴다 — 결측을 ``"None"`` 문자열로 만들면 결측률 측정이 통째로
+    어긋난다.
+    """
+    converted = dict(record)
+    for column, dtype in declared.items():
+        if column not in converted:
+            continue
+        value = converted[column]
+        if value is None:
+            continue
+        if dtype == "str":
+            converted[column] = str(value)
+        else:
+            raise TabularError(f"unsupported read_as type {dtype!r} for column {column!r}")
+    return converted
+
+
+def records_to_dataframe(
+    records: Sequence[dict[str, JsonValue]],
+    *,
+    read_as: Mapping[str, str] | None = None,
+) -> pl.DataFrame:
     """원시 레코드 매핑을 Polars DataFrame으로 변환한다.
 
     Polars 자동 추론에만 의존하면 혼합 타입 컬럼이 검증 전에 조용히 강제 변환되어
@@ -115,6 +141,11 @@ def records_to_dataframe(records: Sequence[dict[str, JsonValue]]) -> pl.DataFram
 
     매개변수:
         records: JSON 호환 레코드 시퀀스.
+        read_as: 원천 컬럼을 읽을 타입 선언 (``{컬럼: "str"}``). 공공데이터는 같은
+            컬럼을 레코드마다 다른 타입으로 주는 경우가 있다(예: 지번이 대부분
+            문자열이지만 일부 레코드에서 정수). 선언된 컬럼만 해당 타입으로 읽고,
+            선언되지 않은 혼합 타입은 그대로 거부한다 — 조용한 강제변환을 막는
+            #187의 계약은 유지된다.
 
     반환값:
         pl.DataFrame: 입력 레코드의 컬럼 구조를 반영한 DataFrame.
@@ -122,6 +153,10 @@ def records_to_dataframe(records: Sequence[dict[str, JsonValue]]) -> pl.DataFram
     예외:
         TabularError: 이질 타입이 섞였거나 정수 정밀도 손실이 발생할 수 있는 경우.
     """
+    declared = dict(read_as or {})
+    if declared:
+        records = [_apply_read_as(record, declared) for record in records]
+
     shapes: dict[str, object] = {}
     conflicts: list[str] = []
     numeric_kinds: dict[str, set[str]] = {}

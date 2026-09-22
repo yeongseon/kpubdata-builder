@@ -31,6 +31,8 @@ def normalize_table(
     casts: Mapping[str, DtypeSpec] | None = None,
     rename: Mapping[str, str] | None = None,
     derived: Sequence[DerivedColumn] = (),
+    read_as: Mapping[str, str] | None = None,
+    null_tokens: Sequence[str] = (),
 ) -> pl.DataFrame:
     """Bronze raw records를 테이블로 변환하고 선언된 캐스팅만 적용한다.
 
@@ -46,6 +48,13 @@ def normalize_table(
         rename: 원 필드명 → canonical 컬럼명 매핑 (#611). 캐스팅보다 먼저 적용된다.
         derived: 기존 컬럼에서 새 컬럼을 만드는 규칙 (#611). 캐스팅 뒤에 적용된다 —
             파생 규칙이 캐스팅된 값을 읽을 수 있어야 하기 때문이다.
+        read_as: 원천 컬럼을 읽을 타입 선언 (``{컬럼: "str"}``). 레코드마다 타입이
+            다른 원천 컬럼을 선언으로 처리한다. 키는 rename *이전* 의 원 필드명이다 —
+            테이블이 만들어지기 전에 적용되기 때문이다.
+        null_tokens: 결측을 나타내는 원천 표기 (예: ``("",)``). 캐스팅 전에 null로
+            모은다. 결측을 지우는 것이 아니라 표기를 하나로 맞추는 것이며, 선언되지
+            않은 값은 건드리지 않는다 — 무엇을 결측으로 볼지는 데이터셋마다 다르고,
+            builder가 임의로 정하면 품질 측정 대상이 오염된다.
 
     반환값:
         pl.DataFrame: 정규화된 테이블.
@@ -53,7 +62,7 @@ def normalize_table(
     예외:
         TabularError: 선언된 캐스팅이 값을 null로 떨어뜨려 데이터가 손실된 경우.
     """
-    table = records_to_dataframe(bronze.raw_records)
+    table = records_to_dataframe(bronze.raw_records, read_as=read_as)
     if rename:
         missing = [source for source in rename if source not in table.columns]
         if missing:
@@ -61,6 +70,18 @@ def normalize_table(
                 f"declared rename refers to columns absent from the source: {missing}"
             )
         table = table.rename(dict(rename))
+    if null_tokens:
+        tokens = list(null_tokens)
+        table = table.with_columns(
+            [
+                pl.when(pl.col(name).cast(pl.Utf8).is_in(tokens))
+                .then(None)
+                .otherwise(pl.col(name))
+                .alias(name)
+                for name, dtype in table.schema.items()
+                if dtype == pl.Utf8
+            ]
+        )
     if casts:
         result = cast_columns(table, casts, audit=True)
         if result.has_nulls_introduced:

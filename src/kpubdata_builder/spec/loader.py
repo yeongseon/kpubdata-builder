@@ -387,8 +387,21 @@ def _parse_schema(value: object, *, prefix: str) -> SchemaContract:
         _parse_string_dict(mapping.get("rename", {}), field_name=f"{prefix}.schema.rename"),
     )
     derived = _parse_derived(mapping.get("derived", []), prefix=f"{prefix}.schema.derived")
+    read_as = cast(
+        dict[str, str],
+        _parse_string_dict(mapping.get("read_as", {}), field_name=f"{prefix}.schema.read_as"),
+    )
+    null_tokens = _parse_string_list(
+        mapping.get("null_tokens", []), field_name=f"{prefix}.schema.null_tokens"
+    )
     return SchemaContract(
-        required=required, dtypes=dtypes, casts=casts, rename=rename, derived=derived
+        required=required,
+        dtypes=dtypes,
+        casts=casts,
+        rename=rename,
+        derived=derived,
+        read_as=read_as,
+        null_tokens=null_tokens,
     )
 
 
