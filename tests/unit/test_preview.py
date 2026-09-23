@@ -12,7 +12,13 @@ import pytest
 import kpubdata_builder.pipeline.preview as preview_module
 from kpubdata_builder.errors import ValidationError
 from kpubdata_builder.pipeline import PreviewResult, preview_build
-from kpubdata_builder.spec import BuildSpec, ExportTarget, JsonValue, SourceRef
+from kpubdata_builder.spec import (
+    BuildSpec,
+    ColumnNullTokens,
+    ExportTarget,
+    JsonValue,
+    SourceRef,
+)
 from kpubdata_builder.spec.models import SchemaContract
 from kpubdata_builder.stages.silver.build import build_silver_dataset
 from kpubdata_builder.tabular import PreviewSlice, SchemaInfo
@@ -728,7 +734,7 @@ class TestPreviewAppliesSilverDeclarations:
 
     def _schema(self) -> SchemaContract:
         return SchemaContract(
-            column_null_tokens={"성별": ("",)},
+            column_null_tokens={"성별": ColumnNullTokens(tokens=("",))},
             coalesce={"move_meter": ("이동거리", "이동거리(M)")},
             rename={"대여소번호": "station_no"},
             zfill={"station_no": 5},

@@ -88,8 +88,11 @@ def canonical_spec_mapping(spec: BuildSpec) -> dict[str, JsonValue]:
                     cast(
                         JsonValue,
                         {
-                            column: list(tokens)
-                            for column, tokens in source.schema.column_null_tokens.items()
+                            column: {
+                                "tokens": list(rule.tokens),
+                                "on_absent": rule.on_absent,
+                            }
+                            for column, rule in source.schema.column_null_tokens.items()
                         },
                     )
                 ),

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-from ...spec import DerivedColumn
+from ...spec import ColumnNullTokens, DerivedColumn
 from ...tabular import DEFAULT_PREVIEW_LIMIT
 from ...tabular.polars_helpers import DtypeSpec
 from ..bronze.models import BronzeArtifact
@@ -31,7 +31,7 @@ def build_silver_dataset(
     derived: Sequence[DerivedColumn] = (),
     read_as: Mapping[str, str] | None = None,
     null_tokens: Sequence[str] = (),
-    column_null_tokens: Mapping[str, Sequence[str]] | None = None,
+    column_null_tokens: Mapping[str, ColumnNullTokens] | None = None,
     coalesce: Mapping[str, Sequence[str]] | None = None,
     zfill: Mapping[str, int] | None = None,
     column_dtypes: Mapping[str, DtypeSpec] | None = None,

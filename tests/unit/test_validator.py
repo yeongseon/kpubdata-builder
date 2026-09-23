@@ -7,6 +7,7 @@ import pytest
 from kpubdata_builder import ValidationError
 from kpubdata_builder.spec import (
     BuildSpec,
+    ColumnNullTokens,
     DerivedColumn,
     ExportTarget,
     SchemaContract,
@@ -366,9 +367,25 @@ def test_validate_spec_rejects_non_positive_zfill_width(width: int) -> None:
 
 def test_validate_spec_rejects_empty_column_null_tokens() -> None:
     # #623 — 선언을 써 두고 동작하지 않는 상태가 가장 나쁘다.
-    spec = _spec_with_schema(SchemaContract(column_null_tokens={"gender": ()}))
+    spec = _spec_with_schema(
+        SchemaContract(column_null_tokens={"gender": ColumnNullTokens(tokens=())})
+    )
 
     with pytest.raises(ValidationError) as exc:
         validate_spec(spec)
 
     assert "gender" in str(exc.value)
+
+
+def test_validate_spec_rejects_unknown_on_absent_policy() -> None:
+    # #623 — 알 수 없는 정책이 런타임에서야 "error가 아니니 ignore"로 읽히면 안 된다.
+    spec = _spec_with_schema(
+        SchemaContract(
+            column_null_tokens={"gender": ColumnNullTokens(tokens=("",), on_absent="skip")}
+        )
+    )
+
+    with pytest.raises(ValidationError) as exc:
+        validate_spec(spec)
+
+    assert "skip" in str(exc.value)

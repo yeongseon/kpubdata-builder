@@ -20,6 +20,35 @@ JsonPrimitive: TypeAlias = str | int | float | bool | None
 JsonValue: TypeAlias = JsonPrimitive | list["JsonValue"] | dict[str, "JsonValue"]
 
 
+#: column_null_tokens 의 컬럼이 없을 때 무엇을 할지 (#623).
+ON_ABSENT_POLICIES: tuple[str, ...] = ("error", "ignore")
+
+
+@dataclass(frozen=True)
+class ColumnNullTokens:
+    """한 컬럼의 결측 표기 선언과, 그 컬럼이 없을 때의 정책 (#623).
+
+    "이 컬럼에서 무엇이 결측인가"와 "이 컬럼이 반드시 있어야 하는가"는 **별개의
+    계약**이다. 둘을 한 선언이 함께 주장하면, 결측 표기를 적어 두었다는 이유만으로
+    모든 세대에 그 컬럼이 있어야 한다고 말하게 된다. 그래서 presence 정책을 따로
+    둔다.
+
+    속성:
+        tokens: 이 컬럼에서 결측으로 볼 원천 표기. 전역 ``null_tokens`` 에 더해진다.
+        on_absent: 컬럼이 없을 때. ``"error"`` (기본값)는 오타와 schema drift를
+            잡는다 — 선언이 조용한 무동작이 되면 결측이 값으로 남은 채 품질 지표가
+            그것을 세지 않는다. ``"ignore"`` 는 **이 규칙의 적용을 건너뛴다.**
+
+    ``"ignore"`` 가 그 컬럼을 optional로 만들지는 않는다. ``rename``/``zfill``/
+    ``derived`` 는 여전히 선언된 컬럼의 존재를 요구하고, 그것은 그 선언들 자신의 계약
+    의미다. ``on_absent`` 가 끊는 것은 "결측 표기를 선언했다 = 그 컬럼이 반드시
+    있다"는 결합 하나뿐이다.
+    """
+
+    tokens: tuple[str, ...] = ()
+    on_absent: str = "error"
+
+
 @dataclass(frozen=True)
 class SchemaContract:
     """소스 스키마 계약 — Silver 검증/정규화 규칙 (#437).
@@ -45,7 +74,8 @@ class SchemaContract:
         column_null_tokens: 특정 컬럼에서만 인정하는 결측 표기 (#623). 전역
             ``null_tokens`` 에 **더해서** 적용된다. 같은 의미의 결측이 컬럼마다
             다르게 표기되는 원천이 있는데, 전역 선언만으로는 다른 컬럼의 의미를
-            바꾸지 않고 그것을 표현할 수 없다. 키는 rename *이전* 의 원 필드명이다.
+            바꾸지 않고 그것을 표현할 수 없다. 키는 rename *이전* 의 원 필드명이고,
+            값은 :class:`ColumnNullTokens` 다.
         coalesce: 세대별 alias 컬럼을 하나의 canonical 컬럼으로 모으는 규칙 (#620).
             ``{canonical: (후보1, 후보2, ...)}``. ``rename`` 과 달리 여러 원본이 한
             이름으로 모인다. 한 행에서 후보 둘 이상이 non-null이고 값이 다르면
@@ -69,7 +99,7 @@ class SchemaContract:
     derived: tuple[DerivedColumn, ...] = ()
     read_as: dict[str, str] = field(default_factory=dict)
     null_tokens: tuple[str, ...] = ()
-    column_null_tokens: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    column_null_tokens: dict[str, ColumnNullTokens] = field(default_factory=dict)
     coalesce: dict[str, tuple[str, ...]] = field(default_factory=dict)
     zfill: dict[str, int] = field(default_factory=dict)
 

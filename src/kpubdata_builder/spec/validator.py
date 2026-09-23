@@ -23,6 +23,7 @@ from ..exporters import EXPORTER_REGISTRY
 from ..tabular.polars_helpers import _FORMATTED_CASTS, _NAMED_DTYPES, TEXT_CASTS
 from .models import (
     DERIVED_KINDS,
+    ON_ABSENT_POLICIES,
     READ_AS_TYPES,
     SOURCE_FILE_FORMATS,
     SOURCE_KINDS,
@@ -30,6 +31,7 @@ from .models import (
     SOURCE_URL_METHODS,
     UPLOAD_ID_PATTERN,
     BuildSpec,
+    ColumnNullTokens,
     DerivedColumn,
     SourceRef,
 )
@@ -282,7 +284,7 @@ def _schema_problems(spec: BuildSpec) -> list[ValidationProblem]:
 
 
 def _column_null_token_problems(
-    column_null_tokens: dict[str, tuple[str, ...]], *, prefix: str
+    column_null_tokens: dict[str, ColumnNullTokens], *, prefix: str
 ) -> list[ValidationProblem]:
     """schema.column_null_tokens 선언 자체의 유효성을 검증한다 (#623).
 
@@ -290,14 +292,24 @@ def _column_null_token_problems(
     상태가 가장 나쁘다 — 결측이 값으로 남은 채 품질 지표가 그것을 세지 않는다.
     """
     problems: list[ValidationProblem] = []
-    for column, tokens in column_null_tokens.items():
-        if not tokens:
+    for column, rule in column_null_tokens.items():
+        field = f"{prefix}.schema.column_null_tokens.{column}"
+        if not rule.tokens:
             problems.append(
                 _p(
                     "empty_column_null_tokens",
-                    f"{prefix}.schema.column_null_tokens.{column}",
+                    field,
                     f"column_null_tokens for column {column!r} declares no tokens",
                     hint="List the source spellings that mean 'missing' in this column",
+                )
+            )
+        if rule.on_absent not in ON_ABSENT_POLICIES:
+            problems.append(
+                _p(
+                    "unknown_on_absent_policy",
+                    f"{field}.on_absent",
+                    f"unknown on_absent policy {rule.on_absent!r} for column {column!r}",
+                    hint=f"Use one of: {', '.join(ON_ABSENT_POLICIES)}",
                 )
             )
     return problems

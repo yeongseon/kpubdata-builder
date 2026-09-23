@@ -12,6 +12,7 @@ import polars as pl
 import pytest
 
 from kpubdata_builder.errors import TabularError
+from kpubdata_builder.spec import ColumnNullTokens as CNT
 from kpubdata_builder.spec import JsonValue
 from kpubdata_builder.stages.bronze.models import BronzeArtifact, utc_now
 from kpubdata_builder.stages.silver import (
@@ -525,7 +526,7 @@ class TestColumnNullTokens:
         bronze = _bronze(({"gender": "", "station": ""}, {"gender": "TOKEN", "station": "x"}))
 
         table = normalize_table(
-            bronze, null_tokens=("TOKEN",), column_null_tokens={"gender": ("",)}
+            bronze, null_tokens=("TOKEN",), column_null_tokens={"gender": CNT(tokens=("",))}
         )
 
         # gender는 둘 다 결측, station의 빈 문자열은 값으로 남는다.
@@ -537,7 +538,7 @@ class TestColumnNullTokens:
         bronze = _bronze(({"gender": "TOKEN"}, {"gender": ""}, {"gender": "F"}))
 
         table = normalize_table(
-            bronze, null_tokens=("TOKEN",), column_null_tokens={"gender": ("",)}
+            bronze, null_tokens=("TOKEN",), column_null_tokens={"gender": CNT(tokens=("",))}
         )
 
         assert table["gender"].to_list() == [None, None, "F"]
@@ -545,7 +546,7 @@ class TestColumnNullTokens:
     def test_works_without_any_global_tokens(self) -> None:
         bronze = _bronze(({"gender": ""}, {"station": ""}))
 
-        table = normalize_table(bronze, column_null_tokens={"gender": ("",)})
+        table = normalize_table(bronze, column_null_tokens={"gender": CNT(tokens=("",))})
 
         assert table["gender"].to_list() == [None, None]
         assert table["station"].to_list() == [None, ""]
@@ -555,19 +556,47 @@ class TestColumnNullTokens:
         bronze = _bronze(({"gender": ""},))
 
         with pytest.raises(TabularError, match="absent from the source"):
-            normalize_table(bronze, column_null_tokens={"gendr": ("",)})
+            normalize_table(bronze, column_null_tokens={"gendr": CNT(tokens=("",))})
+
+    def test_absent_column_is_ignored_when_declared_optional(self) -> None:
+        """결측 표기를 적어 둔 것이 그 컬럼이 반드시 있어야 한다는 주장은 아니다.
+
+        원천이 진화해 컬럼이 사라질 수 있고, 그 부재 자체는 계약을 깨지 않는다.
+        """
+        bronze = _bronze(({"other": "x"},))
+
+        table = normalize_table(
+            bronze, column_null_tokens={"gender": CNT(tokens=("",), on_absent="ignore")}
+        )
+
+        assert table.columns == ["other"]
+
+    def test_optional_column_still_gets_its_tokens_when_present(self) -> None:
+        bronze = _bronze(({"gender": ""}, {"gender": "F"}))
+
+        table = normalize_table(
+            bronze, column_null_tokens={"gender": CNT(tokens=("",), on_absent="ignore")}
+        )
+
+        assert table["gender"].to_list() == [None, "F"]
+
+    def test_shorthand_default_is_error(self) -> None:
+        bronze = _bronze(({"other": "x"},))
+
+        with pytest.raises(TabularError, match="on_absent: ignore"):
+            normalize_table(bronze, column_null_tokens={"gender": CNT(tokens=("",))})
 
     def test_non_string_column_fails(self) -> None:
         bronze = _bronze(({"use_count": 1},))
 
         with pytest.raises(TabularError, match="non-string"):
-            normalize_table(bronze, column_null_tokens={"use_count": ("0",)})
+            normalize_table(bronze, column_null_tokens={"use_count": CNT(tokens=("0",))})
 
     def test_all_null_column_is_allowed(self) -> None:
         """세대가 섞인 스냅샷에서 '컬럼은 있는데 값이 전부 없음'은 정상이다."""
         bronze = _bronze(({"gender": None}, {"gender": None}))
 
-        table = normalize_table(bronze, column_null_tokens={"gender": ("",)})
+        table = normalize_table(bronze, column_null_tokens={"gender": CNT(tokens=("",))})
 
         assert table["gender"].to_list() == [None, None]
 
@@ -576,7 +605,7 @@ class TestColumnNullTokens:
         bronze = _bronze(({"a": "", "b": "3"},))
 
         table = normalize_table(
-            bronze, column_null_tokens={"a": ("",)}, coalesce={"merged": ("a", "b")}
+            bronze, column_null_tokens={"a": CNT(tokens=("",))}, coalesce={"merged": ("a", "b")}
         )
 
         assert table["merged"].to_list() == ["3"]
@@ -585,7 +614,7 @@ class TestColumnNullTokens:
         bronze = _bronze(({"성별": ""},))
 
         table = normalize_table(
-            bronze, column_null_tokens={"성별": ("",)}, rename={"성별": "gender"}
+            bronze, column_null_tokens={"성별": CNT(tokens=("",))}, rename={"성별": "gender"}
         )
 
         assert table["gender"].to_list() == [None]

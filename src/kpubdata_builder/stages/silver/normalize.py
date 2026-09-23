@@ -15,7 +15,7 @@ from collections.abc import Mapping, Sequence
 import polars as pl
 
 from ...errors import TabularError
-from ...spec import DerivedColumn
+from ...spec import ColumnNullTokens, DerivedColumn
 from ...tabular.convert import records_to_dataframe
 from ...tabular.polars_helpers import (
     YEAR_MONTH_COMPACT,
@@ -38,7 +38,7 @@ def normalize_table(
     derived: Sequence[DerivedColumn] = (),
     read_as: Mapping[str, str] | None = None,
     null_tokens: Sequence[str] = (),
-    column_null_tokens: Mapping[str, Sequence[str]] | None = None,
+    column_null_tokens: Mapping[str, ColumnNullTokens] | None = None,
     coalesce: Mapping[str, Sequence[str]] | None = None,
     zfill: Mapping[str, int] | None = None,
 ) -> pl.DataFrame:
@@ -117,7 +117,7 @@ def normalize_table(
 def _apply_null_tokens(
     table: pl.DataFrame,
     null_tokens: Sequence[str],
-    column_null_tokens: Mapping[str, Sequence[str]],
+    column_null_tokens: Mapping[str, ColumnNullTokens],
 ) -> pl.DataFrame:
     """결측 표기를 null로 모은다. 전역 선언 + 컬럼별 선언 (#620, #623).
 
@@ -132,16 +132,25 @@ def _apply_null_tokens(
     선언한 컬럼이 테이블에 없으면 실패한다. 오타가 조용한 무동작이 되면 결측이 값으로
     남은 채 품질 지표가 그것을 세지 않는다.
     """
-    missing = [name for name in column_null_tokens if name not in table.columns]
+    # "이 컬럼에서 무엇이 결측인가"와 "이 컬럼이 반드시 있어야 하는가"는 별개의
+    # 계약이다. 후자는 on_absent로 따로 선언한다 — 그러지 않으면 결측 표기를 적어
+    # 두었다는 이유만으로 모든 세대에 그 컬럼이 있어야 한다고 주장하게 된다.
+    missing = [
+        name
+        for name, rule in column_null_tokens.items()
+        if name not in table.columns and rule.on_absent == "error"
+    ]
     if missing:
         raise TabularError(
-            f"declared column_null_tokens refers to columns absent from the source: {missing}"
+            f"declared column_null_tokens refers to columns absent from the source: {missing}. "
+            "Declare on_absent: ignore if the column is optional in this source."
         )
+    present = {name: rule for name, rule in column_null_tokens.items() if name in table.columns}
     # 문자열이 아닌 컬럼에서는 토큰이 맞을 수 없다. 조용히 아무것도 하지 않으면
     # 선언이 틀렸다는 것을 아무도 모른다.
     wrong_type = {
         name: str(table.schema[name])
-        for name in column_null_tokens
+        for name in present
         if table.schema[name] not in (pl.Utf8, pl.Null)
     }
     if wrong_type:
@@ -155,7 +164,9 @@ def _apply_null_tokens(
     for name, dtype in table.schema.items():
         if dtype != pl.Utf8:
             continue
-        extra = [token for token in column_null_tokens.get(name, ()) if token not in shared]
+        rule = present.get(name)
+        declared = rule.tokens if rule else ()
+        extra = [token for token in declared if token not in shared]
         tokens = shared + extra
         if not tokens:
             continue
