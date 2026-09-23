@@ -272,9 +272,34 @@ def _schema_problems(spec: BuildSpec) -> list[ValidationProblem]:
                         hint=f"Use one of: {', '.join(READ_AS_TYPES)}",
                     )
                 )
+        problems.extend(
+            _column_null_token_problems(source.schema.column_null_tokens, prefix=f"sources[{i}]")
+        )
         problems.extend(_coalesce_problems(source.schema.coalesce, prefix=f"sources[{i}]"))
         problems.extend(_zfill_problems(source.schema.zfill, prefix=f"sources[{i}]"))
         problems.extend(_derived_problems(source.schema.derived, prefix=f"sources[{i}]"))
+    return problems
+
+
+def _column_null_token_problems(
+    column_null_tokens: dict[str, tuple[str, ...]], *, prefix: str
+) -> list[ValidationProblem]:
+    """schema.column_null_tokens 선언 자체의 유효성을 검증한다 (#623).
+
+    토큰이 비면 그 컬럼에 아무 일도 일어나지 않는다. 선언을 써 두고 동작하지 않는
+    상태가 가장 나쁘다 — 결측이 값으로 남은 채 품질 지표가 그것을 세지 않는다.
+    """
+    problems: list[ValidationProblem] = []
+    for column, tokens in column_null_tokens.items():
+        if not tokens:
+            problems.append(
+                _p(
+                    "empty_column_null_tokens",
+                    f"{prefix}.schema.column_null_tokens.{column}",
+                    f"column_null_tokens for column {column!r} declares no tokens",
+                    hint="List the source spellings that mean 'missing' in this column",
+                )
+            )
     return problems
 
 

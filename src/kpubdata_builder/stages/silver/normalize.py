@@ -38,6 +38,7 @@ def normalize_table(
     derived: Sequence[DerivedColumn] = (),
     read_as: Mapping[str, str] | None = None,
     null_tokens: Sequence[str] = (),
+    column_null_tokens: Mapping[str, Sequence[str]] | None = None,
     coalesce: Mapping[str, Sequence[str]] | None = None,
     zfill: Mapping[str, int] | None = None,
 ) -> pl.DataFrame:
@@ -62,6 +63,9 @@ def normalize_table(
             모은다. 결측을 지우는 것이 아니라 표기를 하나로 맞추는 것이며, 선언되지
             않은 값은 건드리지 않는다 — 무엇을 결측으로 볼지는 데이터셋마다 다르고,
             builder가 임의로 정하면 품질 측정 대상이 오염된다.
+        column_null_tokens: 특정 컬럼에서만 인정하는 결측 표기 (#623). 전역
+            ``null_tokens`` 에 **더해서** 적용된다 — 덮어쓰지 않는다. 키는 rename
+            *이전* 의 원 필드명이고, 선언한 컬럼이 없으면 실패한다.
         coalesce: 세대별 alias 컬럼을 하나로 모으는 규칙 (#620). 키는 rename *이전*
             의 원 필드명이다. 후보 컬럼은 결과에서 사라진다.
         zfill: canonical 식별자를 선언된 폭으로 왼쪽 0 padding 한다 (#620). 키는
@@ -79,18 +83,8 @@ def normalize_table(
         TabularError: 선언된 캐스팅이 값을 null로 떨어뜨려 데이터가 손실된 경우.
     """
     table = records_to_dataframe(bronze.raw_records, read_as=read_as)
-    if null_tokens:
-        tokens = list(null_tokens)
-        table = table.with_columns(
-            [
-                pl.when(pl.col(name).cast(pl.Utf8).is_in(tokens))
-                .then(None)
-                .otherwise(pl.col(name))
-                .alias(name)
-                for name, dtype in table.schema.items()
-                if dtype == pl.Utf8
-            ]
-        )
+    if null_tokens or column_null_tokens:
+        table = _apply_null_tokens(table, null_tokens, column_null_tokens or {})
     if coalesce:
         for target, candidates in coalesce.items():
             table = _apply_coalesce(table, target, tuple(candidates))
@@ -118,6 +112,57 @@ def normalize_table(
     for rule in derived:
         table = _apply_derived(table, rule)
     return table
+
+
+def _apply_null_tokens(
+    table: pl.DataFrame,
+    null_tokens: Sequence[str],
+    column_null_tokens: Mapping[str, Sequence[str]],
+) -> pl.DataFrame:
+    """결측 표기를 null로 모은다. 전역 선언 + 컬럼별 선언 (#620, #623).
+
+    한 컬럼에서 인정하는 결측 표현은 **전역 + 그 컬럼의 선언**이다. 컬럼별 선언이
+    전역을 덮어쓰지 않는다 — 덮어쓰게 하면 한 컬럼에 토큰 하나를 더하려다 전역 토큰을
+    잃는 사고가 조용히 난다.
+
+    같은 의미의 결측이 컬럼마다 다르게 표기되는 원천이 있다. 전역 선언만으로는 그것을
+    **다른 컬럼의 의미를 바꾸지 않고** 표현할 수 없다 — 성별의 빈 문자열을 결측으로
+    선언하려다 대여소명의 빈 문자열까지 null로 만들게 된다.
+
+    선언한 컬럼이 테이블에 없으면 실패한다. 오타가 조용한 무동작이 되면 결측이 값으로
+    남은 채 품질 지표가 그것을 세지 않는다.
+    """
+    missing = [name for name in column_null_tokens if name not in table.columns]
+    if missing:
+        raise TabularError(
+            f"declared column_null_tokens refers to columns absent from the source: {missing}"
+        )
+    # 문자열이 아닌 컬럼에서는 토큰이 맞을 수 없다. 조용히 아무것도 하지 않으면
+    # 선언이 틀렸다는 것을 아무도 모른다.
+    wrong_type = {
+        name: str(table.schema[name])
+        for name in column_null_tokens
+        if table.schema[name] not in (pl.Utf8, pl.Null)
+    }
+    if wrong_type:
+        raise TabularError(
+            f"column_null_tokens declared on non-string columns: {wrong_type}. "
+            "Declare read_as so the source values are read as text."
+        )
+
+    shared = list(null_tokens)
+    expressions = []
+    for name, dtype in table.schema.items():
+        if dtype != pl.Utf8:
+            continue
+        extra = [token for token in column_null_tokens.get(name, ()) if token not in shared]
+        tokens = shared + extra
+        if not tokens:
+            continue
+        expressions.append(
+            pl.when(pl.col(name).is_in(tokens)).then(None).otherwise(pl.col(name)).alias(name)
+        )
+    return table.with_columns(expressions) if expressions else table
 
 
 def _apply_coalesce(table: pl.DataFrame, target: str, candidates: tuple[str, ...]) -> pl.DataFrame:

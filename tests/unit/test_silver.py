@@ -515,6 +515,82 @@ class TestNullTokenNormalization:
         assert table["grade"].to_list() == ["-", "A"]
 
 
+class TestColumnNullTokens:
+    """같은 의미의 결측이 컬럼마다 다르게 표기되는 원천 (#623).
+
+    전역 선언만으로는 **다른 컬럼의 의미를 바꾸지 않고** 그것을 표현할 수 없다.
+    """
+
+    def test_column_tokens_add_to_the_global_ones(self) -> None:
+        bronze = _bronze(({"gender": "", "station": ""}, {"gender": "TOKEN", "station": "x"}))
+
+        table = normalize_table(
+            bronze, null_tokens=("TOKEN",), column_null_tokens={"gender": ("",)}
+        )
+
+        # gender는 둘 다 결측, station의 빈 문자열은 값으로 남는다.
+        assert table["gender"].to_list() == [None, None]
+        assert table["station"].to_list() == ["", "x"]
+
+    def test_column_tokens_do_not_replace_the_global_ones(self) -> None:
+        """덮어쓰게 하면 토큰 하나를 더하려다 전역 토큰을 잃는 사고가 조용히 난다."""
+        bronze = _bronze(({"gender": "TOKEN"}, {"gender": ""}, {"gender": "F"}))
+
+        table = normalize_table(
+            bronze, null_tokens=("TOKEN",), column_null_tokens={"gender": ("",)}
+        )
+
+        assert table["gender"].to_list() == [None, None, "F"]
+
+    def test_works_without_any_global_tokens(self) -> None:
+        bronze = _bronze(({"gender": ""}, {"station": ""}))
+
+        table = normalize_table(bronze, column_null_tokens={"gender": ("",)})
+
+        assert table["gender"].to_list() == [None, None]
+        assert table["station"].to_list() == [None, ""]
+
+    def test_absent_column_fails(self) -> None:
+        """오타가 조용한 무동작이 되면 결측이 값으로 남은 채 지표가 세지 않는다."""
+        bronze = _bronze(({"gender": ""},))
+
+        with pytest.raises(TabularError, match="absent from the source"):
+            normalize_table(bronze, column_null_tokens={"gendr": ("",)})
+
+    def test_non_string_column_fails(self) -> None:
+        bronze = _bronze(({"use_count": 1},))
+
+        with pytest.raises(TabularError, match="non-string"):
+            normalize_table(bronze, column_null_tokens={"use_count": ("0",)})
+
+    def test_all_null_column_is_allowed(self) -> None:
+        """세대가 섞인 스냅샷에서 '컬럼은 있는데 값이 전부 없음'은 정상이다."""
+        bronze = _bronze(({"gender": None}, {"gender": None}))
+
+        table = normalize_table(bronze, column_null_tokens={"gender": ("",)})
+
+        assert table["gender"].to_list() == [None, None]
+
+    def test_runs_before_coalesce(self) -> None:
+        """결측이 값으로 남아 있으면 coalesce가 그것을 충돌로 본다."""
+        bronze = _bronze(({"a": "", "b": "3"},))
+
+        table = normalize_table(
+            bronze, column_null_tokens={"a": ("",)}, coalesce={"merged": ("a", "b")}
+        )
+
+        assert table["merged"].to_list() == ["3"]
+
+    def test_keys_are_pre_rename_names(self) -> None:
+        bronze = _bronze(({"성별": ""},))
+
+        table = normalize_table(
+            bronze, column_null_tokens={"성별": ("",)}, rename={"성별": "gender"}
+        )
+
+        assert table["gender"].to_list() == [None]
+
+
 class TestCoalesce:
     """세대별 alias 컬럼을 하나로 모은다 (#620).
 

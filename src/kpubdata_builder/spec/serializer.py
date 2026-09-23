@@ -84,6 +84,15 @@ def canonical_spec_mapping(spec: BuildSpec) -> dict[str, JsonValue]:
                 "rename": _canonical_json(cast(JsonValue, source.schema.rename)),
                 "read_as": _canonical_json(cast(JsonValue, source.schema.read_as)),
                 "null_tokens": list(source.schema.null_tokens),
+                "column_null_tokens": _canonical_json(
+                    cast(
+                        JsonValue,
+                        {
+                            column: list(tokens)
+                            for column, tokens in source.schema.column_null_tokens.items()
+                        },
+                    )
+                ),
                 "coalesce": _canonical_json(
                     cast(
                         JsonValue,

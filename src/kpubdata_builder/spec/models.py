@@ -40,7 +40,12 @@ class SchemaContract:
         derived: 기존 컬럼에서 새 컬럼을 만드는 규칙 (#611). 캐스팅 뒤에 적용된다.
         read_as: 원천 컬럼을 읽을 타입 선언 (``{컬럼: "str"}``). 레코드마다 타입이
             다른 원천 컬럼을 선언으로 처리한다. 키는 rename 이전의 원 필드명이다.
-        null_tokens: 결측을 나타내는 원천 표기. 캐스팅 전에 null로 모은다.
+        null_tokens: 결측을 나타내는 원천 표기. 캐스팅 전에 null로 모은다. 모든
+            문자열 컬럼에 걸린다.
+        column_null_tokens: 특정 컬럼에서만 인정하는 결측 표기 (#623). 전역
+            ``null_tokens`` 에 **더해서** 적용된다. 같은 의미의 결측이 컬럼마다
+            다르게 표기되는 원천이 있는데, 전역 선언만으로는 다른 컬럼의 의미를
+            바꾸지 않고 그것을 표현할 수 없다. 키는 rename *이전* 의 원 필드명이다.
         coalesce: 세대별 alias 컬럼을 하나의 canonical 컬럼으로 모으는 규칙 (#620).
             ``{canonical: (후보1, 후보2, ...)}``. ``rename`` 과 달리 여러 원본이 한
             이름으로 모인다. 한 행에서 후보 둘 이상이 non-null이고 값이 다르면
@@ -64,6 +69,7 @@ class SchemaContract:
     derived: tuple[DerivedColumn, ...] = ()
     read_as: dict[str, str] = field(default_factory=dict)
     null_tokens: tuple[str, ...] = ()
+    column_null_tokens: dict[str, tuple[str, ...]] = field(default_factory=dict)
     coalesce: dict[str, tuple[str, ...]] = field(default_factory=dict)
     zfill: dict[str, int] = field(default_factory=dict)
 

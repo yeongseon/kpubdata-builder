@@ -329,3 +329,18 @@ def test_coalesce_candidate_order_is_part_of_the_recipe() -> None:
     assert compute_spec_digest(serialize_spec_bytes(forward)) != compute_spec_digest(
         serialize_spec_bytes(reversed_)
     )
+
+
+def test_column_null_tokens_round_trip_and_move_the_digest() -> None:
+    """#623 — 컬럼별 결측 선언이 recipe identity에 들어간다."""
+    base = _spec_with_schema({"null_tokens": ["TOKEN"]})
+    scoped = _spec_with_schema(
+        {"null_tokens": ["TOKEN"], "column_null_tokens": {"gender": ["", "TOKEN"]}}
+    )
+
+    schema = scoped.sources[0].schema
+    assert schema is not None
+    assert schema.column_null_tokens == {"gender": ("", "TOKEN")}
+    assert compute_spec_digest(serialize_spec_bytes(base)) != compute_spec_digest(
+        serialize_spec_bytes(scoped)
+    )

@@ -710,12 +710,25 @@ class TestPreviewAppliesSilverDeclarations:
 
     def _records(self) -> list[dict[str, JsonValue]]:
         return [
-            {"이동거리": "1210", "이동거리(M)": None, "대여소번호": "3", "ym": "2020-01"},
-            {"이동거리": None, "이동거리(M)": "980", "대여소번호": "102", "ym": "202207"},
+            {
+                "이동거리": "1210",
+                "이동거리(M)": None,
+                "대여소번호": "3",
+                "ym": "2020-01",
+                "성별": "",
+            },
+            {
+                "이동거리": None,
+                "이동거리(M)": "980",
+                "대여소번호": "102",
+                "ym": "202207",
+                "성별": "M",
+            },
         ]
 
     def _schema(self) -> SchemaContract:
         return SchemaContract(
+            column_null_tokens={"성별": ("",)},
             coalesce={"move_meter": ("이동거리", "이동거리(M)")},
             rename={"대여소번호": "station_no"},
             zfill={"station_no": 5},
@@ -734,6 +747,7 @@ class TestPreviewAppliesSilverDeclarations:
         assert "이동거리" not in columns
         assert [row["station_no"] for row in preview.preview.rows] == ["00003", "00102"]
         assert [row["ym"] for row in preview.preview.rows] == ["2020-01", "2022-07"]
+        assert [row["성별"] for row in preview.preview.rows] == [None, "M"]
 
     def test_preview_surfaces_the_same_failure_as_build(self) -> None:
         """zfill 폭 초과는 preview에서도 drift 신호로 드러나야 한다."""

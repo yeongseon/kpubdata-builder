@@ -362,3 +362,13 @@ def test_validate_spec_rejects_non_positive_zfill_width(width: int) -> None:
 
     with pytest.raises(ValidationError):
         validate_spec(spec)
+
+
+def test_validate_spec_rejects_empty_column_null_tokens() -> None:
+    # #623 — 선언을 써 두고 동작하지 않는 상태가 가장 나쁘다.
+    spec = _spec_with_schema(SchemaContract(column_null_tokens={"gender": ()}))
+
+    with pytest.raises(ValidationError) as exc:
+        validate_spec(spec)
+
+    assert "gender" in str(exc.value)

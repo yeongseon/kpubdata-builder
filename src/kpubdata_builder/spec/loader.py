@@ -394,6 +394,9 @@ def _parse_schema(value: object, *, prefix: str) -> SchemaContract:
     null_tokens = _parse_string_list(
         mapping.get("null_tokens", []), field_name=f"{prefix}.schema.null_tokens"
     )
+    column_null_tokens = _parse_coalesce(
+        mapping.get("column_null_tokens", {}), prefix=f"{prefix}.schema.column_null_tokens"
+    )
     coalesce = _parse_coalesce(mapping.get("coalesce", {}), prefix=f"{prefix}.schema.coalesce")
     zfill = _parse_zfill(mapping.get("zfill", {}), prefix=f"{prefix}.schema.zfill")
     return SchemaContract(
@@ -404,13 +407,16 @@ def _parse_schema(value: object, *, prefix: str) -> SchemaContract:
         derived=derived,
         read_as=read_as,
         null_tokens=null_tokens,
+        column_null_tokens=column_null_tokens,
         coalesce=coalesce,
         zfill=zfill,
     )
 
 
 def _parse_coalesce(value: object, *, prefix: str) -> dict[str, tuple[str, ...]]:
-    """schema.coalesce 를 ``{canonical: (후보, ...)}`` 로 변환한다 (#620).
+    """``{이름: (문자열, ...)}`` 형태의 선언을 파싱한다 (#620, #623).
+
+    schema.coalesce 와 schema.column_null_tokens 가 같은 모양이라 함께 쓴다.
 
     구조만 검사한다 — 후보가 비었는지 같은 의미 검증은 validator.py 가 한다.
     """
