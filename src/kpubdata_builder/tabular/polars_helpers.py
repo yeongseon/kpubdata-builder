@@ -30,6 +30,15 @@ _FORMATTED_CASTS: Mapping[str, pl.DataType] = {
     "float_comma": pl.Float64(),
 }
 
+#: 여러 표기가 섞인 문자열을 canonical 텍스트로 모으는 named cast (#620). dtype이
+#: 아니라 캐스팅 전략이므로 _NAMED_DTYPES와 분리한다.
+TEXT_CASTS: frozenset[str] = frozenset({"year_month"})
+
+#: year_month 가 받는 두 표기. **길이까지 고정한다** — 느슨한 파서는 "20230"을
+#: 조용히 2023-0 따위로 읽어 틀린 연/월을 만든다. 월 범위도 여기서 막는다.
+YEAR_MONTH_DASHED = r"^\d{4}-(0[1-9]|1[0-2])$"
+YEAR_MONTH_COMPACT = r"^\d{4}(0[1-9]|1[0-2])$"
+
 _TRUE_TOKENS = {"1", "t", "true", "y", "yes"}
 _FALSE_TOKENS = {"0", "f", "false", "n", "no"}
 
@@ -151,6 +160,9 @@ def cast_columns(
         if formatted is not None:
             expressions.append(_cast_formatted_numeric(column, formatted))
             continue
+        if isinstance(dtype, str) and dtype.strip().lower() == "year_month":
+            expressions.append(_cast_year_month(column))
+            continue
         resolved_dtype = _resolve_dtype(dtype)
         if isinstance(resolved_dtype, pl.Boolean):
             expressions.append(_cast_boolean(column))
@@ -201,6 +213,28 @@ def _cast_formatted_numeric(column: str, dtype: pl.DataType) -> pl.Expr:
         .str.replace_all(",", "")
         .str.strip_chars()
         .cast(dtype, strict=False)
+        .alias(column)
+    )
+
+
+def _cast_year_month(column: str) -> pl.Expr:
+    """``2020-01`` 과 ``202207`` 을 canonical ``"YYYY-MM"`` 으로 모은다 (#620).
+
+    Date가 아니라 Utf8이다. ``pl.Date`` 로 만들면 원천에 없던 ``01일`` 을 추가하게
+    되고, polars에 월 단위 period 타입은 없다. 월 시계열로 해석할 필요가 있으면
+    다운스트림이 한다.
+
+    어느 표기에도 맞지 않는 값은 null이 되어 호출자의 audit이 잡는다. 다만 그
+    메시지는 개수만 말하므로, Silver 정규화는 어느 값이 거부됐는지를 먼저 확인해
+    보고한다 — ``normalize._year_month_violations``.
+    """
+    text = pl.col(column).cast(pl.Utf8).str.strip_chars()
+    return (
+        pl.when(text.str.contains(YEAR_MONTH_DASHED))
+        .then(text)
+        .when(text.str.contains(YEAR_MONTH_COMPACT))
+        .then(text.str.slice(0, 4) + pl.lit("-") + text.str.slice(4, 2))
+        .otherwise(pl.lit(None, dtype=pl.Utf8))
         .alias(column)
     )
 

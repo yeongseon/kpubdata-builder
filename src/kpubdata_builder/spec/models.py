@@ -41,6 +41,20 @@ class SchemaContract:
         read_as: 원천 컬럼을 읽을 타입 선언 (``{컬럼: "str"}``). 레코드마다 타입이
             다른 원천 컬럼을 선언으로 처리한다. 키는 rename 이전의 원 필드명이다.
         null_tokens: 결측을 나타내는 원천 표기. 캐스팅 전에 null로 모은다.
+        coalesce: 세대별 alias 컬럼을 하나의 canonical 컬럼으로 모으는 규칙 (#620).
+            ``{canonical: (후보1, 후보2, ...)}``. ``rename`` 과 달리 여러 원본이 한
+            이름으로 모인다. 한 행에서 후보 둘 이상이 non-null이고 값이 다르면
+            실패한다 — 조용한 first-wins는 세대 경계가 잘못 잡혔다는 유일한 신호를
+            삼킨다. 키는 rename *이전* 의 원 필드명이다. 수렴한 후보 컬럼은 canonical
+            컬럼에 흡수되어 사라지지만, 사라지는 범위는 선언된 alias group 안으로
+            한정되고 행은 보존된다.
+        zfill: canonical 식별자를 선언된 폭으로 왼쪽 0 padding 한다 (#620).
+            ``{컬럼: 폭}``. 키는 rename *이후* 의 이름이다.
+
+    적용 순서는 ``read_as -> null_tokens -> coalesce -> rename -> zfill -> casts ->
+    derived`` 다. ``null_tokens`` 가 ``coalesce`` 앞인 것은 결측 표기가 아직
+    문자열이면 coalesce가 그것을 값으로 보고 충돌시키기 때문이고, ``zfill`` 이
+    ``rename`` 뒤인 것은 선언이 canonical 이름을 가리키기 때문이다.
     """
 
     required: tuple[str, ...] = ()
@@ -50,6 +64,8 @@ class SchemaContract:
     derived: tuple[DerivedColumn, ...] = ()
     read_as: dict[str, str] = field(default_factory=dict)
     null_tokens: tuple[str, ...] = ()
+    coalesce: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    zfill: dict[str, int] = field(default_factory=dict)
 
 
 #: 지원하는 DerivedColumn.kind 값 (#611). 자유형 표현식 대신 typed rule로 표현한다

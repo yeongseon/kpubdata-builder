@@ -375,6 +375,8 @@ def _run_source_pipeline(
             derived=source.schema.derived if source.schema else (),
             read_as=source.schema.read_as if source.schema else None,
             null_tokens=source.schema.null_tokens if source.schema else (),
+            coalesce=source.schema.coalesce if source.schema else None,
+            zfill=source.schema.zfill if source.schema else None,
             column_dtypes=column_dtypes,
         )
         evaluated_row_count = silver.statistics.row_count

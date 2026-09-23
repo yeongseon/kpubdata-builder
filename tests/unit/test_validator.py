@@ -328,3 +328,37 @@ def test_validate_spec_rejects_date_parts_without_three_columns() -> None:
 
     with pytest.raises(ValidationError):
         validate_spec(spec)
+
+
+def test_validate_spec_accepts_year_month_cast() -> None:
+    # #620 — year_month도 dtype이 아니라 named cast다. validator가 모르면 선언이
+    # validate 단계에서 막혀 Silver 빌드까지 가지도 못한다.
+    spec = _spec_with_schema(SchemaContract(casts={"ym": "year_month"}))
+
+    validate_spec(spec)
+
+
+def test_validate_spec_rejects_coalesce_without_candidates() -> None:
+    # #620 — 후보가 비면 normalize가 런타임에 실패한다. 선언 시점에 막는 편이
+    # 어디를 고쳐야 하는지 말해 준다.
+    spec = _spec_with_schema(SchemaContract(coalesce={"move_meter": ()}))
+
+    with pytest.raises(ValidationError) as exc:
+        validate_spec(spec)
+
+    assert "move_meter" in str(exc.value)
+
+
+def test_validate_spec_rejects_repeated_coalesce_candidate() -> None:
+    spec = _spec_with_schema(SchemaContract(coalesce={"move_meter": ("a", "a")}))
+
+    with pytest.raises(ValidationError):
+        validate_spec(spec)
+
+
+@pytest.mark.parametrize("width", [0, -1])
+def test_validate_spec_rejects_non_positive_zfill_width(width: int) -> None:
+    spec = _spec_with_schema(SchemaContract(zfill={"station_no": width}))
+
+    with pytest.raises(ValidationError):
+        validate_spec(spec)

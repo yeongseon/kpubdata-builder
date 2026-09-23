@@ -20,7 +20,7 @@ from urllib.parse import urlsplit
 
 from ..errors import ValidationError
 from ..exporters import EXPORTER_REGISTRY
-from ..tabular.polars_helpers import _FORMATTED_CASTS, _NAMED_DTYPES
+from ..tabular.polars_helpers import _FORMATTED_CASTS, _NAMED_DTYPES, TEXT_CASTS
 from .models import (
     DERIVED_KINDS,
     READ_AS_TYPES,
@@ -238,7 +238,7 @@ def _schema_problems(spec: BuildSpec) -> list[ValidationProblem]:
     """
     problems: list[ValidationProblem] = []
     supported = sorted(_NAMED_DTYPES)
-    supported_casts = sorted(set(_NAMED_DTYPES) | set(_FORMATTED_CASTS))
+    supported_casts = sorted(set(_NAMED_DTYPES) | set(_FORMATTED_CASTS) | set(TEXT_CASTS))
     for i, source in enumerate(spec.sources):
         if source.schema is None:
             continue
@@ -253,7 +253,7 @@ def _schema_problems(spec: BuildSpec) -> list[ValidationProblem]:
                     )
                 )
         for col, cast in source.schema.casts.items():
-            if cast.lower() not in _NAMED_DTYPES and cast.lower() not in _FORMATTED_CASTS:
+            if cast.lower() not in supported_casts:
                 problems.append(
                     _p(
                         "unknown_cast_dtype",
@@ -272,7 +272,55 @@ def _schema_problems(spec: BuildSpec) -> list[ValidationProblem]:
                         hint=f"Use one of: {', '.join(READ_AS_TYPES)}",
                     )
                 )
+        problems.extend(_coalesce_problems(source.schema.coalesce, prefix=f"sources[{i}]"))
+        problems.extend(_zfill_problems(source.schema.zfill, prefix=f"sources[{i}]"))
         problems.extend(_derived_problems(source.schema.derived, prefix=f"sources[{i}]"))
+    return problems
+
+
+def _coalesce_problems(
+    coalesce: dict[str, tuple[str, ...]], *, prefix: str
+) -> list[ValidationProblem]:
+    """schema.coalesce 선언 자체의 유효성을 검증한다 (#620).
+
+    후보가 비면 normalize 가 런타임에 "후보가 하나도 없다"로 실패한다. 선언 시점에
+    막는 편이 어디를 고쳐야 하는지 말해 준다.
+    """
+    problems: list[ValidationProblem] = []
+    for target, candidates in coalesce.items():
+        field = f"{prefix}.schema.coalesce.{target}"
+        if not candidates:
+            problems.append(
+                _p(
+                    "empty_coalesce_candidates",
+                    field,
+                    f"coalesce target {target!r} declares no candidate columns",
+                    hint="List the source column names this canonical column is built from",
+                )
+            )
+        if len(set(candidates)) != len(candidates):
+            problems.append(
+                _p(
+                    "duplicate_coalesce_candidates",
+                    field,
+                    f"coalesce target {target!r} repeats a candidate column",
+                )
+            )
+    return problems
+
+
+def _zfill_problems(zfill: dict[str, int], *, prefix: str) -> list[ValidationProblem]:
+    """schema.zfill 의 폭이 말이 되는지 검증한다 (#620)."""
+    problems: list[ValidationProblem] = []
+    for column, width in zfill.items():
+        if width < 1:
+            problems.append(
+                _p(
+                    "invalid_zfill_width",
+                    f"{prefix}.schema.zfill.{column}",
+                    f"zfill width for column {column!r} must be >= 1, got {width}",
+                )
+            )
     return problems
 
 

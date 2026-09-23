@@ -17,7 +17,12 @@ import polars as pl
 from ...errors import TabularError
 from ...spec import DerivedColumn
 from ...tabular.convert import records_to_dataframe
-from ...tabular.polars_helpers import DtypeSpec, cast_columns
+from ...tabular.polars_helpers import (
+    YEAR_MONTH_COMPACT,
+    YEAR_MONTH_DASHED,
+    DtypeSpec,
+    cast_columns,
+)
 from ..bronze.models import BronzeArtifact
 
 #: join_key 파생 컬럼의 구분자 (#611). 값에 나타나지 않는 문자를 써서 서로 다른
@@ -33,6 +38,8 @@ def normalize_table(
     derived: Sequence[DerivedColumn] = (),
     read_as: Mapping[str, str] | None = None,
     null_tokens: Sequence[str] = (),
+    coalesce: Mapping[str, Sequence[str]] | None = None,
+    zfill: Mapping[str, int] | None = None,
 ) -> pl.DataFrame:
     """Bronze raw records를 테이블로 변환하고 선언된 캐스팅만 적용한다.
 
@@ -55,6 +62,15 @@ def normalize_table(
             모은다. 결측을 지우는 것이 아니라 표기를 하나로 맞추는 것이며, 선언되지
             않은 값은 건드리지 않는다 — 무엇을 결측으로 볼지는 데이터셋마다 다르고,
             builder가 임의로 정하면 품질 측정 대상이 오염된다.
+        coalesce: 세대별 alias 컬럼을 하나로 모으는 규칙 (#620). 키는 rename *이전*
+            의 원 필드명이다. 후보 컬럼은 결과에서 사라진다.
+        zfill: canonical 식별자를 선언된 폭으로 왼쪽 0 padding 한다 (#620). 키는
+            rename *이후* 의 이름이다.
+
+    적용 순서는 ``read_as -> null_tokens -> coalesce -> rename -> zfill -> casts ->
+    derived`` 다. ``null_tokens`` 가 ``coalesce`` 앞이어야 하는 이유는 결측 표기가
+    아직 문자열이면 coalesce가 그것을 값으로 보고 충돌시키기 때문이고, ``zfill`` 이
+    ``rename`` 뒤인 이유는 선언이 canonical 이름을 가리키기 때문이다.
 
     반환값:
         pl.DataFrame: 정규화된 테이블.
@@ -63,13 +79,6 @@ def normalize_table(
         TabularError: 선언된 캐스팅이 값을 null로 떨어뜨려 데이터가 손실된 경우.
     """
     table = records_to_dataframe(bronze.raw_records, read_as=read_as)
-    if rename:
-        missing = [source for source in rename if source not in table.columns]
-        if missing:
-            raise TabularError(
-                f"declared rename refers to columns absent from the source: {missing}"
-            )
-        table = table.rename(dict(rename))
     if null_tokens:
         tokens = list(null_tokens)
         table = table.with_columns(
@@ -82,7 +91,21 @@ def normalize_table(
                 if dtype == pl.Utf8
             ]
         )
+    if coalesce:
+        for target, candidates in coalesce.items():
+            table = _apply_coalesce(table, target, tuple(candidates))
+    if rename:
+        missing = [source for source in rename if source not in table.columns]
+        if missing:
+            raise TabularError(
+                f"declared rename refers to columns absent from the source: {missing}"
+            )
+        table = table.rename(dict(rename))
+    if zfill:
+        for column, width in zfill.items():
+            table = _apply_zfill(table, column, width)
     if casts:
+        _check_year_month(table, casts)
         result = cast_columns(table, casts, audit=True)
         if result.has_nulls_introduced:
             details = "; ".join(
@@ -95,6 +118,116 @@ def normalize_table(
     for rule in derived:
         table = _apply_derived(table, rule)
     return table
+
+
+def _apply_coalesce(table: pl.DataFrame, target: str, candidates: tuple[str, ...]) -> pl.DataFrame:
+    """세대별 alias 컬럼을 하나의 canonical 컬럼으로 모은다 (#620).
+
+    세대가 섞인 스냅샷에서는 후보 컬럼이 한 프레임 안에 동시에 존재한다 — 대부분
+    한쪽이 전부 null이다. 그래서 rename이 아니라 coalesce가 필요하다.
+
+    **수렴한 후보 컬럼은 canonical 컬럼으로 대체되어 사라진다.** "Silver는 Bronze의
+    열을 보존한다"(#612)에 대한 예외로 보일 수 있으나 그렇지 않다 — 여러 세대별
+    alias를 하나의 canonical field로 **수렴시키는** 연산이라, 후보는 버려지는 것이
+    아니라 그 field에 흡수된다. 행은 보존되고, 사라지는 컬럼은 선언된 alias group
+    안으로 한정된다. 임의의 컬럼 삭제가 아니며, ``filters`` 처럼 정보를 버리는
+    연산과는 다르다.
+
+    후보가 하나도 없으면 실패한다. 조용히 all-null 컬럼을 만들면 이후 캐스팅이
+    아무것도 잃지 않은 채 통과해, 소스가 통째로 빠진 것을 아무도 모른다.
+    """
+    present = [name for name in candidates if name in table.columns]
+    if not present:
+        raise TabularError(
+            f"coalesce target {target!r} found none of its candidates in the source: "
+            f"{list(candidates)}"
+        )
+    # target이 후보가 아닌 기존 컬럼과 이름이 겹치면 그 컬럼을 말없이 덮어쓰게 된다.
+    # alias group 안으로 한정된다는 계약이 거기서 깨진다.
+    if target in table.columns and target not in present:
+        raise TabularError(
+            f"coalesce target {target!r} would overwrite an existing column that is not "
+            "one of its candidates"
+        )
+    # 전부 null인 후보는 pl.Null로 추론된다 — 세대가 섞인 스냅샷에서 흔한 모양이고,
+    # 어떤 타입과도 어긋나지 않으므로 합의 판정에서 뺀다.
+    dtypes = {table.schema[name] for name in present} - {pl.Null}
+    if len(dtypes) > 1:
+        raise TabularError(
+            f"coalesce target {target!r} has candidates of differing dtypes: "
+            f"{ {name: str(table.schema[name]) for name in present} }. "
+            "Declare read_as to read them as one type."
+        )
+    if len(present) > 1:
+        # 한 행에서 non-null 후보가 둘 이상이고 값이 다르면 세대 경계가 잘못
+        # 잡혔다는 뜻이다. first-wins로 삼키면 틀린 값이 표시 없이 내려간다.
+        distinct = (
+            pl.concat_list([pl.col(name) for name in present])
+            .list.drop_nulls()
+            .list.unique()
+            .list.len()
+        )
+        conflicts = table.select(present).filter(distinct > 1)
+        if conflicts.height:
+            raise TabularError(
+                f"coalesce target {target!r} has {conflicts.height} row(s) where candidates "
+                f"disagree; first example: {conflicts.head(1).to_dicts()[0]}"
+            )
+    # 먼저 값을 뽑고 나서 후보를 버린다. target이 후보 중 하나와 같은 이름일 수 있어
+    # drop과 with_columns의 순서를 바꾸면 방금 만든 컬럼이 도로 사라진다.
+    merged = table.select(pl.coalesce([pl.col(name) for name in present]).alias(target)).to_series()
+    return table.drop(present).with_columns(merged)
+
+
+def _apply_zfill(table: pl.DataFrame, column: str, width: int) -> pl.DataFrame:
+    """식별자의 폭을 맞춘다 (#620).
+
+    같은 대여소가 ``3`` 과 ``00003`` 으로 오면 집계에서 둘로 갈린다. null은 null로
+    둔다 — ``"00000"`` 으로 채우면 결측이 유효한 식별자가 되어 품질 지표가 세는
+    결측 수가 달라진다.
+    """
+    if column not in table.columns:
+        raise TabularError(f"declared zfill refers to a column absent from the table: {column!r}")
+    if table.schema[column] != pl.Utf8:
+        raise TabularError(
+            f"zfill target {column!r} is {table.schema[column]}, not a string; "
+            "declare read_as so the leading zeros survive reading"
+        )
+    # 선언 폭보다 긴 값은 자르지 않고 실패한다. 조용한 절단은 식별자를 망가뜨리고,
+    # 계약이 width를 선언했는데 더 긴 값이 오는 것은 drift 신호다.
+    too_long = table.filter(pl.col(column).str.len_chars() > width)
+    if too_long.height:
+        examples = too_long.select(column).unique().head(3).to_series().to_list()
+        raise TabularError(
+            f"zfill target {column!r} has {too_long.height} value(s) longer than the declared "
+            f"width {width}: {examples}"
+        )
+    return table.with_columns(pl.col(column).str.zfill(width).alias(column))
+
+
+def _check_year_month(table: pl.DataFrame, casts: Mapping[str, DtypeSpec]) -> None:
+    """``year_month`` 캐스트가 거부할 값을 미리 이름 지어 보고한다 (#620).
+
+    캐스트 자체는 맞지 않는 값을 null로 두고 #188의 audit이 개수를 센다. 개수만으로는
+    무엇이 왜 거부됐는지 알 수 없고, R2는 바로 그것을 읽어야 한다.
+    """
+    for column, dtype in casts.items():
+        if not isinstance(dtype, str) or dtype.strip().lower() != "year_month":
+            continue
+        if column not in table.columns:
+            continue
+        text = pl.col(column).cast(pl.Utf8).str.strip_chars()
+        bad = table.filter(
+            text.is_not_null()
+            & ~text.str.contains(YEAR_MONTH_DASHED)
+            & ~text.str.contains(YEAR_MONTH_COMPACT)
+        )
+        if bad.height:
+            examples = bad.select(column).unique().head(3).to_series().to_list()
+            raise TabularError(
+                f"year_month cast on {column!r} rejected {bad.height} value(s); "
+                f"expected YYYY-MM or YYYYMM, got: {examples}"
+            )
 
 
 def _apply_derived(table: pl.DataFrame, rule: DerivedColumn) -> pl.DataFrame:

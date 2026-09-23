@@ -84,6 +84,16 @@ def canonical_spec_mapping(spec: BuildSpec) -> dict[str, JsonValue]:
                 "rename": _canonical_json(cast(JsonValue, source.schema.rename)),
                 "read_as": _canonical_json(cast(JsonValue, source.schema.read_as)),
                 "null_tokens": list(source.schema.null_tokens),
+                "coalesce": _canonical_json(
+                    cast(
+                        JsonValue,
+                        {
+                            target: list(candidates)
+                            for target, candidates in source.schema.coalesce.items()
+                        },
+                    )
+                ),
+                "zfill": _canonical_json(cast(JsonValue, source.schema.zfill)),
                 "derived": [
                     {
                         "name": rule.name,

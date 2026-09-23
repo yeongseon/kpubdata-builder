@@ -12,6 +12,7 @@ from kpubdata_builder.spec import (
     load_spec,
     parse_spec,
 )
+from kpubdata_builder.spec.serializer import compute_spec_digest, serialize_spec_bytes
 
 
 def _valid_payload() -> dict[str, object]:
@@ -272,3 +273,59 @@ def test_parse_spec_rejects_removed_top_level_normalization_mode_field() -> None
 
     with pytest.raises(SpecLoadError, match="normalization_mode"):
         _ = parse_spec(payload)
+
+
+def _spec_with_schema(schema: dict[str, object]) -> BuildSpec:
+    payload = _valid_payload()
+    payload["sources"] = [{"provider": "datago", "dataset": "air_quality", "schema": schema}]
+    return parse_spec(payload)
+
+
+def test_coalesce_and_zfill_round_trip_through_the_loader() -> None:
+    """#620 선언이 SchemaContract로 파싱되는지."""
+    spec = _spec_with_schema(
+        {
+            "coalesce": {"move_meter": ["이동거리", "이동거리(M)"]},
+            "zfill": {"station_no": 5},
+            "casts": {"ym": "year_month"},
+        }
+    )
+
+    schema = spec.sources[0].schema
+    assert schema is not None
+    assert schema.coalesce == {"move_meter": ("이동거리", "이동거리(M)")}
+    assert schema.zfill == {"station_no": 5}
+    assert schema.casts == {"ym": "year_month"}
+
+
+def test_zfill_width_must_be_an_integer() -> None:
+    with pytest.raises(SpecLoadError):
+        _spec_with_schema({"zfill": {"station_no": "5"}})
+
+
+def test_coalesce_and_zfill_move_the_spec_digest() -> None:
+    """선언이 canonical mapping에서 빠지면 변환 규칙을 바꿔도 digest가 그대로다.
+
+    그 상태에서 R1의 "같은 recipe는 같은 output"을 주장하면, 정작 Silver를 만든
+    규칙이 recipe 밖에 남는다.
+    """
+    base = _spec_with_schema({"casts": {"amount": "int"}})
+    with_coalesce = _spec_with_schema({"casts": {"amount": "int"}, "coalesce": {"m": ["a", "b"]}})
+    with_zfill = _spec_with_schema({"casts": {"amount": "int"}, "zfill": {"code": 5}})
+    with_year_month = _spec_with_schema({"casts": {"amount": "year_month"}})
+
+    digests = {
+        compute_spec_digest(serialize_spec_bytes(spec))
+        for spec in (base, with_coalesce, with_zfill, with_year_month)
+    }
+    assert len(digests) == 4
+
+
+def test_coalesce_candidate_order_is_part_of_the_recipe() -> None:
+    """후보 순서가 바뀌면 어느 값이 이기는지가 달라질 수 있다."""
+    forward = _spec_with_schema({"coalesce": {"m": ["a", "b"]}})
+    reversed_ = _spec_with_schema({"coalesce": {"m": ["b", "a"]}})
+
+    assert compute_spec_digest(serialize_spec_bytes(forward)) != compute_spec_digest(
+        serialize_spec_bytes(reversed_)
+    )

@@ -11,6 +11,7 @@ from typing import cast
 import polars as pl
 import pytest
 
+from kpubdata_builder.errors import TabularError
 from kpubdata_builder.spec import JsonValue
 from kpubdata_builder.stages.bronze.models import BronzeArtifact, utc_now
 from kpubdata_builder.stages.silver import (
@@ -124,8 +125,6 @@ class TestBuildSilverDataset:
 
     def test_cast_data_loss_raises_instead_of_silently_nulling(self) -> None:
         # 선언된 캐스팅이 값을 null로 떨어뜨리면 조용히 묻지 않고 TabularError로 실패 (#188).
-        from kpubdata_builder.errors import TabularError
-
         bronze = _bronze(({"id": "1", "amount": "1000"}, {"id": "2", "amount": "oops"}))
 
         with pytest.raises(TabularError, match="data loss"):
@@ -145,11 +144,25 @@ class TestRowPreservingInvariant:
     pipeline.preview의 Source↔Silver diff는 ``bronze.raw_records[i]``와
     ``silver.table``의 i번째 행이 항상 같은 논리적 행이라는 이 불변조건에
     의존한다(diff_available 판정의 실제 근거). normalize_table()이
-    records_to_dataframe() → cast_columns()만 호출하고 validate_table()은
+    records_to_dataframe() 다음 컬럼 단위 연산만 호출하고 validate_table()은
     테이블을 아예 건드리지 않으므로 오늘은 이 불변조건이 성립하지만, 향후 누군가
     Silver에 dedup/filter/reorder를 추가하면 이 테스트가 깨져서 pipeline/preview.py
     의 alignment 가정을 재검토하라는 신호를 준다.
     """
+
+    def test_coalesce_drops_columns_not_rows(self) -> None:
+        # #620 — coalesce는 후보 *컬럼*을 소비한다. 행을 건드리기 시작하면 preview의
+        # Source↔Silver alignment가 조용히 어긋난다.
+        records = tuple(
+            {"a": str(i) if i % 2 == 0 else None, "b": None if i % 2 == 0 else str(i)}
+            for i in range(20)
+        )
+        bronze = _bronze(records)
+
+        dataset = build_silver_dataset(bronze, coalesce={"merged": ("a", "b")})
+
+        assert dataset.table.height == len(records)
+        assert dataset.table["merged"].to_list() == [str(i) for i in range(20)]
 
     def test_row_count_is_preserved(self) -> None:
         records = tuple({"id": str(i), "amount": i * 100} for i in range(50))
@@ -319,7 +332,6 @@ class TestColumnRename:
         # R2(source evolution)는 상류 필드가 사라진 상황을 schema breakage로 세야
         # 한다. polars의 ColumnNotFoundError가 그대로 새어 나가면 어떤 컬럼이
         # 사라졌는지 호출자가 읽을 수 없다.
-        from kpubdata_builder.errors import TabularError
 
         bronze = _bronze(({"sggCd": "11110"},))
 
@@ -501,3 +513,183 @@ class TestNullTokenNormalization:
         table = normalize_table(bronze, null_tokens=("",))
 
         assert table["grade"].to_list() == ["-", "A"]
+
+
+class TestCoalesce:
+    """세대별 alias 컬럼을 하나로 모은다 (#620).
+
+    실패 조건이 본체다 — 조용한 first-wins는 세대 경계가 잘못 잡혔다는 유일한
+    신호를 삼킨다.
+    """
+
+    def test_merges_generation_aliases_into_one_column(self) -> None:
+        bronze = _bronze(
+            (
+                {"이동거리": "1210.0", "이동거리(M)": None},
+                {"이동거리": None, "이동거리(M)": "980.0"},
+            )
+        )
+
+        table = normalize_table(bronze, coalesce={"move_meter": ("이동거리", "이동거리(M)")})
+
+        assert table["move_meter"].to_list() == ["1210.0", "980.0"]
+
+    def test_converged_candidates_are_absorbed_into_the_canonical_column(self) -> None:
+        """후보 컬럼은 canonical 컬럼에 흡수되어 사라진다.
+
+        임의의 컬럼 삭제가 아니라 선언된 alias group 안으로 한정된다 — 선언되지
+        않은 컬럼은 그대로 남는다.
+        """
+        bronze = _bronze(({"이동거리": "1210.0", "이동거리(M)": None, "keep": "x"},))
+
+        table = normalize_table(bronze, coalesce={"move_meter": ("이동거리", "이동거리(M)")})
+
+        assert "이동거리" not in table.columns
+        assert "이동거리(M)" not in table.columns
+        assert table.columns == ["keep", "move_meter"]
+
+    def test_target_colliding_with_an_unrelated_column_fails(self) -> None:
+        """alias group 밖의 컬럼을 말없이 덮어쓰면 수렴이 아니라 삭제가 된다."""
+        bronze = _bronze(({"a": "1", "b": None, "merged": "keep me"},))
+
+        with pytest.raises(TabularError, match="overwrite an existing column"):
+            normalize_table(bronze, coalesce={"merged": ("a", "b")})
+
+    def test_target_may_reuse_a_candidate_name(self) -> None:
+        bronze = _bronze(({"a": "1", "b": None}, {"a": None, "b": "2"}))
+
+        table = normalize_table(bronze, coalesce={"a": ("a", "b")})
+
+        assert table["a"].to_list() == ["1", "2"]
+        assert "b" not in table.columns
+
+    def test_all_null_row_stays_null(self) -> None:
+        bronze = _bronze(({"a": None, "b": None}, {"a": "x", "b": None}))
+
+        table = normalize_table(bronze, coalesce={"merged": ("a", "b")})
+
+        assert table["merged"].to_list() == [None, "x"]
+
+    def test_agreeing_candidates_are_allowed(self) -> None:
+        bronze = _bronze(({"a": "3", "b": "3"},))
+
+        table = normalize_table(bronze, coalesce={"merged": ("a", "b")})
+
+        assert table["merged"].to_list() == ["3"]
+
+    def test_disagreeing_candidates_fail(self) -> None:
+        bronze = _bronze(({"a": "3", "b": "4"},))
+
+        with pytest.raises(TabularError, match="disagree"):
+            normalize_table(bronze, coalesce={"merged": ("a", "b")})
+
+    def test_no_candidate_present_fails(self) -> None:
+        """조용히 all-null 컬럼을 만들면 소스가 통째로 빠진 것을 아무도 모른다."""
+        bronze = _bronze(({"other": "1"},))
+
+        with pytest.raises(TabularError, match="none of its candidates"):
+            normalize_table(bronze, coalesce={"merged": ("a", "b")})
+
+    def test_partial_presence_uses_what_exists(self) -> None:
+        bronze = _bronze(({"a": "1"}, {"a": "2"}))
+
+        table = normalize_table(bronze, coalesce={"merged": ("a", "b", "c")})
+
+        assert table["merged"].to_list() == ["1", "2"]
+
+    def test_differing_dtypes_fail(self) -> None:
+        bronze = _bronze(({"a": "1", "b": None}, {"a": None, "b": 2}))
+
+        with pytest.raises(TabularError, match="differing dtypes"):
+            normalize_table(bronze, coalesce={"merged": ("a", "b")})
+
+    def test_runs_after_null_tokens(self) -> None:
+        r"""``\N``이 아직 문자열이면 coalesce가 그것을 값으로 보고 충돌시킨다."""
+        bronze = _bronze(({"a": r"\N", "b": "3"},))
+
+        table = normalize_table(bronze, null_tokens=(r"\N",), coalesce={"merged": ("a", "b")})
+
+        assert table["merged"].to_list() == ["3"]
+
+
+class TestZfill:
+    def test_pads_identifier_to_declared_width(self) -> None:
+        bronze = _bronze(({"station": "3"}, {"station": "00003"}, {"station": "102"}))
+
+        table = normalize_table(bronze, zfill={"station": 5})
+
+        assert table["station"].to_list() == ["00003", "00003", "00102"]
+
+    def test_null_stays_null(self) -> None:
+        """``00000``으로 채우면 결측이 유효한 식별자가 된다."""
+        bronze = _bronze(({"station": None}, {"station": "3"}))
+
+        table = normalize_table(bronze, zfill={"station": 5})
+
+        assert table["station"].to_list() == [None, "00003"]
+
+    def test_value_longer_than_width_fails(self) -> None:
+        """계약이 width=5인데 6자리가 오는 것은 drift 신호다."""
+        bronze = _bronze(({"station": "123456"},))
+
+        with pytest.raises(TabularError, match="longer than the declared width"):
+            normalize_table(bronze, zfill={"station": 5})
+
+    def test_non_string_column_fails(self) -> None:
+        bronze = _bronze(({"station": 3},))
+
+        with pytest.raises(TabularError, match="declare read_as"):
+            normalize_table(bronze, zfill={"station": 5})
+
+    def test_absent_column_fails(self) -> None:
+        bronze = _bronze(({"other": "1"},))
+
+        with pytest.raises(TabularError, match="absent from the table"):
+            normalize_table(bronze, zfill={"station": 5})
+
+    def test_applies_to_renamed_name(self) -> None:
+        """선언은 canonical 이름을 가리킨다 — rename 뒤에 적용된다."""
+        bronze = _bronze(({"대여소번호": "3"},))
+
+        table = normalize_table(
+            bronze, rename={"대여소번호": "station_no"}, zfill={"station_no": 5}
+        )
+
+        assert table["station_no"].to_list() == ["00003"]
+
+
+class TestYearMonthCast:
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [("2020-01", "2020-01"), ("202207", "2022-07"), ("2024-12", "2024-12")],
+    )
+    def test_accepts_both_notations(self, raw: str, expected: str) -> None:
+        bronze = _bronze(({"ym": raw},))
+
+        table = normalize_table(bronze, casts={"ym": "year_month"})
+
+        assert table["ym"].to_list() == [expected]
+        assert table.schema["ym"] == pl.Utf8
+
+    def test_mixed_notations_in_one_column(self) -> None:
+        """G2 안에서 형식이 바뀐다 — 단일 포맷 선언으로는 절반이 null이 된다."""
+        bronze = _bronze(({"ym": "2022-06"}, {"ym": "202207"}))
+
+        table = normalize_table(bronze, casts={"ym": "year_month"})
+
+        assert table["ym"].to_list() == ["2022-06", "2022-07"]
+
+    @pytest.mark.parametrize("raw", ["20230", "2023-1", "202313", "202200", "2023-13"])
+    def test_rejects_malformed_values(self, raw: str) -> None:
+        """느슨한 파서는 조용히 틀린 연/월을 만든다."""
+        bronze = _bronze(({"ym": raw},))
+
+        with pytest.raises(TabularError, match="year_month"):
+            normalize_table(bronze, casts={"ym": "year_month"})
+
+    def test_null_stays_null(self) -> None:
+        bronze = _bronze(({"ym": None}, {"ym": "202301"}))
+
+        table = normalize_table(bronze, casts={"ym": "year_month"})
+
+        assert table["ym"].to_list() == [None, "2023-01"]
