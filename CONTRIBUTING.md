@@ -81,6 +81,14 @@ uv sync --extra dev    # ../kpubdata 를 editable로 연결
 
 형제 디렉터리가 존재하면 `uv sync`는 자동으로 PyPI 대신 로컬 소스를 사용합니다.
 
+> **`uv.lock`은 함께 커밋하지 마세요.** `uv.lock`은 `--no-sources` 해상도(CI와 배포가 실제로 설치하는 것)를 기록합니다. sources를 켠 `uv sync`는 lock의 `kpubdata`를 `registry` → `editable "../kpubdata"`로 뒤집고 배포 해시를 지웁니다. 로컬 개발에서는 정상이지만 커밋되면 CI가 설치하는 것과 lock이 서술하는 것이 갈립니다.
+>
+> ```bash
+> git checkout -- uv.lock   # uv sync 뒤 lock이 더럽혀졌다면
+> ```
+>
+> CI의 `uv lock --check --no-sources` 스텝이 이 드리프트를 막습니다. 의존성을 실제로 바꿀 때는 `uv lock --no-sources`로 갱신한 결과를 커밋하세요.
+
 #### CI / PyPI 배포 — `--no-sources` 플래그
 
 CI(`publish-dataset.yml`)와 패키지 배포 환경에서는 `--no-sources` 플래그를 사용합니다.

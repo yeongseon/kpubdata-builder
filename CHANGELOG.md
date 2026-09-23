@@ -44,6 +44,7 @@
 
 ### 수정됨
 - **라이브 퍼블리시가 `--no-sources` 누락으로 항상 실패하던 것 (#625)**: `publish-dataset.yml` 의 마지막 스텝만 `uv run` 을 맨손으로 불렀다. `uv run` 은 실행 전에 환경을 다시 해석하므로 바로 위 `uv sync --no-sources` 가 무시한 `[tool.uv.sources]` 의 editable `../kpubdata` 오버라이드가 그 줄에서 되살아나고, 러너에 형제 디렉터리가 없어 `Distribution not found` 로 죽는다. 시크릿이 없으면 그 앞 가드가 `exit 0` 으로 빠지기 때문에 **시크릿을 넣는 순간부터** 드러나는 결함이었다. `[tool.uv.sources]` 는 그대로 둔다 — CONTRIBUTING.md 가 로컬 개발 메커니즘으로 문서화했고 `cross-repo-contract.yml` 이 그 위에 선다. 함께, `kpubdata` 핀을 `>=0.5.0,<0.6` 으로 적어 둔 `CONTRIBUTING.md` 3곳과 `cubrid.yml` 주석을 실제 `pyproject.toml` 핀(`>=0.6.0,<0.7`)에 맞췄다. ADR 0007 의 같은 문자열은 그 시점의 결정 기록이므로 고치지 않는다
+- **`uv.lock` 드리프트를 잡는 CI 가드 (#625)**: `uv.lock` 은 `--no-sources` 해상도(CI·배포가 설치하는 것)를 기록하는데, CONTRIBUTING 이 안내하는 로컬 명령 `uv sync --extra dev` 는 sources 를 켜고 돌아 lock 의 `kpubdata` 를 `registry` → `editable "../kpubdata"` 로 뒤집고 배포 해시를 지운다. 그 상태가 커밋되면 CI 가 설치하는 것과 lock 이 서술하는 것이 갈리는데 이를 잡는 검사가 없었다. lint 잡에 `uv lock --check --no-sources` 를 추가하고, 로컬에서 더럽혀진 lock 을 커밋하지 않는 방법을 CONTRIBUTING 에 적었다
 - `stages/_path_safety.ensure_within`이 Windows에서 여러 source를 병렬(ThreadPoolExecutor)로 빌드할 때 간헐적으로 traversal 오탐하던 버그 수정 — `root`/`target` 중 한쪽만 `Path.resolve()`의 `\\?\` 확장 프리픽스를 얻는 비대칭이 원인 (#506 조사 중 발견, composition과 무관한 기존 버그)
 
 ### 제거됨
