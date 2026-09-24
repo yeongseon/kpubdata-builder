@@ -507,3 +507,130 @@ class TestBuildJobStatusOwnership:
         resp = dispatch(service, "GET", "/builds/..%2Fescape", None)
 
         assert resp.status_code == 400
+
+
+class TestWorkerAlwaysReachesATerminalState:
+    """runner가 무엇을 던지든 job은 종결된다 (#482).
+
+    worker가 ``RuntimeError``만 잡던 시절에는 그 밖의 예외가 thread를 그대로
+    빠져나갔다. ``_finish``가 불리지 않으니 job은 영원히 ``running``으로 남고,
+    polling하는 클라이언트는 끝나지 않는 build를 기다리며, queue 슬롯도 돌아오지
+    않는다.
+    """
+
+    class _RaisingBuildService(_ObservedBuildService):
+        exception: BaseException = ValueError("boom")
+
+        def build(self, spec_yaml: str, **kwargs: object) -> ServiceResponse:
+            try:
+                raise type(self).exception
+            finally:
+                self._completed.set()
+
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            ValueError("not a RuntimeError"),
+            KeyError("missing source"),
+            TypeError("bad argument"),
+        ],
+    )
+    def test_a_non_runtime_error_still_finishes_the_job(
+        self, tmp_path: Path, exc: BaseException
+    ) -> None:
+        completed = threading.Event()
+        service = self._RaisingBuildService(
+            output_root=tmp_path,
+            client_factory=lambda: _FakeClient({}),
+            completed=completed,
+            async_max_workers=1,
+        )
+        type(service).exception = exc
+
+        assert service.submit_build(VALID_SPEC_YAML, run_id="run1").status_code == 202
+        assert completed.wait(timeout=5)
+
+        status = _await_terminal(service, "run1")
+        assert status == "failed"
+
+    def test_the_error_message_names_the_exception_type(self, tmp_path: Path) -> None:
+        completed = threading.Event()
+        service = self._RaisingBuildService(
+            output_root=tmp_path,
+            client_factory=lambda: _FakeClient({}),
+            completed=completed,
+            async_max_workers=1,
+        )
+        type(service).exception = ValueError("spec exploded")
+
+        assert service.submit_build(VALID_SPEC_YAML, run_id="run1").status_code == 202
+        assert completed.wait(timeout=5)
+        _await_terminal(service, "run1")
+
+        error = service.build_status("run1").body.get("error")
+        assert isinstance(error, str)
+        assert "ValueError" in error and "spec exploded" in error
+
+    def test_the_worker_slot_is_released_for_the_next_job(self, tmp_path: Path) -> None:
+        # 종결하지 못한 job은 단일 worker를 영구 점유해 이후 모든 build를 막는다.
+        completed = threading.Event()
+        service = self._RaisingBuildService(
+            output_root=tmp_path,
+            client_factory=lambda: _FakeClient({}),
+            completed=completed,
+            async_max_workers=1,
+        )
+        type(service).exception = ValueError("boom")
+
+        service.submit_build(VALID_SPEC_YAML, run_id="run1")
+        assert completed.wait(timeout=5)
+        _await_terminal(service, "run1")
+
+        completed.clear()
+        assert service.submit_build(VALID_SPEC_YAML, run_id="run2").status_code == 202
+        assert completed.wait(timeout=5)
+        assert _await_terminal(service, "run2") == "failed"
+
+
+class TestMalformedSpecYaml:
+    """문법이 깨진 YAML은 사용자 입력 오류지 서버 결함이 아니다."""
+
+    MALFORMED = "dataset_id: [unclosed\n"
+
+    def test_synchronous_build_returns_400(self, tmp_path: Path) -> None:
+        service = _service(tmp_path, threading.Event())
+
+        response = service.build(self.MALFORMED, run_id="run1")
+
+        assert response.status_code == 400
+
+    def test_validate_returns_400(self, tmp_path: Path) -> None:
+        service = _service(tmp_path, threading.Event())
+
+        assert service.validate(self.MALFORMED).status_code == 400
+
+    def test_async_build_reaches_a_terminal_state(self, tmp_path: Path) -> None:
+        completed = threading.Event()
+        service = _service(tmp_path, completed)
+
+        response = service.submit_build(self.MALFORMED, run_id="run1")
+
+        if response.status_code == 202:
+            assert completed.wait(timeout=5)
+            assert _await_terminal(service, "run1") in {"failed", "cancelled"}
+        else:
+            assert response.status_code == 400
+
+
+def _await_terminal(service: BuilderService, run_id: str, timeout: float = 5.0) -> str:
+    """terminal 상태가 될 때까지 기다리고 그 상태를 반환한다."""
+    import time
+
+    deadline = time.monotonic() + timeout
+    status = ""
+    while time.monotonic() < deadline:
+        status = str(service.build_status(run_id).body.get("status", ""))
+        if status in {"succeeded", "failed", "cancelled"}:
+            return status
+        time.sleep(0.02)
+    return status

@@ -81,9 +81,27 @@ def _reachable_dataset_refs(scope: Scope, visited: set[int] | None = None) -> in
             count += _reachable_dataset_refs(source, seen)
         elif isinstance(source, exp.Table):
             count += 1
-    for child in (*scope.subquery_scopes, *scope.union_scopes):
+    for child in (*scope.subquery_scopes, *_set_operation_scopes(scope)):
         count += _reachable_dataset_refs(child, seen)
     return count
+
+
+def _set_operation_scopes(scope: Scope) -> list[Scope]:
+    """Return the branch scopes of a set operation, across sqlglot versions.
+
+    sqlglot 30.19 renamed ``Scope.union_scopes`` to ``Scope.set_operation_scopes``
+    (UNION/INTERSECT/EXCEPT all being set operations). The declared range allows
+    both, and reading the old name on a new sqlglot raises AttributeError from
+    inside the guard that decides whether a query may run — so this walker would
+    fail open-ended rather than count the branches it exists to count. Prefer the
+    current name and fall back to the old one.
+    """
+    branches = getattr(scope, "set_operation_scopes", None)
+    if branches is None:
+        branches = getattr(scope, "union_scopes", None)
+    if branches is None:  # pragma: no cover - neither name exists
+        raise UnsafeQueryError("unsupported sqlglot version: cannot inspect set operations")
+    return list(branches)
 
 
 def validate_read_only_sql(sql: str) -> ValidatedSql:
