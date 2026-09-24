@@ -206,3 +206,39 @@ def test_snapshot_write_is_atomic_and_cleans_temp_file(
 def test_snapshot_rejects_unsafe_run_id(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="run_id"):
         write_buildspec_snapshot(_complete_spec(), output_root=tmp_path, run_id="../escape")
+
+
+def test_spec_digest_changes_when_transform_rules_change() -> None:
+    """변환 규칙이 spec digest에 반영된다 (#611).
+
+    R1은 "같은 recipe는 같은 output을 낸다"를 주장한다. rename/derived가 digest에
+    들어가지 않으면 변환 규칙을 바꿔도 같은 digest가 나와, 그 주장에서 정작
+    Silver를 만든 규칙이 recipe 밖에 있게 된다.
+    """
+    from kpubdata_builder.spec.models import DerivedColumn
+
+    base = _complete_spec()
+    renamed = replace(
+        base,
+        sources=(replace(base.sources[0], schema=SchemaContract(rename={"sggCd": "district"})),),
+    )
+    derived = replace(
+        base,
+        sources=(
+            replace(
+                base.sources[0],
+                schema=SchemaContract(
+                    derived=(
+                        DerivedColumn(name="deal_date", kind="date_parts", columns=("y", "m", "d")),
+                    )
+                ),
+            ),
+        ),
+    )
+
+    assert compute_spec_digest(serialize_spec_bytes(renamed)) != compute_spec_digest(
+        serialize_spec_bytes(base)
+    )
+    assert compute_spec_digest(serialize_spec_bytes(derived)) != compute_spec_digest(
+        serialize_spec_bytes(renamed)
+    )

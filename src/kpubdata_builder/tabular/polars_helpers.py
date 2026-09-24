@@ -21,6 +21,14 @@ import polars as pl
 
 DtypeSpec = str | pl.DataType | type[pl.DataType]
 
+#: 포맷이 섞인 문자열을 숫자로 읽는 named cast (#611). dtype이 아니라 캐스팅
+#: 전략이므로 _NAMED_DTYPES와 분리한다 — 원천 공공데이터의 금액은 천단위
+#: 구분자가 포함된 문자열("120,000")로 오고, 그대로 int 캐스팅하면 전부 null이
+#: 되어 #188의 data-loss 가드가 빌드를 실패시킨다.
+_FORMATTED_CASTS: Mapping[str, pl.DataType] = {
+    "int_comma": pl.Int64(),
+}
+
 _TRUE_TOKENS = {"1", "t", "true", "y", "yes"}
 _FALSE_TOKENS = {"0", "f", "false", "n", "no"}
 
@@ -138,6 +146,10 @@ def cast_columns(
             raise ValueError(
                 f"Cannot cast missing column: {column!r}. Available columns: {df.columns}"
             )
+        formatted = _formatted_cast(dtype)
+        if formatted is not None:
+            expressions.append(_cast_formatted_numeric(column, formatted))
+            continue
         resolved_dtype = _resolve_dtype(dtype)
         if isinstance(resolved_dtype, pl.Boolean):
             expressions.append(_cast_boolean(column))
@@ -167,6 +179,29 @@ def cast_columns(
         return CastResult(df=result_df, reports=tuple(reports))
 
     return result_df
+
+
+def _formatted_cast(dtype: DtypeSpec) -> pl.DataType | None:
+    """named formatted cast이면 대상 dtype을, 아니면 None을 돌려준다 (#611)."""
+    if isinstance(dtype, str):
+        return _FORMATTED_CASTS.get(dtype.strip().lower())
+    return None
+
+
+def _cast_formatted_numeric(column: str, dtype: pl.DataType) -> pl.Expr:
+    """천단위 구분자와 주변 공백을 제거한 뒤 숫자로 캐스팅한다 (#611).
+
+    구분자 제거에 실패해 남은 값은 strict=False로 null이 되고, 그 손실은 호출자의
+    audit이 감지한다 — 포맷을 넓히는 것이지 실패를 묻는 것이 아니다.
+    """
+    return (
+        pl.col(column)
+        .cast(pl.Utf8)
+        .str.replace_all(",", "")
+        .str.strip_chars()
+        .cast(dtype, strict=False)
+        .alias(column)
+    )
 
 
 def _resolve_dtype(dtype: DtypeSpec) -> pl.DataType:
