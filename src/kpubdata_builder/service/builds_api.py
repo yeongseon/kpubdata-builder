@@ -22,11 +22,11 @@ from pathlib import Path
 from typing import cast
 from urllib.parse import unquote
 
+from kpubdata_builder.events import BuildEventStore
 from kpubdata_builder.manifest import status_from_manifest
 from kpubdata_builder.service import events as events_service
 from kpubdata_builder.service import ownership as ownership_module
 from kpubdata_builder.service.auth import Principal
-from kpubdata_builder.service.events import BuildEventStore
 from kpubdata_builder.service.responses import FileResponse, ServiceResponse
 from kpubdata_builder.spec import JsonValue, compute_spec_digest
 from kpubdata_builder.spec.serializer import BUILDSPEC_SNAPSHOT_FILENAME
