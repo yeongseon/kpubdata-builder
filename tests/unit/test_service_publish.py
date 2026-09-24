@@ -1499,3 +1499,87 @@ class TestOpenApiConformance:
         resp = _publish(service, "conform-publish-502")
         assert resp.status_code == 502
         _assert_conforms(resp, "/builds/{run_id}/publish", "POST")
+
+
+class TestRemotePublishProbe:
+    """`_probe_remote_publish_target`을 stub 없이 실제로 부른다 (#551).
+
+    reconcile 테스트들은 이 메서드를 통째로 monkeypatch 한다. 그래서 메서드 본문이
+    huggingface_hub를 어떻게 부르는지는 아무 테스트도 보지 않았고,
+    ``dataset_info(repo_type=...)`` 라는 존재하지 않는 인자가 TypeError를 내며
+    "판단 불가"로 삼켜지는 것을 잡지 못했다.
+    """
+
+    @staticmethod
+    def _install_fake_hub(
+        monkeypatch: pytest.MonkeyPatch, dataset_info: object
+    ) -> list[dict[str, object]]:
+        import sys
+        import types
+
+        calls: list[dict[str, object]] = []
+
+        class _FakeApi:
+            def __init__(self, token: str | None = None) -> None:
+                self.token = token
+
+            def dataset_info(self, repo_id: str, **kwargs: object) -> object:
+                calls.append({"repo_id": repo_id, **kwargs})
+                if callable(dataset_info):
+                    return dataset_info(repo_id, **kwargs)
+                return dataset_info
+
+        module = types.ModuleType("huggingface_hub")
+        module.HfApi = _FakeApi  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "huggingface_hub", module)
+        monkeypatch.setenv("HF_TOKEN", "hf_test_token")
+        return calls
+
+    def test_probe_reports_an_existing_dataset(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        service = _service(tmp_path)
+        calls = self._install_fake_hub(monkeypatch, object())
+
+        result = service._probe_remote_publish_target("huggingface", "kpubdata/air-quality")
+
+        assert result is True
+        # dataset_info는 이미 dataset 전용이라 repo_type을 받지 않는다.
+        assert calls == [{"repo_id": "kpubdata/air-quality"}]
+
+    def test_probe_reports_a_missing_dataset(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class RepositoryNotFoundError(Exception):
+            pass
+
+        def _raise(repo_id: str, **kwargs: object) -> object:
+            raise RepositoryNotFoundError(repo_id)
+
+        service = _service(tmp_path)
+        self._install_fake_hub(monkeypatch, _raise)
+
+        assert service._probe_remote_publish_target("huggingface", "kpubdata/missing") is False
+
+    def test_probe_is_inconclusive_without_a_token(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        service = _service(tmp_path)
+        self._install_fake_hub(monkeypatch, object())
+        monkeypatch.setenv("HF_TOKEN", "")
+
+        assert service._probe_remote_publish_target("huggingface", "kpubdata/x") is None
+
+    def test_a_signature_mismatch_is_not_reported_as_an_unreachable_remote(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # 우리 쪽 호출이 틀린 것은 원격 상태가 아니다 — "판단 불가"로 숨기면
+        # reconcile이 영원히 확정하지 못하면서 아무도 이유를 모른다.
+        def _raise(repo_id: str, **kwargs: object) -> object:
+            raise TypeError("dataset_info() got an unexpected keyword argument")
+
+        service = _service(tmp_path)
+        self._install_fake_hub(monkeypatch, _raise)
+
+        with pytest.raises(TypeError):
+            service._probe_remote_publish_target("huggingface", "kpubdata/x")

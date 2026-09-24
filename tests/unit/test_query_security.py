@@ -60,3 +60,38 @@ def test_rejects_unsafe_or_unbound_relations(sql: str) -> None:
 def test_canonical_sql_removes_comments() -> None:
     result = validate_read_only_sql("SELECT /* untrusted */ * FROM dataset")
     assert "untrusted" not in result.canonical_sql
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT city FROM dataset UNION SELECT city FROM dataset",
+        "SELECT city FROM dataset UNION ALL SELECT city FROM dataset",
+        "SELECT city FROM dataset INTERSECT SELECT city FROM dataset",
+        "SELECT city FROM dataset EXCEPT SELECT city FROM dataset",
+        "WITH a AS (SELECT city FROM dataset UNION SELECT city FROM dataset) SELECT * FROM a",
+        "SELECT * FROM (SELECT city FROM dataset UNION SELECT city FROM dataset) AS u",
+    ],
+)
+def test_allows_set_operations_over_dataset(sql: str) -> None:
+    """집합 연산도 dataset에서 파생된 질의다 (#504).
+
+    scope walker가 집합 연산 분기를 못 읽으면 여기서 AttributeError로 터진다 —
+    sqlglot 30.19가 ``Scope.union_scopes``를 ``set_operation_scopes``로 바꿨고,
+    선언된 버전 범위(>=30.17,<31)는 양쪽을 모두 허용한다. 질의 허용 여부를 정하는
+    가드 안에서 나는 예외라 조용히 지나갈 수 없다.
+    """
+    assert validate_read_only_sql(sql).sql
+
+
+def test_set_operation_branches_are_counted_not_skipped() -> None:
+    # 분기를 못 세면 "dataset을 참조해야 한다" 규칙이 통과할 수 없다 — 이 질의는
+    # 오직 분기 안에서만 dataset을 참조한다.
+    assert validate_read_only_sql(
+        "SELECT * FROM (SELECT city FROM dataset UNION SELECT city FROM dataset) AS u"
+    ).sql
+
+
+def test_set_operation_over_a_non_dataset_table_is_still_rejected() -> None:
+    with pytest.raises(UnsafeQueryError):
+        validate_read_only_sql("SELECT city FROM other UNION SELECT city FROM other")

@@ -2206,7 +2206,15 @@ class BuilderService:
                 return None
             try:
                 api = HfApi(token=token)
-                api.dataset_info(repo_id=destination, repo_type="dataset")
+                # dataset_info is already dataset-scoped and takes no repo_type.
+                # Passing one raised TypeError, which the handler below swallowed
+                # into "cannot tell" — so every probe reported inconclusive and
+                # reconcile could never confirm a published dataset.
+                api.dataset_info(repo_id=destination)
+            except TypeError:
+                # A signature mismatch is our bug, not a remote condition. Let it
+                # surface instead of masquerading as an unreachable remote.
+                raise
             except Exception as exc:
                 # repo 부재(gated 401/404 계열)와 접근 실패를 구분한다 —
                 # huggingface_hub는 부재를 RepositoryNotFoundError로 알려준다.
