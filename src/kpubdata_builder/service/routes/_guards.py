@@ -98,3 +98,32 @@ def check_active_run_access(
             return None
         return ServiceResponse(403, {"error": "forbidden: not run owner"})
     return ServiceResponse(404, {"error": f"run not found: {run_id}"})
+
+
+def check_existing_run_access(
+    service: BuilderService, run_id: str, principal: Principal
+) -> ServiceResponse | None:
+    """호출자가 지정한 run_id 가 **이미 존재한다면** 그 소유자인지 확인한다 (#635).
+
+    ``check_active_run_access`` 와 판정 규칙은 같고 없는 run 을 다루는 방식만
+    다르다. 그쪽은 조회 route 용이라 run 이 없으면 404 지만, 여기서는 없는
+    run_id 가 정상이다 — 새 빌드를 그 이름으로 시작하겠다는 뜻이기 때문이다.
+
+    이 게이트가 없던 시절, 동기 ``POST /build`` 는 호출자가 준 run_id 가 누구
+    것인지 확인하지 않았다. 남의 run_id 를 주면 그 run 의 산출물을 덮어쓰고 응답
+    으로 결과까지 돌려받았다. 비동기 ``POST /builds`` 는 같은 상황에서 409 로
+    막는다.
+    """
+    run_dir = service._output_root / run_id
+    ensure_within(service._output_root, run_dir, label="run directory")
+    if (run_dir / "manifest.json").exists():
+        return check_ownership(service, run_id, principal)
+    snapshot = service._async_builds.get(run_id)
+    if snapshot is None:
+        # 아직 없는 run_id — 새 빌드다.
+        return None
+    if ownership_module.ownership_allows(
+        created_by=snapshot.created_by, owner_id=snapshot.owner_id, principal=principal
+    ):
+        return None
+    return ServiceResponse(403, {"error": "forbidden: not run owner"})

@@ -10,6 +10,7 @@ from ...spec import JsonValue
 from ...tabular import DEFAULT_PREVIEW_LIMIT
 from ..auth import Principal
 from ..responses import ServiceResponse
+from ._guards import check_existing_run_access
 from ._parsing import optional_run_id, spec_from_body
 from ._types import RouteResponse
 
@@ -86,6 +87,14 @@ def route(
         run_id = optional_run_id(body)
         if isinstance(run_id, ServiceResponse):
             return run_id
+        # 호출자가 run_id 를 직접 줄 수 있는데, 그 run 이 누구 것인지 확인하지
+        # 않고 있었다 (#635). 남의 run_id 를 주면 그 run 의 산출물을 덮어쓰고
+        # 응답으로 결과까지 돌려받는다. 비동기 POST /builds 에는 게이트가 있고
+        # 동기 경로만 빠져 있었다 — 같은 규칙을 적용한다.
+        if run_id is not None:
+            denied = check_existing_run_access(service, run_id, principal)
+            if denied is not None:
+                return denied
         return service.build(
             spec,
             run_id=run_id,
