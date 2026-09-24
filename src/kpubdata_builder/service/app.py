@@ -713,8 +713,11 @@ class BuilderService:
         client = self._create_client()
         try:
             runtime_catalog = runtime_provider_catalog(client)
-        except Exception as exc:
-            return ServiceResponse(502, {"error": f"catalog unavailable: {exc}"})
+        except Exception:
+            # upstream 예외 문자열은 요청 URL 을 실어 나를 수 있고, 그 URL 에는
+            # API 키가 쿼리 파라미터로 들어 있다 (providers_service 와 같은 이유).
+            logger.exception("provider catalog unavailable")
+            return ServiceResponse(502, {"error": "catalog unavailable"})
         finally:
             _close_request_client(client)
 

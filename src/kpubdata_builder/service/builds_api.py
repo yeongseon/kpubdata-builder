@@ -160,8 +160,12 @@ class BuildArtifactsApiService:
         try:
             payload = snapshot_path.read_bytes()
             spec_text = payload.decode("utf-8")
-        except (OSError, UnicodeDecodeError) as exc:
-            return ServiceResponse(500, {"error": f"failed to read BuildSpec snapshot: {exc}"})
+        except (OSError, UnicodeDecodeError):
+            # 예외 문자열을 그대로 돌려주면 OSError 가 서버의 절대 경로를 실어
+            # 보낸다 — 호출자가 알 필요도 없고 알아서도 안 되는 정보다.
+            # 진단에 필요한 내용은 traceback 째로 로그에 남긴다.
+            logger.exception("failed to read BuildSpec snapshot for run %s", run_id)
+            return ServiceResponse(500, {"error": "failed to read BuildSpec snapshot"})
         return ServiceResponse(
             200,
             {
