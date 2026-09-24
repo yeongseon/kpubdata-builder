@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import pathlib
 from collections.abc import Iterable
 from pathlib import Path
 from typing import cast
@@ -278,20 +279,14 @@ def test_run_build_dataset_card_ignores_non_string_metadata_version(tmp_path: Pa
     assert "None" not in text
 
 
-def test_run_build_does_not_forward_arbitrary_metadata_to_exporters(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    captured: list[dict[str, str]] = []
+def test_run_build_does_not_forward_arbitrary_metadata_to_exporters(tmp_path: Path) -> None:
+    """임의 metadata는 exporter에 새지 않는다.
 
-    def _capture_exports(
-        _gold_dir: Path,
-        artifact: orchestrator.ArtifactDataset,
-        _exports: tuple[ExportTarget, ...],
-    ) -> list[Path]:
-        captured.append(artifact.metadata)
-        return []
-
-    monkeypatch.setattr(orchestrator, "_execute_exports", _capture_exports)
+    #629 이전에는 orchestrator가 exporter용 metadata를 두 곳에서 만들었고, 이
+    테스트는 그중 두 번째(``_execute_exports``)를 가로채 확인했다. 이제 그 두 번째
+    경로는 없다 — ``_gold_package_metadata``가 exporter가 보는 유일한 출처이므로
+    계약을 거기서 확인한다.
+    """
     spec = BuildSpec(
         dataset_id="apt_trade",
         title="Apartment Trades",
@@ -307,13 +302,21 @@ def test_run_build_does_not_forward_arbitrary_metadata_to_exporters(
     assert result.status == "ok"
     # dataset_id는 #550부터 exporter에 전달되는 공개 필드다(Kaggle metadata id
     # 정합). 임의 metadata(nested/tags)는 여전히 새지 않는다.
-    assert captured == [
-        {
-            "title": "Apartment Trades",
-            "description": "seoul apartment trades",
-            "dataset_id": "apt_trade",
-        }
-    ]
+    assert orchestrator._gold_package_metadata(spec) == {
+        "title": "Apartment Trades",
+        "description": "seoul apartment trades",
+        "dataset_id": "apt_trade",
+    }
+
+
+def test_gold_package_is_the_only_exporter_metadata_source(tmp_path: Path) -> None:
+    """orchestrator가 exporter용 metadata를 따로 조립하지 않는다 (#629).
+
+    출처가 둘이면 갈리고, 뒤가 앞을 덮는다 — schema가 사라진 것이 그 결과였다.
+    """
+    source = pathlib.Path(orchestrator.__file__).read_text(encoding="utf-8")
+
+    assert "_execute_exports(" not in source.split("def _execute_exports(", 1)[1]
 
 
 def test_run_build_uses_alias_as_source_key(tmp_path: Path) -> None:
