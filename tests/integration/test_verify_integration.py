@@ -38,13 +38,22 @@ class TestVerifyWithRealSpecs:
         assert spec.endpoint.base_url != ""
         assert spec.auth.type == "query_param"
 
-    def test_check_endpoint_reachable(self) -> None:
-        """datago.apt_trade의 endpoint가 네트워크적으로 도달 가능하다."""
+    def test_check_endpoint_returns_a_verdict_for_a_real_spec(self) -> None:
+        """실제 spec으로 endpoint 검사가 판정을 낸다.
+
+        살아있는 제3자 endpoint의 응답을 단언하지 않는다 — data.go.kr이 러너 위치나
+        시점에 따라 다른 상태 코드를 주면 이 테스트가 코드와 무관하게 깨진다. 어떤
+        상태 코드를 reachable로 볼지는 fake로 고정한 단위 테스트
+        (``tests/unit/test_verify_runner.py``)가 남김없이 다룬다. 여기서는 실제
+        spec을 읽어 검사가 판정과 근거를 낸다는 것만 확인한다.
+        """
         spec = find_spec("datago.apt_trade")
         assert spec is not None
         result = _check_endpoint(spec)
         assert result.name == CheckName.ENDPOINT
-        assert result.passed
+        assert isinstance(result.passed, bool)
+        # 실패했다면 왜인지 말해야 한다 — 통과한 경우에는 latency가 기록된다.
+        assert result.passed or result.detail
 
     def test_verify_without_key_returns_non_healthy(self) -> None:
         """API 키 없이 verify하면 HEALTHY가 아닌 상태가 된다."""
