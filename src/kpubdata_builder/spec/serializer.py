@@ -99,9 +99,18 @@ def canonical_spec_mapping(spec: BuildSpec) -> dict[str, JsonValue]:
                 "required": list(source.schema.required),
                 "dtypes": _canonical_structure(cast(JsonValue, source.schema.dtypes)),
                 "casts": _canonical_structure(cast(JsonValue, source.schema.casts)),
-                # rename/derived도 recipe의 일부다 (#611). 빠지면 변환 규칙을
-                # 바꿔도 spec digest가 그대로라, R1의 "같은 recipe는 같은 output"
-                # 주장에서 정작 Silver를 만든 규칙이 recipe 밖에 남는다.
+            }
+            # 나머지 Silver 변환 선언(#611 이후)은 **선언됐을 때만** 싣는다.
+            #
+            # 이들도 recipe의 일부다 — 빠지면 변환 규칙을 바꿔도 digest가 그대로라,
+            # R1의 "같은 recipe는 같은 output" 주장에서 정작 Silver를 만든 규칙이
+            # recipe 밖에 남는다. 그래서 선언된 값은 반드시 싣는다.
+            #
+            # 다만 비어 있을 때까지 키를 실으면, 이 필드들을 쓰지 않는 **기존 spec의
+            # digest가 전부 바뀐다.** digest는 manifest·BuildIndex·GET /datasets에
+            # 노출되는 recipe identity라, 업그레이드 시점에 "같은 recipe인가" 비교가
+            # 끊긴다. 쓰지 않는 기능 때문에 정체성이 바뀌어서는 안 된다.
+            optional: dict[str, JsonValue] = {
                 "rename": _canonical_structure(cast(JsonValue, source.schema.rename)),
                 "read_as": _canonical_structure(cast(JsonValue, source.schema.read_as)),
                 "null_tokens": list(source.schema.null_tokens),
@@ -136,6 +145,7 @@ def canonical_spec_mapping(spec: BuildSpec) -> dict[str, JsonValue]:
                     for rule in source.schema.derived
                 ],
             }
+            schema.update({key: value for key, value in optional.items() if value})
         # kind별로 유효한 field만 싣는다 (#498). loader의 _reject_foreign_fields가
         # kind-foreign field의 "존재"만으로 거부하므로, 여기서 모든 kind의 field를
         # 항상 함께 실으면 canonical snapshot 자체가 round-trip 불가능한 spec이
