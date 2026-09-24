@@ -634,3 +634,75 @@ def _await_terminal(service: BuilderService, run_id: str, timeout: float = 5.0) 
             return status
         time.sleep(0.02)
     return status
+
+
+class TestSyncBuildRespectsRunOwnership:
+    """동기 POST /build 도 남의 run 을 덮어쓰지 못한다 (#635).
+
+    호출자가 run_id 를 직접 지정할 수 있는데, 그 run 이 누구 것인지 확인하지
+    않고 있었다. 남의 run_id 를 주면 그 run 의 산출물을 덮어쓰고 응답으로 결과
+    까지 돌려받았다. 비동기 POST /builds 에는 게이트가 있고 동기 경로만 빠져
+    있었다.
+    """
+
+    @staticmethod
+    def _as(monkeypatch: pytest.MonkeyPatch, owner: str) -> None:
+        monkeypatch.setattr(
+            app_module,
+            "authenticate",
+            lambda **_kwargs: Principal(kind="oidc", identifier=owner, owner_id=f"oidc:{owner}"),
+        )
+
+    def test_a_stranger_cannot_overwrite_a_completed_run(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(_OWNERSHIP_ENV, "true")
+        service = _service(tmp_path, threading.Event())
+
+        self._as(monkeypatch, "owner-a")
+        assert (
+            dispatch(service, "POST", "/build", {"spec": VALID_SPEC_YAML, "run_id": "run1"})
+        ).status_code < 400
+
+        self._as(monkeypatch, "owner-b")
+        resp = dispatch(service, "POST", "/build", {"spec": VALID_SPEC_YAML, "run_id": "run1"})
+
+        assert resp.status_code == 403
+
+    def test_the_owner_can_rebuild_their_own_run(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(_OWNERSHIP_ENV, "true")
+        service = _service(tmp_path, threading.Event())
+
+        self._as(monkeypatch, "owner-a")
+        assert (
+            dispatch(service, "POST", "/build", {"spec": VALID_SPEC_YAML, "run_id": "run1"})
+        ).status_code < 400
+        resp = dispatch(service, "POST", "/build", {"spec": VALID_SPEC_YAML, "run_id": "run1"})
+
+        assert resp.status_code < 400
+
+    def test_a_new_run_id_is_not_blocked(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # 없는 run_id 는 "새 빌드를 그 이름으로 시작하겠다" 는 뜻이다 — 404 가
+        # 아니다. 조회 route 의 게이트를 그대로 쓰면 정상 빌드가 막힌다.
+        monkeypatch.setenv(_OWNERSHIP_ENV, "true")
+        service = _service(tmp_path, threading.Event())
+        self._as(monkeypatch, "owner-a")
+
+        resp = dispatch(service, "POST", "/build", {"spec": VALID_SPEC_YAML, "run_id": "fresh"})
+
+        assert resp.status_code < 400
+
+    def test_a_generated_run_id_is_not_blocked(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(_OWNERSHIP_ENV, "true")
+        service = _service(tmp_path, threading.Event())
+        self._as(monkeypatch, "owner-a")
+
+        resp = dispatch(service, "POST", "/build", {"spec": VALID_SPEC_YAML})
+
+        assert resp.status_code < 400
