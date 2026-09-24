@@ -135,6 +135,7 @@ def validate_spec(spec: BuildSpec) -> None:
     problems.extend(_schema_problems(spec))
     problems.extend(_source_kind_problems(spec))
     problems.extend(_source_key_problems(spec))
+    problems.extend(_param_grid_problems(spec))
     problems.extend(_pii_problems(spec))
     problems.extend(_license_problems(spec))
     problems.extend(_quality_problems(spec))
@@ -683,6 +684,63 @@ def _source_key_problems(spec: BuildSpec) -> list[ValidationProblem]:
             )
         else:
             first_index[key] = i
+    return problems
+
+
+def _param_grid_problems(spec: BuildSpec) -> list[ValidationProblem]:
+    """``param_grid`` 선언 자체의 유효성을 검증한다 (#613).
+
+    전개는 데카르트 곱이라 선언 하나가 호출 수를 곱한다. 잘못된 선언이 런타임까지
+    가면 이미 수백 번 호출한 뒤에 실패하므로, 선언 시점에 막는다.
+    """
+    problems: list[ValidationProblem] = []
+    for i, source in enumerate(spec.sources):
+        if not source.param_grid:
+            continue
+        prefix = f"sources[{i}].param_grid"
+        if source.kind != "public_api":
+            problems.append(
+                _p(
+                    "param_grid_not_supported",
+                    prefix,
+                    f"param_grid is only valid for kind='public_api', not {source.kind!r}",
+                )
+            )
+            continue
+        for key, values in source.param_grid.items():
+            field = f"{prefix}.{key}"
+            if not values:
+                # 빈 축 하나가 데카르트 곱 전체를 0 으로 만든다 — 호출이 한 번도
+                # 일어나지 않고 빈 Bronze 가 성공으로 기록된다.
+                problems.append(
+                    _p(
+                        "empty_param_grid_axis",
+                        field,
+                        f"param_grid axis {key!r} has no values; the expansion would be empty",
+                        hint="Remove the axis, or list the values it should iterate over",
+                    )
+                )
+            if key in source.params:
+                # 같은 키를 양쪽에 두면 어느 쪽이 이기는지 선언만 봐서는 알 수 없다.
+                problems.append(
+                    _p(
+                        "param_grid_shadows_params",
+                        field,
+                        f"{key!r} is declared in both params and param_grid",
+                        hint="params carries values shared by every combination; "
+                        "keep the axis in only one place",
+                    )
+                )
+            for index, value in enumerate(values):
+                if isinstance(value, (dict, list)):
+                    # 요청 파라미터는 스칼라다. 중첩 값은 URL 로 나갈 수 없다.
+                    problems.append(
+                        _p(
+                            "invalid_param_grid_value",
+                            f"{field}[{index}]",
+                            f"param_grid values must be scalars, got {type(value).__name__}",
+                        )
+                    )
     return problems
 
 

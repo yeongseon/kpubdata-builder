@@ -165,6 +165,19 @@ def canonical_spec_mapping(spec: BuildSpec) -> dict[str, JsonValue]:
             entry["provider"] = source.provider
             entry["dataset"] = source.dataset
             entry["params"] = _canonical_json(source.params)
+            if source.param_grid:
+                # 전개된 조합이 곧 어떤 데이터를 가져왔는지를 정한다 — recipe 의
+                # 일부다. 빠지면 grid 를 바꿔도 digest 가 그대로라 "같은 recipe 는
+                # 같은 output" 주장이 성립하지 않는다 (#613).
+                #
+                # 비었을 때는 싣지 않는다. 쓰지 않는 기능 때문에 기존 spec 의
+                # digest 가 움직이면 안 된다 (#640 과 같은 이유).
+                entry["param_grid"] = _canonical_structure(
+                    cast(
+                        JsonValue,
+                        {key: list(values) for key, values in source.param_grid.items()},
+                    )
+                )
         sources.append(entry)
 
     exports: list[JsonValue] = [

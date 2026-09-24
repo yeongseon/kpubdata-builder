@@ -233,12 +233,54 @@ def _parse_json_mapping(value: object, *, field_name: str) -> dict[str, JsonValu
     return parsed
 
 
+def _parse_param_grid(value: object, *, field_name: str) -> dict[str, tuple[JsonValue, ...]]:
+    """``param_grid`` 를 키별 값 튜플로 파싱한다 (#613).
+
+    각 값은 **리스트여야 한다.** 스칼라를 허용하면 "값 하나짜리 축" 과 "공통
+    파라미터" 가 구문상 구분되지 않고, 그 둘은 의미가 다르다 — 후자는 ``params``
+    가 표현한다. 비었는지/문자열인지 같은 의미 검증은 validator 가 맡는다.
+    """
+    if not isinstance(value, dict):
+        raise TypeError(f"{field_name} must be a mapping")
+
+    raw_mapping = cast(dict[object, object], value)
+    parsed: dict[str, tuple[JsonValue, ...]] = {}
+    for key, item in raw_mapping.items():
+        if not isinstance(key, str):
+            raise TypeError(f"{field_name} keys must be strings")
+        if not isinstance(item, list):
+            raise TypeError(
+                f"{field_name}.{key} must be a list of values; "
+                "a single shared value belongs in params"
+            )
+        values = cast(list[object], item)
+        parsed[key] = tuple(
+            _validate_json_value(entry, field_name=f"{field_name}.{key}[{i}]")
+            for i, entry in enumerate(values)
+        )
+    return parsed
+
+
 # kind별로만 유효한 field들 (#498). 서로 다른 kind의 field가 섞인 source는 명백한
 # 계약 오류이므로 loader가 즉시 거부한다 — "kind=file인데 provider도 있음" 같은
 # 모호한 spec을 조용히 부분 해석하지 않는다.
 _PUBLIC_API_ONLY_FIELDS: tuple[str, ...] = ("upload_id", "format", "encoding", "endpoint", "method")
-_FILE_ONLY_FIELDS: tuple[str, ...] = ("provider", "dataset", "params", "endpoint", "method")
-_URL_ONLY_FIELDS: tuple[str, ...] = ("provider", "dataset", "params", "upload_id", "encoding")
+_FILE_ONLY_FIELDS: tuple[str, ...] = (
+    "provider",
+    "dataset",
+    "params",
+    "param_grid",
+    "endpoint",
+    "method",
+)
+_URL_ONLY_FIELDS: tuple[str, ...] = (
+    "provider",
+    "dataset",
+    "params",
+    "param_grid",
+    "upload_id",
+    "encoding",
+)
 
 
 def _reject_foreign_fields(
@@ -309,10 +351,12 @@ def _parse_public_api_source(
     provider = _require_string(mapping, "provider", prefix=prefix)
     dataset = _require_string(mapping, "dataset", prefix=prefix)
     params = _parse_json_mapping(mapping.get("params", {}), field_name=f"{prefix}.params")
+    param_grid = _parse_param_grid(mapping.get("param_grid", {}), field_name=f"{prefix}.param_grid")
     return SourceRef(
         provider=provider,
         dataset=dataset,
         params=params,
+        param_grid=param_grid,
         alias=alias,
         schema=schema,
         kind="public_api",
