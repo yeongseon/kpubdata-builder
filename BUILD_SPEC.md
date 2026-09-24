@@ -182,8 +182,57 @@ provenance/manifest에는 query string이 제거된 endpoint만 남습니다.
 | `required` | array<string> | 반드시 존재해야 하는 컬럼 목록 |
 | `dtypes` | object<string, string> | 컬럼별 기대 dtype |
 | `casts` | object<string, string> | 정규화 단계에서 적용할 컬럼별 dtype 캐스팅 |
+| `rename` | object<string, string> | 원 필드명 → canonical 컬럼명 매핑 (#611) |
+| `derived` | array<object> | 기존 컬럼에서 새 컬럼을 만드는 규칙 (#611) |
 
 제거된 `normalization_mode`는 허용하지 않습니다. 정규화는 `schema.casts`로 선언합니다.
+
+적용 순서는 `rename` → `casts` → `derived`입니다. 따라서 `required`/`dtypes`/`casts`/
+`derived`의 컬럼명은 모두 **rename 이후의 이름**을 가리킵니다. `rename`이 원본에 없는
+컬럼을 가리키면 `TabularError`로 실패합니다 — 상류 스키마 변경을 조용히 넘기지 않습니다.
+
+`rename`은 이름만 바꾸고 컬럼을 버리지 않습니다. 배포용 스크립트(`scripts/pipeline/
+transform.py`)의 `column_mapping`은 매핑되지 않은 컬럼을 드롭하지만, Silver는 Bronze의
+행과 열을 보존하는 계층이므로 여기서는 드롭하지 않습니다.
+
+`casts`는 `_NAMED_DTYPES`(bool/date/datetime/float/int/str 계열)에 더해 named formatted
+cast를 받습니다.
+
+| cast | 동작 |
+| :--- | :--- |
+| `int_comma` | 천단위 구분자와 주변 공백을 제거한 뒤 `Int64`로 캐스팅 (`"120,000"` → `120000`) |
+
+`int_comma`가 없으면 금액 컬럼에 `int`를 선언했을 때 모든 값이 null이 되어 #188의
+data-loss 가드가 빌드를 실패시킵니다.
+
+`derived`의 각 규칙은 `name` / `kind` / `columns`를 갖습니다. 자유형 표현식은 받지
+않습니다(`RangeRule`/`CompareColumnsRule`과 같은 typed rule 관례).
+
+| kind | columns | 결과 |
+| :--- | :--- | :--- |
+| `date_parts` | 정확히 3개 (year, month, day) | `Date` 컬럼 |
+| `join_key` | 1개 이상 | `\|`로 이어붙인 문자열 복합키 |
+
+`join_key`는 composition의 단일 컬럼 equi-join으로 다중 키 조인을 표현할 때 씁니다.
+
+```yaml
+    schema:
+      rename:
+        sggCd: district_code
+        dealAmount: deal_amount
+      casts:
+        deal_amount: int_comma
+      derived:
+        - name: deal_date
+          kind: date_parts
+          columns: [dealYear, dealMonth, dealDay]
+        - name: join_key
+          kind: join_key
+          columns: [district_code, year_month]
+```
+
+`rename`과 `derived`는 canonical BuildSpec snapshot에 실리므로 spec digest에 반영됩니다
+— 변환 규칙을 바꾸면 digest가 바뀝니다.
 
 ### 4.5 `exports` (배열)
 

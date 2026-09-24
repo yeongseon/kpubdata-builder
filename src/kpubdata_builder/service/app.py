@@ -22,7 +22,7 @@ import threading
 import time
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import suppress
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol, cast, runtime_checkable
 from urllib.parse import unquote, urlsplit
@@ -38,7 +38,6 @@ from ..credentials import (
 )
 from ..errors import SpecLoadError, ValidationError
 from ..events import BuildEvent, BuildEventStore
-from ..ingestion import IngestionError, parse_tabular_bytes
 from ..manifest import status_from_manifest
 from ..pipeline import (
     DEFAULT_PREVIEW_SEED,
@@ -49,26 +48,18 @@ from ..pipeline import (
 )
 from ..publishers import PUBLISHER_REGISTRY
 from ..quality import QualityCheckResult
-from ..query.engine import QueryExecutionError, QueryTimeoutError
-from ..query.models import QueryRequest, QueryStage
-from ..query.resolver import (
-    QueryArtifactUnavailableError,
-    QueryContextError,
-    resolve_query_context,
-)
-from ..query.security import UnsafeQueryError, validate_read_only_sql
-from ..query.service import QueryBusyError, QueryService
+from ..query.service import QueryService
 from ..spec import BuildSpec, JsonValue, parse_spec
-from ..spec.models import SOURCE_FILE_FORMATS
 from ..spec.serializer import BUILDSPEC_SNAPSHOT_FILENAME, compute_spec_digest
 from ..spec.validator import validate_spec
 from ..stages._path_safety import ensure_within, validate_path_segment
 from ..stages.bronze.build import SourceClient
-from ..store import BuildIndex
+from ..store import make_build_index
+from ..store.artifacts import make_artifact_store
+from ..store.backend import storage_backend
 from ..tabular import DEFAULT_PREVIEW_LIMIT
 from ..uploads import (
     SQLiteUploadRepository,
-    UploadMetadata,
     UploadRepository,
     resolve_max_upload_bytes,
 )
@@ -77,9 +68,10 @@ from . import events as events_service
 from . import monitoring as monitoring_service
 from . import ownership as ownership_module
 from . import publish as publish_service
-from . import quality as quality_service
 from . import stages as stages_service
 from .auth import AuthError, Principal, authenticate
+from .auth_throttle import AuthFailureThrottle
+from .datasets_api import DatasetsApiService
 from .jobs import AsyncBuildExecutor, generate_run_id
 from .providers import (
     CredentialResolver,
@@ -87,15 +79,16 @@ from .providers import (
     ProviderDescriptor,
     ProviderTestOperation,
     default_provider_test,
-    provider_descriptors,
-    run_provider_test,
     runtime_provider_catalog,
-    test_result_body,
 )
+from .providers_service import ProvidersService
+from .quality_api import QualityApiService
+from .query_service_api import QueryApiService
 from .responses import FileResponse, ServiceResponse
 from .routes import ROUTE_ADAPTERS
 from .routes import uploads as uploads_route
 from .routes.core import MAX_PREVIEW_LIMIT
+from .uploads_service import UploadsService
 
 logger = logging.getLogger(__name__)
 
@@ -128,11 +121,20 @@ def _raise_provider_test_error(client: SourceClient, provider: str) -> None:
 
 
 def _credential_repository_from_env(output_root: Path) -> CredentialRepository | None:
-    """master key가 설정된 경우에만 encrypted repository를 활성화한다."""
+    """master key가 설정된 경우에만 encrypted repository를 활성화한다.
+
+    백엔드는 KPUBDATA_BUILDER_STORAGE_BACKEND 를 따른다 (ADR 0016): cubrid 이면 전역
+    Engine 을 공유하는 CubridCredentialRepository, 아니면 기본 SQLite 파일.
+    """
     encoded_key = os.environ.get(_CREDENTIAL_MASTER_KEY_ENV)
     if not encoded_key:
         return None
     cipher = AesGcmCredentialCipher.from_base64(encoded_key)
+    if storage_backend() == "cubrid":
+        from ..credentials.store_cubrid import CubridCredentialRepository
+        from ..store.backend import get_engine
+
+        return CubridCredentialRepository(get_engine(), cipher)
     return SQLiteCredentialRepository(
         output_root / ".service" / "provider-credentials.sqlite3", cipher
     )
@@ -410,7 +412,13 @@ def _strip_internal_fields(entries: list[_BuildListEntry]) -> list[_BuildListEnt
 #     metadata가 없는 dataset은 빈 배열. application은 API Key 발급과 Dataset별
 #     활용신청이 별개일 수 있는 경우의 안내({required, url})로, raw_metadata에
 #     없으면 null(신청 완료/승인 여부를 Builder/Studio가 추측하지 않는다).
-API_CONTRACT_VERSION = "1.22.0"
+# 1.22.0 -> 1.23.0: BuildSpec sources[].schema(SchemaContract)에 rename과
+# derived를 추가한다(#611, additive — 기존 필드/동작 불변). rename은 원 필드명 →
+# canonical 컬럼명 매핑으로 캐스팅보다 먼저 적용되고, derived는
+# date_parts/join_key typed 규칙으로 캐스팅 뒤에 새 컬럼을 만든다. 손으로 쓴
+# YAML만 지원하던 선언을 공개 계약에 올려 Studio와 타입 생성기가 발견/타이핑할
+# 수 있게 한다.
+API_CONTRACT_VERSION = "1.23.0"
 
 
 def _quality_result_to_json(r: QualityCheckResult) -> dict[str, JsonValue]:
@@ -426,18 +434,6 @@ def _quality_result_to_json(r: QualityCheckResult) -> dict[str, JsonValue]:
         "affected_rows": r.affected_rows,
         "evaluated_rows": r.evaluated_rows,
         "detail": r.detail,
-    }
-
-
-def _upload_metadata_body(metadata: UploadMetadata) -> dict[str, JsonValue]:
-    """UploadMetadata를 wire JSON으로 변환한다 (#498). content는 절대 포함하지 않는다."""
-    return {
-        "upload_id": metadata.upload_id,
-        "format": metadata.format,
-        "encoding": metadata.encoding,
-        "size_bytes": metadata.size_bytes,
-        "original_filename": metadata.original_filename,
-        "created_at": metadata.created_at,
     }
 
 
@@ -496,7 +492,8 @@ class BuilderService:
     ) -> None:
         self._output_root = output_root
         self._client_factory = client_factory
-        self._build_index = BuildIndex(output_root)  # #309, ADR 0003
+        self._build_index = make_build_index(output_root)  # #309, ADR 0003/0016
+        self._store = make_artifact_store(output_root)  # ADR 0010/0016 (manifest 정본)
         # run event timeline 저장소(#496). `_upload_repository`와 동일하게 지연
         # 생성한다 — preview는 build를 전혀 실행하지 않아 event를 남길 일이
         # 없으므로("Preview writes no files" 기존 계약, #497 범위 밖 #496도
@@ -515,6 +512,8 @@ class BuilderService:
         # Monitoring API용 bounded latency recorder (#516). dispatch()가 매 요청
         # 처리 시간을 기록한다 — 인스턴스별로 분리해 테스트 간 상태가 섞이지 않는다.
         self._latency_recorder = monitoring_service.LatencyRecorder()
+        # 인증 실패 스로틀. latency recorder와 같은 이유로 인스턴스별로 둔다.
+        self._auth_throttle = AuthFailureThrottle()
         # 외부 publish side effect의 durable idempotency receipt. 객체 생성은
         # 파일을 만들지 않으며 최초 POST claim 때 SQLite를 지연 초기화한다.
         self._publish_receipts = publish_service.PublishReceiptStore(output_root)
@@ -530,6 +529,27 @@ class BuilderService:
         )
         if self._provider_test_timeout <= 0:
             raise ValueError("provider test timeout must be positive")
+        # provider 도메인은 자기 의존성만 받는 별도 서비스로 나갔다 (#596). 여기서는
+        # 조립만 하고, BuilderService 의 provider 메서드는 얇은 위임으로 남는다.
+        self._providers_service = ProvidersService(
+            credential_resolver=self._credential_resolver,
+            create_client=self._create_client,
+            close_client=lambda client: (
+                _close_request_client(client) if client is not None else None
+            ),
+            provider_test_operation=self._provider_test_operation,
+            provider_test_timeout=self._provider_test_timeout,
+        )
+        # upload 저장소는 처음 필요할 때만 SQLite 를 만든다 (#498) — 저장소 객체가 아니라
+        # property 를 호출하는 람다를 넘겨 그 지연 생성을 그대로 유지한다.
+        self._uploads_service = UploadsService(repository=lambda: self._upload_repository)
+        self._query_api = QueryApiService(output_root=self._output_root, engine=self._query_service)
+        self._datasets_api = DatasetsApiService(
+            output_root=self._output_root, build_index=self._build_index, store=self._store
+        )
+        self._quality_api = QualityApiService(
+            output_root=self._output_root, store=self._store, datasets=self._datasets_api
+        )
         self._async_builds = AsyncBuildExecutor(
             max_workers=async_max_workers,
             max_queue_size=async_max_queue_size,
@@ -615,98 +635,22 @@ class BuilderService:
         return self._client_factory(**kwargs)
 
     def _runtime_providers(self) -> tuple[ProviderDescriptor, ...] | ServiceResponse:
-        client = self._create_client()
-        try:
-            return provider_descriptors(client)
-        except Exception as exc:
-            logger.exception("provider catalog unavailable")
-            return ServiceResponse(502, {"error": f"catalog unavailable: {exc}"})
-        finally:
-            _close_request_client(client)
+        return self._providers_service.runtime_providers()
 
     def _known_provider(self, provider: str) -> ProviderDescriptor | ServiceResponse:
-        providers = self._runtime_providers()
-        if isinstance(providers, ServiceResponse):
-            return providers
-        match = next((item for item in providers if item.name == provider), None)
-        if match is None:
-            return ServiceResponse(404, {"error": "provider not found"})
-        return match
+        return self._providers_service.known_provider(provider)
 
     def providers(self, *, principal: Principal) -> ServiceResponse:
         """런타임 Provider 목록과 현재 principal의 configured 상태를 반환한다."""
-        descriptors = self._runtime_providers()
-        if isinstance(descriptors, ServiceResponse):
-            return descriptors
-        if principal.owner_id is None:
-            return ServiceResponse(403, {"error": "stable principal is required"})
-        items: list[JsonValue] = []
-        for descriptor in descriptors:
-            resolved = self._credential_resolver.resolve(principal.owner_id, descriptor.name)
-            configured = not descriptor.requires_credential or resolved.value is not None
-            items.append(
-                {
-                    "provider": descriptor.name,
-                    "requires_credential": descriptor.requires_credential,
-                    "configured": configured,
-                }
-            )
-        return ServiceResponse(200, {"providers": items})
+        return self._providers_service.providers(principal=principal)
 
     def provider_status(self, provider: str, *, principal: Principal) -> ServiceResponse:
         """현재 principal credential로 lightweight connection test를 수행한다."""
-        descriptor = self._known_provider(provider)
-        if isinstance(descriptor, ServiceResponse):
-            return descriptor
-        if principal.owner_id is None:
-            return ServiceResponse(403, {"error": "stable principal is required"})
-        resolved = self._credential_resolver.resolve(principal.owner_id, provider)
-        configured = not descriptor.requires_credential or resolved.value is not None
-        client: SourceClient | None = None
-        try:
-            if configured:
-                client = self._create_client(
-                    principal, providers=(provider,), timeout=self._provider_test_timeout
-                )
-            result = run_provider_test(
-                provider=provider,
-                configured=configured,
-                client=client,
-                operation=self._provider_test_operation,
-            )
-            return ServiceResponse(200, cast(dict[str, JsonValue], test_result_body(result)))
-        except Exception:
-            # Client 생성 실패도 원문 예외를 로그/응답하지 않고 unknown으로 제한한다.
-            result = run_provider_test(
-                provider=provider,
-                configured=True,
-                client=cast(SourceClient, object()),
-                operation=_raise_provider_test_error,
-            )
-            return ServiceResponse(200, cast(dict[str, JsonValue], test_result_body(result)))
-        finally:
-            if client is not None:
-                _close_request_client(client)
+        return self._providers_service.provider_status(provider, principal=principal)
 
     def provider_credential(self, provider: str, *, principal: Principal) -> ServiceResponse:
         """원문 없이 현재 principal의 저장 credential 메타데이터를 반환한다."""
-        known = self._known_provider(provider)
-        if isinstance(known, ServiceResponse):
-            return known
-        repository = self._credential_resolver.repository
-        if repository is None:
-            return ServiceResponse(503, {"error": "credential store is not configured"})
-        if principal.owner_id is None:
-            return ServiceResponse(403, {"error": "stable principal is required"})
-        metadata = repository.get_metadata(principal.owner_id, provider)
-        return ServiceResponse(
-            200,
-            {
-                "configured": metadata.configured,
-                "masked": metadata.masked,
-                "updated_at": metadata.updated_at,
-            },
-        )
+        return self._providers_service.provider_credential(provider, principal=principal)
 
     def put_provider_credential(
         self,
@@ -716,45 +660,11 @@ class BuilderService:
         principal: Principal,
     ) -> ServiceResponse:
         """현재 principal의 Provider credential을 생성 또는 교체한다."""
-        known = self._known_provider(provider)
-        if isinstance(known, ServiceResponse):
-            return known
-        repository = self._credential_resolver.repository
-        if repository is None:
-            return ServiceResponse(503, {"error": "credential store is not configured"})
-        if principal.owner_id is None:
-            return ServiceResponse(403, {"error": "stable principal is required"})
-        if body is None or set(body) != {"credential"}:
-            return ServiceResponse(400, {"error": "body must contain only 'credential'"})
-        credential = body.get("credential")
-        if not isinstance(credential, str) or not credential.strip():
-            return ServiceResponse(400, {"error": "credential must be a non-empty string"})
-        metadata = repository.put(principal.owner_id, provider, credential)
-        return ServiceResponse(
-            200,
-            {
-                "provider": metadata.provider,
-                "configured": metadata.configured,
-                "masked": metadata.masked,
-                "updated_at": metadata.updated_at,
-            },
-        )
+        return self._providers_service.put_provider_credential(provider, body, principal=principal)
 
     def delete_provider_credential(self, provider: str, *, principal: Principal) -> ServiceResponse:
         """현재 principal의 Provider credential만 삭제한다."""
-        known = self._known_provider(provider)
-        if isinstance(known, ServiceResponse):
-            return known
-        repository = self._credential_resolver.repository
-        if repository is None:
-            return ServiceResponse(503, {"error": "credential store is not configured"})
-        if principal.owner_id is None:
-            return ServiceResponse(403, {"error": "stable principal is required"})
-        _ = repository.delete(principal.owner_id, provider)
-        return ServiceResponse(
-            200,
-            {"provider": provider, "configured": False, "masked": None, "updated_at": None},
-        )
+        return self._providers_service.delete_provider_credential(provider, principal=principal)
 
     def create_upload(
         self,
@@ -765,97 +675,28 @@ class BuilderService:
         original_filename: str | None,
         principal: Principal,
     ) -> ServiceResponse:
-        """업로드 content를 저장하고 즉시 파싱 가능한지 검증한다 (#498).
-
-        저장은 owner_id로 격리된다 — 나중에 BuildSpec의 ``kind="file"`` source가
-        이 upload_id를 참조하려면 같은 principal이어야 한다(``build``/``preview``의
-        resolver가 다시 확인한다). 파싱 가능성은 여기서 fail-fast로 확인한다 —
-        나중에 build 시점에야 손상된 파일임을 알게 되는 것을 피한다.
-        """
-        if principal.owner_id is None:
-            return ServiceResponse(403, {"error": "stable principal is required"})
-        if format not in SOURCE_FILE_FORMATS:
-            return ServiceResponse(
-                400,
-                {"error": f"format must be one of {SOURCE_FILE_FORMATS}, got {format!r}"},
-            )
-        try:
-            _ = parse_tabular_bytes(raw, format=format, encoding=encoding)
-        except IngestionError as exc:
-            return ServiceResponse(400, {"error": str(exc)})
-        try:
-            metadata = self._upload_repository.put(
-                principal.owner_id,
-                content=raw,
-                format=format,
-                encoding=encoding,
-                original_filename=original_filename,
-            )
-        except ValueError as exc:
-            return ServiceResponse(400, {"error": str(exc)})
-        return ServiceResponse(200, _upload_metadata_body(metadata))
+        """업로드 content를 저장하고 즉시 파싱 가능한지 검증한다 (#498)."""
+        return self._uploads_service.create_upload(
+            raw,
+            format=format,
+            encoding=encoding,
+            original_filename=original_filename,
+            principal=principal,
+        )
 
     def get_upload(self, upload_id: str, *, principal: Principal) -> ServiceResponse:
         """현재 principal 소유 업로드의 안전한 메타데이터만 반환한다 (content 제외)."""
-        if principal.owner_id is None:
-            return ServiceResponse(403, {"error": "stable principal is required"})
-        metadata = self._upload_repository.get_metadata(principal.owner_id, upload_id)
-        if metadata is None:
-            return ServiceResponse(404, {"error": f"upload not found: {upload_id}"})
-        return ServiceResponse(200, _upload_metadata_body(metadata))
+        return self._uploads_service.get_upload(upload_id, principal=principal)
 
     def delete_upload(self, upload_id: str, *, principal: Principal) -> ServiceResponse:
         """현재 principal 소유 업로드만 삭제한다."""
-        if principal.owner_id is None:
-            return ServiceResponse(403, {"error": "stable principal is required"})
-        deleted = self._upload_repository.delete(principal.owner_id, upload_id)
-        if not deleted:
-            return ServiceResponse(404, {"error": f"upload not found: {upload_id}"})
-        return ServiceResponse(200, {"upload_id": upload_id, "deleted": True})
+        return self._uploads_service.delete_upload(upload_id, principal=principal)
 
     def query(
         self, body: Mapping[str, JsonValue] | None, *, principal: Principal
     ) -> ServiceResponse:
         """서버가 resolve한 stage 테이블에 대해 검증된 SQL 쿼리 1건을 실행한다."""
-        try:
-            request = _query_request_from_body(body)
-            context = resolve_query_context(self._output_root, request, principal)
-            validated = validate_read_only_sql(request.sql)
-            result = self._query_service.execute(
-                context.table_path, validated.canonical_sql, limit=request.limit
-            )
-        except PermissionError:
-            return ServiceResponse(403, {"error": "forbidden", "code": "forbidden"})
-        except QueryArtifactUnavailableError:
-            return ServiceResponse(
-                404, {"error": "query artifact unavailable", "code": "artifact_unavailable"}
-            )
-        except QueryContextError as exc:
-            return ServiceResponse(400, {"error": str(exc), "code": "invalid_context"})
-        except UnsafeQueryError as exc:
-            return ServiceResponse(400, {"error": str(exc), "code": "unsafe_query"})
-        except QueryBusyError:
-            return ServiceResponse(429, {"error": "query is busy", "code": "query_busy"})
-        except QueryTimeoutError:
-            return ServiceResponse(504, {"error": "query timed out", "code": "query_timeout"})
-        except QueryExecutionError:
-            return ServiceResponse(
-                400, {"error": "query execution failed", "code": "query_execution_failed"}
-            )
-        except ValueError as exc:
-            return ServiceResponse(400, {"error": str(exc), "code": "invalid_request"})
-
-        return ServiceResponse(
-            200,
-            {
-                "columns": list(result.columns),
-                "rows": list(result.rows),
-                "truncated": result.truncated,
-                "execution_ms": result.execution_ms,
-                "startup_ms": result.startup_ms,
-                "engine_execution_ms": result.engine_execution_ms,
-            },
-        )
+        return self._query_api.query(body, principal=principal)
 
     def version(self) -> ServiceResponse:
         """Builder API 계약 버전을 반환한다 (#209).
@@ -1194,8 +1035,12 @@ class BuilderService:
                 # (snapshot과 동일한 값) — 파생 검색값일 뿐이므로 별도로 추측하지 않는다 (#488).
                 dataset_id=spec_or_error.dataset_id,
             )
+            # ADR 0016: manifest 문서를 authoritative store 로 승격한다. sqlite/local 은
+            # FS 파일이 정본이라 동일 내용 재기록(무해), cubrid 는 CUBRID 행 정본 + FS 미러.
+            # best-effort — FS 에 이미 정본/미러가 있으므로 승격 실패가 빌드를 실패시키지 않는다.
+            self._store.put_manifest(result.context.run_id, manifest_data)
         except Exception:
-            # 인덱스 갱신 실패는 무시 (ADR 0003)
+            # 인덱스 갱신/manifest 승격 실패는 무시 (ADR 0003)
             pass
 
         return ServiceResponse(status_code, body)
@@ -1446,21 +1291,11 @@ class BuilderService:
         except ValueError as exc:
             return ServiceResponse(400, {"error": str(exc)})
 
-        run_dir = self._output_root / run_id
-        ensure_within(self._output_root, run_dir, label="run directory")
-        manifest_path = run_dir / "manifest.json"
-        ensure_within(run_dir, manifest_path, label="manifest file")
-        if not manifest_path.exists():
+        # ADR 0016: manifest 정본은 store 를 통해 조회한다(cubrid=CUBRID 행 우선, FS 폴백;
+        # local=FS). get_manifest 는 경로 안전·손상·미존재를 모두 None 으로 합친다.
+        manifest = self._store.get_manifest(run_id)
+        if manifest is None:
             return ServiceResponse(404, {"error": f"manifest not found: {run_id}"})
-
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            return ServiceResponse(500, {"error": f"invalid manifest JSON: {exc.msg}"})
-        except OSError as exc:
-            return ServiceResponse(500, {"error": f"failed to read manifest: {exc}"})
-        if not isinstance(manifest, dict):
-            return ServiceResponse(500, {"error": "invalid manifest: expected object"})
         manifest.pop("owner_id", None)
         return ServiceResponse(200, cast(dict[str, JsonValue], manifest))
 
@@ -1630,262 +1465,55 @@ class BuilderService:
         return ServiceResponse(200, {"builds": cast(list[JsonValue], filtered)})
 
     def _dataset_records(self, principal: Principal | None) -> list[datasets_service.RunRecord]:
-        """dataset_id가 있는 접근 가능한 모든 run을 얻는다 (인덱스 우선, 파일시스템 폴백).
-
-        ownership 필터를 grouping/latest 선정보다 먼저 적용한다 — 동일 dataset_id의
-        타 사용자 run이 latest 후보에 섞이지 않게 한다 (#488 semantics D).
-        """
-        index_records = datasets_service.collect_run_records_from_index(self._build_index) or []
-        filesystem_records = datasets_service.collect_run_records_from_filesystem(self._output_root)
-        records = datasets_service.merge_run_records(index_records, filesystem_records)
-        records = datasets_service.retain_canonical_run_records(self._output_root, records)
-        return datasets_service.filter_ownership(records, principal, enforce=_enforce_ownership())
+        return self._datasets_api.dataset_records(principal)
 
     def _dataset_records_for(
         self, dataset_id: str, principal: Principal | None
     ) -> list[datasets_service.RunRecord]:
-        """특정 dataset_id의 접근 가능한 canonical run을 모두 얻는다."""
-        return [
-            record for record in self._dataset_records(principal) if record.dataset_id == dataset_id
-        ]
+        return self._datasets_api.dataset_records_for(dataset_id, principal)
 
     def _recent_canonical_records(
         self, principal: Principal | None, *, now: datetime, window_seconds: int
     ) -> list[datasets_service.RunRecord]:
-        """최근 ``window_seconds`` 안 candidate run을 canonical 정본으로 확정한다 (#488 후속 리뷰).
-
-        candidate run_id는 두 신호의 합집합이다:
-          - canonical ``manifest.json``의 mtime이 window 안(margin 포함)인 run.
-            mtime은 run 완료 시 만들어지는 정본 파일 자체의 것이라 항상
-            ``manifest.finished_at`` 이상이므로 window 안 run을 떨어뜨리지 않고,
-            ``stat``만 하므로 historical manifest/snapshot을 파싱하지 않는다.
-          - ``BuildIndex.list_between``의 window 안 run (파생 index fast lookup).
-
-        BuildIndex는 파생 검색 index이고 write는 best-effort다 (ADR 0003: "권위
-        없음", manifest와의 reconcile 시점 미정) — 누락되거나 stale한 row가 정본
-        24h aggregate를 바꾸면 안 되므로, index 단독으로 좁히지 않고 위 mtime
-        후보로 보강한다. index 조회가 실패해도 mtime 후보가 이미 전체를 커버한다.
-
-        확정된 candidate만 snapshot+manifest로 재검증하며(``canonical_records_for_run_ids``),
-        정확한 ``(now-window, now]`` 경계와 ``finished_at``/``started_at`` fallback,
-        ownership은 그 canonical 값으로 이후 단계(``aggregate_quality_window`` /
-        ``filter_ownership``)에서 적용한다.
-        """
-        margin_seconds = window_seconds + _QUALITY_WINDOW_MTIME_MARGIN_SECONDS
-        mtime_cutoff = now.timestamp() - margin_seconds
-        candidate_run_ids: set[str] = set()
-        if self._output_root.exists():
-            for run_dir in self._output_root.iterdir():
-                if not run_dir.is_dir():
-                    continue
-                try:
-                    manifest_mtime = (run_dir / "manifest.json").stat().st_mtime
-                except OSError:
-                    continue  # manifest 부재/접근 불가 — 완료된 run 아님
-                if manifest_mtime >= mtime_cutoff:
-                    candidate_run_ids.add(run_dir.name)
-        lower = (now - timedelta(seconds=margin_seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        upper = (now + timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        # 파생 index 조회가 실패해도 mtime 후보가 이미 전체 run을 커버한다.
-        with suppress(Exception):
-            candidate_run_ids.update(
-                entry.run_id for entry in self._build_index.list_between(lower, upper)
-            )
-        canonical = datasets_service.canonical_records_for_run_ids(
-            self._output_root, candidate_run_ids
+        return self._datasets_api.recent_canonical_records(
+            principal, now=now, window_seconds=window_seconds
         )
-        return datasets_service.filter_ownership(canonical, principal, enforce=_enforce_ownership())
 
     def list_datasets(
         self, *, limit: int = 50, principal: Principal | None = None
     ) -> ServiceResponse:
-        """동일 dataset_id의 여러 run을 하나의 built dataset으로 묶어 목록을 반환한다 (#488).
-
-        각 dataset은 접근 가능한 run 중 latest run(finished_at 기준, 동일 시각은
-        run_id 내림차순 타이브레이크)의 canonical snapshot·manifest·stage 상태로
-        요약된다. legacy run(snapshot 없음)은 grouping 대상에서 제외된다.
-
-        `total`은 canonical grouping + ownership 필터 이후, pagination(limit) 이전의
-        distinct dataset 개수다(#488 후속, additive) — limit이 무한이면 `datasets`에
-        실릴 항목 수와 같다. 다른 principal 소유 run만 있는 dataset은 포함되지 않는다.
-        """
-        records = self._dataset_records(principal)
-        latest_by_dataset = datasets_service.group_latest_by_dataset(records)
-        ordered = sorted(
-            latest_by_dataset.values(),
-            key=datasets_service.sort_key,
-            reverse=True,
-        )
-        # total은 canonical/renderable dataset 개수이므로, expensive full summary
-        # (snapshot+manifest+stage 산출물 probe)는 응답 page(limit)에 실릴 후보에만
-        # 수행한다. page를 채운 뒤로는 total 카운트를 위한 경량 renderability 검증만
-        # 한다 — legacy/손상으로 canonical summary를 만들 수 없는 run은 목록에서도
-        # total에서도 동일하게 제외된다(#488 후속 리뷰: limit=1 + 대량 dataset에서
-        # catalog 전체에 full summary가 도는 regression 방지).
-        items: list[JsonValue] = []
-        total = 0
-        for record in ordered:
-            if len(items) < limit:
-                view = datasets_service.build_dataset_summary(self._output_root, record)
-                if view is None:
-                    continue
-                items.append(view)
-                total += 1
-            elif datasets_service.dataset_summary_renderable(self._output_root, record):
-                total += 1
-        return ServiceResponse(200, {"datasets": items, "total": total})
+        """동일 dataset_id의 여러 run을 하나의 built dataset으로 묶어 목록을 반환한다 (#488)."""
+        return self._datasets_api.list_datasets(limit=limit, principal=principal)
 
     def get_dataset(
         self, dataset_id: str, *, principal: Principal | None = None
     ) -> ServiceResponse:
-        """단일 built dataset의 canonical 요약을 반환한다 (#488).
-
-        접근 가능한 run이 하나도 없으면(dataset_id가 실제로 없거나, 있어도 전부
-        타 사용자 소유이면) 404 — 어느 경우인지는 구분해 노출하지 않는다.
-        """
-        records = self._dataset_records_for(dataset_id, principal)
-        if not records:
-            return ServiceResponse(404, {"error": f"dataset not found: {dataset_id}"})
-        latest = datasets_service.pick_latest(records)
-        view = datasets_service.build_dataset_summary(self._output_root, latest)
-        if view is None:
-            return ServiceResponse(404, {"error": f"dataset not found: {dataset_id}"})
-        view["run_count"] = len(records)
-        return ServiceResponse(200, view)
+        """단일 built dataset의 canonical 요약을 반환한다 (#488)."""
+        return self._datasets_api.get_dataset(dataset_id, principal=principal)
 
     def list_dataset_runs(
         self, dataset_id: str, *, limit: int = 50, principal: Principal | None = None
     ) -> ServiceResponse:
-        """dataset_id의 접근 가능한 run history를 최신순으로 반환한다 (#488).
-
-        타 사용자의 run은 제외된다. 접근 가능한 run이 하나도 없으면 404 —
-        /datasets/{dataset_id}와 동일한 존재 판정 정책을 공유한다.
-        """
-        records = self._dataset_records_for(dataset_id, principal)
-        if not records:
-            return ServiceResponse(404, {"error": f"dataset not found: {dataset_id}"})
-        ordered = sorted(records, key=datasets_service.sort_key, reverse=True)[:limit]
-        runs: list[JsonValue] = [
-            {
-                "run_id": r.run_id,
-                "status": r.status,
-                "started_at": r.started_at,
-                "finished_at": r.finished_at,
-                "spec_digest": r.spec_digest,
-                "created_by": r.created_by,
-            }
-            for r in ordered
-        ]
-        return ServiceResponse(200, {"dataset_id": dataset_id, "runs": runs})
+        """dataset_id의 접근 가능한 run history를 최신순으로 반환한다 (#488)."""
+        return self._datasets_api.list_dataset_runs(dataset_id, limit=limit, principal=principal)
 
     def get_dataset_quality_history(
         self, dataset_id: str, *, limit: int = 30, principal: Principal | None = None
     ) -> ServiceResponse:
-        """dataset_id의 접근 가능한 run들에 대한 quality PASS/WARN/FAIL 집계 이력 (#486).
-
-        dataset→run 조회는 #488의 ``_dataset_records_for``(ownership 필터링 포함)를
-        그대로 재사용한다 — 새 dataset grouping/index를 만들지 않는다. 존재/ownership
-        판정은 ``/datasets/{dataset_id}``, ``/datasets/{dataset_id}/runs``와 동일하다.
-        """
-        records = self._dataset_records_for(dataset_id, principal)
-        if not records:
-            return ServiceResponse(404, {"error": f"dataset not found: {dataset_id}"})
-        ordered = sorted(records, key=datasets_service.sort_key, reverse=True)[:limit]
-        runs: list[JsonValue] = []
-        for r in ordered:
-            manifest = datasets_service.read_manifest(self._output_root, r.run_id) or {}
-            runs.append(cast(JsonValue, quality_service.summarize_run_quality(r, manifest)))
-        return ServiceResponse(200, {"dataset_id": dataset_id, "runs": runs})
+        """dataset_id의 접근 가능한 run들에 대한 quality 집계 이력 (#486)."""
+        return self._datasets_api.get_dataset_quality_history(
+            dataset_id, limit=limit, principal=principal
+        )
 
     def get_build_quality(self, run_id: str) -> ServiceResponse:
-        """run의 구조화된 Quality 결과와 schema drift를 조회한다 (#486, #514).
-
-        manifest.json에 이미 저장된 source_key별 quality_results/schema_drift를
-        그대로 노출한다 — 별도 계산을 다시 하지 않는다(정본은 manifest).
-        `availability`/`evaluated_checks`는 빈 매핑이 "평가했지만 0건"인지
-        "애초에 계산된 적이 없음"(legacy/partial run)인지 구분한다(#514).
-        """
-        manifest = datasets_service.read_manifest(self._output_root, run_id)
-        if manifest is None:
-            return ServiceResponse(404, {"error": f"manifest not found: {run_id}"})
-        known_sources = stages_service.known_source_keys(manifest)
-        availability, evaluated_checks = quality_service.quality_availability(
-            manifest, known_sources
-        )
-        quality_results = manifest.get("quality_results")
-        schema_drift = manifest.get("schema_drift")
-        return ServiceResponse(
-            200,
-            {
-                "run_id": run_id,
-                "availability": availability,
-                "evaluated_checks": evaluated_checks,
-                "quality_results": cast(
-                    JsonValue, quality_results if isinstance(quality_results, dict) else {}
-                ),
-                "schema_drift": cast(
-                    JsonValue, schema_drift if isinstance(schema_drift, dict) else {}
-                ),
-            },
-        )
+        """run의 구조화된 Quality 결과와 schema drift를 조회한다 (#486, #514)."""
+        return self._quality_api.get_build_quality(run_id)
 
     def quality_summary(
         self, *, window: str, principal: Principal | None = None
     ) -> ServiceResponse:
-        """최근 ``window`` 안 접근 가능한 run의 structured quality를 PASS/WARN/FAIL
-        run 수로 요약한다 (#486 후속, additive — API 1.22.0).
-
-        Studio Home의 "QUALITY WARN (24H)" KPI가 임의 숫자 합성 없이 authoritative
-        aggregate를 읽도록 하는 bounded cross-run 집계다. 개별 run의
-        ``quality_results``/dataset/owner는 노출하지 않는다 — 그건 per-run
-        ``GET /builds/{run_id}/quality``의 몫이다. 시스템 observability
-        (``/monitoring``)와 도메인 quality를 한 응답에 섞지 않는다.
-
-        run 집합은 ``_recent_canonical_records``로 얻는다 — canonical
-        ``manifest.json`` mtime(+ 파생 BuildIndex 시간창)으로 24h candidate를
-        좁힌 뒤 그 candidate만 canonical snapshot + manifest로 재확인하고
-        (ENFORCE_OWNERSHIP + oidc principal이면 본인 run만), all-history manifest
-        재파싱은 하지 않는다. index는 파생물이라 단독으로 신뢰하지 않는다(ADR 0003).
-        새로운 run 인덱스를 만들지 않는다. legacy run(snapshot 없음)은 애초에
-        structured quality가 없으므로 자연히 제외된다.
-        """
-        if window != "24h":
-            return ServiceResponse(400, {"error": f"unsupported window: {window!r} (only '24h')"})
-        now = datetime.now(timezone.utc)
-        base: dict[str, JsonValue] = {
-            "window": "24h",
-            "generated_at": now.isoformat(timespec="seconds"),
-        }
-        try:
-            records = self._recent_canonical_records(
-                principal,
-                now=now,
-                window_seconds=quality_service.QUALITY_SUMMARY_WINDOW_SECONDS,
-            )
-        except Exception:
-            # run enumeration 자체가 불가능한 경우에만 unavailable — "0건"과 구분한다.
-            return ServiceResponse(
-                200,
-                {
-                    **base,
-                    "availability": "unavailable",
-                    "total_runs": 0,
-                    "evaluated_runs": 0,
-                    "pass_runs": 0,
-                    "warn_runs": 0,
-                    "fail_runs": 0,
-                },
-            )
-        entries = (
-            (record, datasets_service.read_manifest(self._output_root, record.run_id))
-            for record in records
-        )
-        counts = quality_service.aggregate_quality_window(
-            entries,
-            now=now,
-            window_seconds=quality_service.QUALITY_SUMMARY_WINDOW_SECONDS,
-        )
-        return ServiceResponse(200, {**base, "availability": "available", **counts})
+        """최근 window 안 접근 가능한 run의 structured quality 집계 (#486 후속)."""
+        return self._quality_api.quality_summary(window=window, principal=principal)
 
     def monitoring_summary(self) -> ServiceResponse:
         """Builder API/Queue/Worker/Artifact Store 시스템 상태 요약 (#516).
@@ -1996,7 +1624,7 @@ class BuilderService:
         호출 전에 run_id 검증·존재 확인·ownership 게이팅이 끝나 있어야 한다
         (dispatch가 다른 /builds/{run_id}/* 라우트와 동일한 순서로 처리한다).
         """
-        manifest = datasets_service.read_manifest(self._output_root, run_id)
+        manifest = self._store.get_manifest(run_id)
         if manifest is None:
             return ServiceResponse(404, {"error": f"manifest not found: {run_id}"})
         summaries = stages_service.list_run_stages(self._output_root, run_id, manifest)
@@ -2024,7 +1652,7 @@ class BuilderService:
             return ServiceResponse(
                 400, {"error": f"invalid stage: {stage!r}; must be one of bronze/silver/gold"}
             )
-        manifest = datasets_service.read_manifest(self._output_root, run_id)
+        manifest = self._store.get_manifest(run_id)
         if manifest is None:
             return ServiceResponse(404, {"error": f"manifest not found: {run_id}"})
         summary = stages_service.stage_status_for_source(
@@ -2615,39 +2243,6 @@ class BuilderService:
         return spec
 
 
-def _query_request_from_body(body: Mapping[str, JsonValue] | None) -> QueryRequest:
-    if body is None:
-        raise ValueError("request body is required")
-    if not set(body).issubset({"dataset_id", "run_id", "stage", "source", "sql", "limit"}):
-        raise ValueError("request contains unknown fields")
-    dataset_id = body.get("dataset_id")
-    run_id = body.get("run_id")
-    stage = body.get("stage")
-    sql = body.get("sql")
-    source = body.get("source")
-    limit = body.get("limit", 100)
-    if not isinstance(dataset_id, str) or not dataset_id:
-        raise ValueError("dataset_id must be a non-empty string")
-    if not isinstance(run_id, str) or not run_id:
-        raise ValueError("run_id must be a non-empty string")
-    if stage not in ("silver", "gold"):
-        raise ValueError("stage must be silver or gold")
-    if not isinstance(sql, str) or not sql:
-        raise ValueError("sql must be a non-empty string")
-    if source is not None and (not isinstance(source, str) or not source):
-        raise ValueError("source must be a non-empty string when provided")
-    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 500:
-        raise ValueError("limit must be an integer from 1 to 500")
-    return QueryRequest(
-        dataset_id=dataset_id,
-        run_id=run_id,
-        stage=cast(QueryStage, stage),
-        source=source,
-        sql=sql,
-        limit=limit,
-    )
-
-
 def dispatch(
     service: BuilderService,
     method: str,
@@ -2658,6 +2253,7 @@ def dispatch(
     api_key: str | None = None,
     bearer_token: str | None = None,
     raw_body: bytes | None = None,
+    client_id: str | None = None,
 ) -> ServiceResponse | FileResponse:
     """``_dispatch_impl``을 호출하고 처리 시간을 Monitoring latency 표본으로
     기록한다 (#516).
@@ -2680,6 +2276,7 @@ def dispatch(
             api_key=api_key,
             bearer_token=bearer_token,
             raw_body=raw_body,
+            client_id=client_id,
         )
     finally:
         elapsed_ms = (time.perf_counter() - started) * 1000
@@ -2696,12 +2293,17 @@ def _dispatch_impl(
     api_key: str | None = None,
     bearer_token: str | None = None,
     raw_body: bytes | None = None,
+    client_id: str | None = None,
 ) -> ServiceResponse | FileResponse:
     """(method, path)를 BuilderService 연산으로 라우팅한다.
 
     GET /healthz는 인증 없이 반환하고 (#372), 그 외 엔드포인트는
     authenticate()로 Principal을 얻어 인증 게이트를 통과한 후 라우팅한다.
     dev-mode이면 인증 생략, 그 외는 fail-closed(401)로 동작한다 (#248, #384).
+
+    ``client_id``(HTTP 계층이 넘기는 TCP peer 주소)가 있으면 인증 실패를 세어
+    반복 시도를 429로 끊는다. 실패 누적 자체를 인증보다 먼저 확인해, 막힌
+    클라이언트는 키 비교·서명 검증 비용조차 발생시키지 못한다.
 
     반환값:
         ServiceResponse 또는 FileResponse (#323).
@@ -2710,10 +2312,30 @@ def _dispatch_impl(
     if method == "GET" and path == "/healthz":
         return ServiceResponse(200, {"status": "ok"})
 
+    # 인증 실패가 누적된 클라이언트는 인증을 시도하기도 전에 끊는다.
+    retry_after = service._auth_throttle.retry_after(client_id)
+    if retry_after is not None:
+        return ServiceResponse(
+            429,
+            {
+                "error": "too many failed authentication attempts",
+                "code": "auth_throttled",
+                "retry_after_seconds": retry_after,
+            },
+        )
+
     # 인증 게이트 (#384): Principal을 얻지 못하면 401.
     principal = authenticate(api_key=api_key, bearer_token=bearer_token)
     if isinstance(principal, AuthError):
+        # 401(잘못된 자격증명)만 센다 — 403은 유효한 토큰의 인가 실패라 추측 가치가
+        # 없고, 503은 JWKS 일시 장애라 클라이언트 잘못이 아니다.
+        if principal.status_code == 401:
+            service._auth_throttle.record_failure(client_id)
         return ServiceResponse(principal.status_code, {"error": principal.reason})
+
+    # 성공한 인증은 실패 기록을 비운다 — 토큰 만료로 몇 번 401을 받은 정상
+    # 클라이언트가 이후 정상 사용 중에 스로틀에 걸리지 않는다.
+    service._auth_throttle.record_success(client_id)
 
     # /uploads(#498)는 binary body(raw_body)가 필요한 유일한 endpoint라 표준
     # RouteAdapter(JSON body만 받음) 목록에 넣지 않고 여기서 직접 호출한다 —

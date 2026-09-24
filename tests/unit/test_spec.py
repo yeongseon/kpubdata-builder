@@ -218,7 +218,11 @@ def test_load_spec_rejects_empty_yaml(tmp_path: Path) -> None:
 
 
 def test_build_spec_from_yaml_classmethod(tmp_path: Path) -> None:
-    """BuildSpec.from_yaml mirrors load_spec for ergonomic call sites."""
+    """deprecated alias 는 load_spec 과 같은 결과를 내면서 DeprecationWarning 을 낸다.
+
+    alias 자체가 아직 공개 API 라 계속 테스트하되, 경고를 단언해 (1) 스위트 전체에
+    경고가 새지 않게 하고 (2) 제거 시점에 이 테스트가 먼저 깨지도록 계약을 고정한다.
+    """
     spec_path = tmp_path / "spec.yaml"
     _ = spec_path.write_text(
         """
@@ -236,7 +240,8 @@ exports:
         encoding="utf-8",
     )
 
-    spec = BuildSpec.from_yaml(spec_path)
+    with pytest.warns(DeprecationWarning, match="use load_spec"):
+        spec = BuildSpec.from_yaml(spec_path)
 
     assert spec.dataset_id == "dataset.sample"
     assert spec.sources[0].provider == "datago"

@@ -18,7 +18,10 @@ _CODE_ENV_SOURCES = [
     _REPO_ROOT / "src" / "kpubdata_builder" / "service" / "app.py",
     _REPO_ROOT / "src" / "kpubdata_builder" / "service" / "http.py",
     _REPO_ROOT / "src" / "kpubdata_builder" / "service" / "auth.py",
+    _REPO_ROOT / "src" / "kpubdata_builder" / "service" / "auth_throttle.py",
     _REPO_ROOT / "src" / "kpubdata_builder" / "cli.py",
+    # 상태 백엔드 env var(STORAGE_BACKEND/CUBRID_URL)의 정의처 (ADR 0016).
+    _REPO_ROOT / "src" / "kpubdata_builder" / "store" / "backend.py",
     _REPO_ROOT / "docker-entrypoint.sh",
     _REPO_ROOT / "Dockerfile",
 ]

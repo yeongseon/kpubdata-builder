@@ -42,8 +42,8 @@ def route(
         spec = spec_from_body(body)
         if isinstance(spec, ServiceResponse):
             return spec
-        # limit이 명시되면 양의 정수(상한 이내)여야 한다 — 잘못된 값을 조용히
-        # 기본값으로 떨어뜨리지 않는다.
+        # limit이 명시되면 양의 정수여야 한다 — 잘못된 값을 조용히 기본값으로
+        # 떨어뜨리지 않는다. 상한(MAX_PREVIEW_LIMIT) 초과는 service.preview()가 400으로 거부한다.
         if body is not None and "limit" in body:
             limit_value = body["limit"]
             # bool은 int의 하위 타입이지만 limit 의미가 없으므로 거부.

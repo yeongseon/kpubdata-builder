@@ -6,6 +6,7 @@ JWKS 조회는 _get_jwks_client를 mock해 네트워크 없이 검증 로직만 
 
 from __future__ import annotations
 
+import logging
 import time
 
 import jwt
@@ -19,6 +20,7 @@ from kpubdata_builder.service.auth import (
     authenticate,
     compute_owner_id,
     principal_owns,
+    validate_dev_mode,
     validate_oidc_config,
 )
 
@@ -36,6 +38,7 @@ def _clean_auth_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "OIDC_AUDIENCE",
         "OIDC_JWKS_URL",
         "OIDC_JWKS_TTL",
+        "OIDC_LEGACY_REQUIRE_ALLOWLIST",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -247,13 +250,72 @@ class TestValidateOidcConfig:
     def test_accepts_no_allowlist_for_valid_oidc_configuration(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        # 공개 가입이 기본 정책이다 — 허용 목록이 없어도 기동한다.
         monkeypatch.setenv("OIDC_ISSUER", _ISSUER)
         monkeypatch.setenv("OIDC_AUDIENCE", _AUDIENCE)
         validate_oidc_config()
 
+    def test_require_allowlist_switch_rejects_empty_allowlist(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # 제한 배포는 이 스위치로 허용 목록 누락을 기동 실패로 잡는다.
+        monkeypatch.setenv("OIDC_ISSUER", _ISSUER)
+        monkeypatch.setenv("OIDC_AUDIENCE", _AUDIENCE)
+        monkeypatch.setenv("OIDC_LEGACY_REQUIRE_ALLOWLIST", "true")
+        with pytest.raises(RuntimeError, match="OIDC_LEGACY_REQUIRE_ALLOWLIST"):
+            validate_oidc_config()
+
+    def test_require_allowlist_switch_accepts_configured_allowlist(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OIDC_ISSUER", _ISSUER)
+        monkeypatch.setenv("OIDC_AUDIENCE", _AUDIENCE)
+        monkeypatch.setenv("OIDC_LEGACY_REQUIRE_ALLOWLIST", "true")
+        monkeypatch.setenv("OIDC_ALLOWED_EMAILS", "person@example.com")
+        validate_oidc_config()
+
+
+class TestValidateDevMode:
+    """dev-mode 기동 가드 — 인증을 통째로 끄는 플래그가 배포로 새지 않게 한다."""
+
+    def test_no_op_when_dev_mode_disabled(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        monkeypatch.delenv("KPUBDATA_BUILDER_DEV_MODE", raising=False)
+        with caplog.at_level(logging.WARNING):
+            validate_dev_mode()
+        assert caplog.records == []
+
+    def test_warns_that_every_request_is_unauthenticated(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        monkeypatch.setenv("KPUBDATA_BUILDER_DEV_MODE", "true")
+        with caplog.at_level(logging.WARNING):
+            validate_dev_mode()
+        assert any("without authentication" in r.getMessage() for r in caplog.records)
+
+    def test_warns_that_a_configured_api_key_is_ignored(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        monkeypatch.setenv("KPUBDATA_BUILDER_DEV_MODE", "true")
+        monkeypatch.setenv("KPUBDATA_BUILDER_API_KEY", "secret")
+        with caplog.at_level(logging.WARNING):
+            validate_dev_mode()
+        assert any("ignored while dev-mode" in r.getMessage() for r in caplog.records)
+
+    def test_refuses_to_start_when_oidc_is_also_configured(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # 사용자 인증을 구성해두고 인증을 우회하는 조합 — 배포에 dev 플래그가 남은 전형적 사고.
+        monkeypatch.setenv("KPUBDATA_BUILDER_DEV_MODE", "true")
+        monkeypatch.setenv("OIDC_ISSUER", _ISSUER)
+        monkeypatch.setenv("OIDC_AUDIENCE", _AUDIENCE)
+        with pytest.raises(RuntimeError, match="KPUBDATA_BUILDER_DEV_MODE"):
+            validate_dev_mode()
+
 
 class TestAllowlistGate:
-    """허용 목록 게이트 (#386). Google은 공개 IdP — 허용 목록 없이는 인터넷 전체에 노출."""
+    """허용 목록 게이트 (#386) — 설정된 배포에서만 적용되는 선택적 2차 인가."""
 
     def test_hd_allowlist_match(self, oidc_env: bytes, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("OIDC_ALLOWED_HD", "example.com")

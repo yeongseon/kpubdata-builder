@@ -100,3 +100,43 @@ exports:
 
     with pytest.raises(SpecLoadError, match="finite"):
         load_spec(spec_path)
+
+
+def test_load_spec_parses_rename_and_derived(tmp_path: Path) -> None:
+    # #611 — Silver가 canonical dataset이 되려면 rename과 파생 컬럼을 선언으로
+    # 표현할 수 있어야 한다.
+    spec_path = tmp_path / "spec.yaml"
+    spec_path.write_text(
+        """
+dataset_id: dataset.trades
+title: Trades
+description: Seoul apartment trades
+sources:
+  - provider: datago
+    dataset: apt_trade
+    schema:
+      rename:
+        sggCd: district_code
+        dealAmount: deal_amount
+      casts:
+        deal_amount: int_comma
+      derived:
+        - name: deal_date
+          kind: date_parts
+          columns: [dealYear, dealMonth, dealDay]
+exports:
+  - kind: jsonl
+    output_path: out/data.jsonl
+""".strip()
+        + chr(10),
+        encoding="utf-8",
+    )
+
+    spec = load_spec(spec_path)
+
+    schema = spec.sources[0].schema
+    assert schema is not None
+    assert schema.rename == {"sggCd": "district_code", "dealAmount": "deal_amount"}
+    assert schema.derived[0].name == "deal_date"
+    assert schema.derived[0].kind == "date_parts"
+    assert schema.derived[0].columns == ("dealYear", "dealMonth", "dealDay")

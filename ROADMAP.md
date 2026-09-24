@@ -99,9 +99,10 @@ Plugin 생태계와 고급 빌드 기능.
 | 0007 | kpubdata 버전 호환성 | 승인됨 |
 | 0008 | 비동기 build job 모델 | 승인됨 |
 | 0009 | 사용자 인증 Google OIDC | 대체됨(0015) |
-| 0010 | ArtifactStore + 상태 백엔드 | 제안됨 |
+| 0010 | ArtifactStore + 상태 백엔드 | 부분 이행(0016) |
 | 0011 | BuildSpec 어시스턴트 그라운딩 | 승인됨 |
 | 0012 | Provider credential 저장·주입 경계 | 승인됨 |
 | 0013 | API 계약 버전과 릴리스 경계 | 승인됨 |
 | 0014 | Public API·File·URL Source 통합 경계 | 승인됨 |
 | 0015 | Email/Password OIDC IdP(Keycloak) 전환 | 승인됨 |
+| 0016 | CUBRID 상태 백엔드 + manifest 정본 이전 | 수용됨 |

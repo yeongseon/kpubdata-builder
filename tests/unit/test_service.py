@@ -1120,6 +1120,39 @@ class TestHttpAdapter:
             # Same-origin이면 `*`를 반환한다.
             assert response.headers["Access-Control-Allow-Origin"] == "*"
 
+    def test_cors_responses_always_vary_on_origin(
+        self,
+        http_server: tuple[str, HTTPServer, threading.Thread],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # 응답의 CORS 헤더가 Origin에 따라 달라지므로 Vary: Origin이 항상 있어야 한다 —
+        # 없으면 캐싱 프록시가 한 오리진용 응답을 다른 오리진에 재사용할 수 있다.
+        monkeypatch.setenv("KPUBDATA_BUILDER_ALLOWED_ORIGINS", "http://localhost:5173")
+        base_url, _, _ = http_server
+
+        allowed = urllib.request.Request(
+            f"{base_url}/version", headers={"Origin": "http://localhost:5173"}
+        )
+        with urllib.request.urlopen(allowed, timeout=2.0) as response:
+            assert response.headers["Access-Control-Allow-Origin"] == "http://localhost:5173"
+            assert response.headers["Vary"] == "Origin"
+
+        # 거부된 오리진 응답도 Vary를 달아야 캐시가 두 응답을 섞지 않는다.
+        denied = urllib.request.Request(
+            f"{base_url}/version", headers={"Origin": "http://evil.example"}
+        )
+        with urllib.request.urlopen(denied, timeout=2.0) as response:
+            assert "Access-Control-Allow-Origin" not in response.headers
+            assert response.headers["Vary"] == "Origin"
+
+        # preflight도 동일하다.
+        preflight = urllib.request.Request(
+            f"{base_url}/version", headers={"Origin": "http://evil.example"}, method="OPTIONS"
+        )
+        with urllib.request.urlopen(preflight, timeout=2.0) as response:
+            assert response.status == 204
+            assert response.headers["Vary"] == "Origin"
+
     def test_cors_default_denied_when_no_env(
         self,
         http_server: tuple[str, HTTPServer, threading.Thread],

@@ -96,10 +96,15 @@ build/{run_id}/
 | 변수명 | 설명 | 기본값 | 필수 여부 |
 | :--- | :--- | :--- | :--- |
 | `KPUBDATA_BUILDER_API_KEY` | API 인증 키 (`X-API-Key` 헤더). 미설정 시 모든 요청 401 (fail-closed) | 없음 | **필수** (프로덕션) |
-| `KPUBDATA_BUILDER_DEV_MODE` | `true`/`1`이면 인증 생략 (**로컬 개발 전용**, ADR 0006) | 미설정 | 선택 |
-| `KPUBDATA_BUILDER_ALLOWED_ORIGINS` | CORS 허용 오리진 (콤마 구분, default-deny) | 미설정 | 선택 |
+| `KPUBDATA_BUILDER_DEV_MODE` | `true`/`1`이면 인증 생략 (**로컬 개발 전용**, ADR 0006). 기동 시 경고 로그를 남기고, `OIDC_ISSUER`와 함께 설정되면 기동 거부 | 미설정 | 선택 |
+| `OIDC_LEGACY_REQUIRE_ALLOWLIST` | `true`이면 `OIDC_ISSUER` 설정 시 `OIDC_ALLOWED_*` 허용 목록을 필수로 강제(미설정이면 공개 가입이 기본) | 미설정 | 선택 |
+| `KPUBDATA_BUILDER_ALLOWED_ORIGINS` | CORS 허용 오리진 (콤마 구분, default-deny). 응답에는 항상 `Vary: Origin`이 붙는다 | 미설정 | 선택 |
+| `KPUBDATA_BUILDER_AUTH_FAILURE_LIMIT` | 윈도당 허용할 인증 실패 횟수(클라이언트 IP별). 초과분은 `429 auth_throttled`. `0` 이하면 비활성 | `60` | 선택 |
+| `KPUBDATA_BUILDER_AUTH_FAILURE_WINDOW_SECONDS` | 인증 실패 카운트 윈도(초) | `60` | 선택 |
 | `KPUBDATA_BUILDER_CREDENTIAL_MASTER_KEY` | 사용자별 Provider credential AES-GCM master key (URL-safe base64 32 bytes) | 미설정 | credential CRUD 사용 시 필수 |
 | `KPUBDATA_BUILDER_PROVIDER_TEST_TIMEOUT` | Provider connection test 전송 timeout(초) | `10` | 선택 |
+| `KPUBDATA_BUILDER_STORAGE_BACKEND` | 상태 백엔드 (`sqlite`=로컬 기본, `cubrid`=CUBRID, ADR 0016) | `sqlite` | 선택 |
+| `KPUBDATA_BUILDER_CUBRID_URL` | CUBRID SQLAlchemy URL (예: `cubrid+pycubrid://user:pass@host:33000/db?charset=utf8`) | 미설정 | `STORAGE_BACKEND=cubrid` 시 필수 |
 | `KPUBDATA_BUILDER_CANCELLED_RUN_TTL_HOURS` | `prune-cancelled --apply`가 cancelled partial run을 정리하기까지의 보존 시간(시간). 미설정이면 정리 대상 없음(#549) | 미설정 | 선택 |
 | `KPUBDATA_BUILDER_LOCAL_PUBLISH_ROOT` | HTTP `local` publish target의 루트 디렉터리(절대 경로). destination은 이 안의 상대 `owner/name`로 한정된다(#550). 미설정이면 local target blocker | 미설정 | local publish 사용 시 필수 |
 
@@ -233,16 +238,19 @@ ADR 0006). 설정은 환경변수로 주입합니다 — `docker-entrypoint.sh`�
 | `KPUBDATA_BUILDER_DEV_MODE` | `true`/`1`이면 API 키 없이 기동 (로컬 개발 전용) | 미설정 | 선택 |
 | `KPUBDATA_BUILDER_MAX_WORKERS` | 동시 요청 스레드 상한 | `10` | 선택 |
 | `KPUBDATA_QUERY_MAX_CONCURRENCY` | 동시 query child process 상한 | `2` | 선택 |
-| `KPUBDATA_BUILDER_ALLOWED_ORIGINS` | CORS 허용 오리진 (콤마 구분, default-deny) | 미설정 | 선택 |
+| `KPUBDATA_BUILDER_ALLOWED_ORIGINS` | CORS 허용 오리진 (콤마 구분, default-deny). 응답에는 항상 `Vary: Origin`이 붙는다 | 미설정 | 선택 |
 | `KPUBDATA_BUILDER_CREDENTIAL_MASTER_KEY` | 사용자별 Provider credential AES-GCM master key (URL-safe base64 32 bytes) | 미설정 | credential CRUD 사용 시 필수 |
 | `KPUBDATA_BUILDER_PROVIDER_TEST_TIMEOUT` | Provider connection test 전송 timeout(초) | `10` | 선택 |
+| `KPUBDATA_BUILDER_STORAGE_BACKEND` | 상태 백엔드 (`sqlite`=로컬 기본, `cubrid`=CUBRID, ADR 0016) | `sqlite` | 선택 |
+| `KPUBDATA_BUILDER_CUBRID_URL` | CUBRID SQLAlchemy URL (예: `cubrid+pycubrid://user:pass@host:33000/db?charset=utf8`) | 미설정 | `STORAGE_BACKEND=cubrid` 시 필수 |
 | `KPUBDATA_BUILDER_CANCELLED_RUN_TTL_HOURS` | `prune-cancelled --apply`가 cancelled partial run을 정리하기까지의 보존 시간(시간). 미설정이면 정리 대상 없음(#549) | 미설정 | 선택 |
 | `KPUBDATA_BUILDER_LOCAL_PUBLISH_ROOT` | HTTP `local` publish target의 루트 디렉터리(절대 경로). destination은 이 안의 상대 `owner/name`로 한정된다(#550). 미설정이면 local target blocker | 미설정 | local publish 사용 시 필수 |
-| `OIDC_ISSUER` | Google OIDC 발급자 (설정 시 Bearer 활성, ADR 0009) | 미설정 | 선택 |
+| `OIDC_ISSUER` | OIDC 발급자 (설정 시 Bearer 활성, ADR 0015 — Keycloak realm) | 미설정 | 선택 |
 | `OIDC_AUDIENCE` | OIDC audience (OIDC_ISSUER 설정 시 필수) | 미설정 | OIDC 시 필수 |
-| `OIDC_ALLOWED_HD` | 허용 Workspace 도메인 (공개 IdP 필수 방어) | 미설정 | OIDC 시 필수 |
-| `OIDC_ALLOWED_SUBJECTS` | 허용 sub 목록 (콤마 구분) | 미설정 | OIDC 시 필수 |
-| `OIDC_ALLOWED_EMAILS` | 허용 이메일 목록 (콤마 구분) | 미설정 | OIDC 시 필수 |
+| `OIDC_ALLOWED_HD` | 허용 Workspace 도메인 — 제한 배포용 선택적 2차 인가 (기본은 공개 가입) | 미설정 | 선택 |
+| `OIDC_ALLOWED_SUBJECTS` | 허용 sub 목록 (콤마 구분) — 선택 | 미설정 | 선택 |
+| `OIDC_ALLOWED_EMAILS` | 허용 이메일 목록 (콤마 구분) — 선택 | 미설정 | 선택 |
+| `OIDC_LEGACY_REQUIRE_ALLOWLIST` | `true`이면 위 허용 목록 중 하나도 없을 때 기동 거부 | 미설정 | 선택 |
 | `ENFORCE_OWNERSHIP` | `true`/`1`이면 run 소유권 강제 (C2, #389) | 미설정 | 선택 |
 
 > **fail-closed (ADR 0006)**: 컨테이너는 `KPUBDATA_BUILDER_API_KEY`가 없으면 기동을

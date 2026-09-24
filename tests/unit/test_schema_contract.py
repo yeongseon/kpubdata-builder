@@ -8,10 +8,14 @@ required/dtype 위반을 잡아내는지 검증한다. 이전까지는 게이트
 
 from __future__ import annotations
 
+from datetime import date
+from pathlib import Path
+from typing import cast
+
 import pytest
 
 from kpubdata_builder.errors import ValidationError
-from kpubdata_builder.spec import parse_spec
+from kpubdata_builder.spec import BuildSpec, parse_spec
 from kpubdata_builder.spec.validator import validate_spec
 from kpubdata_builder.stages.bronze.models import BronzeArtifact, utc_now
 from kpubdata_builder.stages.silver.build import build_silver_dataset
@@ -147,3 +151,85 @@ class TestSchemaContractEnforcement:
         bronze = self._bronze([{"a": 1}])
         silver = build_silver_dataset(bronze)
         assert silver.validation.ok
+
+
+class _FakeResult:
+    def __init__(self, items: list[dict[str, object]]) -> None:
+        self._items = items
+
+    @property
+    def items(self) -> list[dict[str, object]]:
+        return self._items
+
+
+class _FakeDataset:
+    def __init__(self, items: list[dict[str, object]]) -> None:
+        self._items = items
+
+    def list(self, **_params: object) -> _FakeResult:
+        return _FakeResult(self._items)
+
+
+class _FakeClient:
+    def __init__(self, data: dict[str, list[dict[str, object]]]) -> None:
+        self._data = data
+
+    def dataset(self, source_key: str) -> _FakeDataset:
+        return _FakeDataset(self._data[source_key])
+
+
+class TestTransformRulesReachTheBuild:
+    """schema.rename/derived 선언이 orchestrator를 거쳐 Silver 산출물에 반영된다 (#611).
+
+    build_silver_dataset이 인자를 받아도 orchestrator가 넘기지 않으면 선언은
+    아무 효과가 없다 — #437이 "게이트는 있는데 통과 조건이 없던" 상태와 같은
+    실패 양상이다.
+    """
+
+    def test_rename_and_derived_appear_in_the_silver_table(self, tmp_path: Path) -> None:
+        import polars as pl
+
+        from kpubdata_builder.pipeline import run_build
+
+        spec = cast(
+            BuildSpec,
+            _spec(
+                [
+                    {
+                        **_BASE_SOURCE,
+                        "dataset": "apt_trade",
+                        "schema": {
+                            "rename": {"sggCd": "district_code", "dealAmount": "deal_amount"},
+                            "casts": {"deal_amount": "int_comma"},
+                            "derived": [
+                                {
+                                    "name": "deal_date",
+                                    "kind": "date_parts",
+                                    "columns": ["dealYear", "dealMonth", "dealDay"],
+                                }
+                            ],
+                        },
+                    }
+                ]
+            ),
+        )
+        client = _FakeClient(
+            {
+                "datago.apt_trade": [
+                    {
+                        "sggCd": "11110",
+                        "dealAmount": "120,000",
+                        "dealYear": "2026",
+                        "dealMonth": "9",
+                        "dealDay": "8",
+                    }
+                ]
+            }
+        )
+
+        run_build(spec, client=client, output_root=tmp_path, run_id="run1")
+
+        table = pl.read_parquet(tmp_path / "run1" / "silver" / "datago.apt_trade" / "table.parquet")
+        assert "district_code" in table.columns
+        assert table["deal_amount"].to_list() == [120000]
+        assert table["deal_date"].to_list() == [date(2026, 9, 8)]

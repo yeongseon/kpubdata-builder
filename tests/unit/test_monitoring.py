@@ -36,7 +36,7 @@ from kpubdata_builder.service.monitoring import (
 from kpubdata_builder.service.ownership import _OWNERSHIP_ENV
 from kpubdata_builder.service.quality import Availability
 from kpubdata_builder.spec import JsonValue
-from kpubdata_builder.store import BuildIndex
+from kpubdata_builder.store import SqliteBuildIndex
 
 VALID_SPEC_YAML = (
     """
@@ -506,19 +506,19 @@ class TestQueueWorkerStatus:
 class TestArtifactStoreStatus:
     def test_missing_output_root_is_unavailable(self, tmp_path: Path) -> None:
         missing = tmp_path / "does-not-exist"
-        index = BuildIndex(tmp_path)  # index는 tmp_path에, output_root만 없는 경로로.
+        index = SqliteBuildIndex(tmp_path)  # index는 tmp_path에, output_root만 없는 경로로.
         status = artifact_store_status(missing, index)
         assert status.availability == "unavailable"
         assert status.last_write_at is None
 
     def test_available_with_no_successful_builds_yet(self, tmp_path: Path) -> None:
-        index = BuildIndex(tmp_path)
+        index = SqliteBuildIndex(tmp_path)
         status = artifact_store_status(tmp_path, index)
         assert status.availability == "available"
         assert status.last_write_at is None  # 0건이지 확인 불가가 아님.
 
     def test_available_with_last_write_evidence(self, tmp_path: Path) -> None:
-        index = BuildIndex(tmp_path)
+        index = SqliteBuildIndex(tmp_path)
         index.insert_or_replace(
             run_id="run-1",
             status="ok",
@@ -530,7 +530,7 @@ class TestArtifactStoreStatus:
         assert status.last_write_at == "2026-08-15T01:05:00Z"
 
     def test_failed_only_builds_do_not_count_as_write_evidence(self, tmp_path: Path) -> None:
-        index = BuildIndex(tmp_path)
+        index = SqliteBuildIndex(tmp_path)
         index.insert_or_replace(
             run_id="run-1",
             status="failed",
@@ -544,7 +544,7 @@ class TestArtifactStoreStatus:
     def test_index_query_failure_is_unavailable(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        index = BuildIndex(tmp_path)
+        index = SqliteBuildIndex(tmp_path)
         monkeypatch.setattr(
             index,
             "latest_successful_finished_at",
@@ -555,7 +555,7 @@ class TestArtifactStoreStatus:
         assert status.last_write_at is None
 
     def test_no_absolute_path_leaks_into_status(self, tmp_path: Path) -> None:
-        index = BuildIndex(tmp_path)
+        index = SqliteBuildIndex(tmp_path)
         status = artifact_store_status(tmp_path, index)
         rendered = f"{status.availability}{status.last_write_at}"
         assert str(tmp_path) not in rendered
@@ -721,7 +721,7 @@ _NOW = datetime(2026, 8, 15, 10, 30, 0, tzinfo=timezone.utc)
 
 class TestBuildStatistics:
     def test_empty_index_is_available_with_zero_buckets(self, tmp_path: Path) -> None:
-        index = BuildIndex(tmp_path)
+        index = SqliteBuildIndex(tmp_path)
         stats = build_statistics(
             index, window="24h", bucket="hour", principal=None, enforce_ownership=False, now=_NOW
         )
@@ -732,7 +732,7 @@ class TestBuildStatistics:
         assert stats.recent_runs == ()
 
     def test_counts_success_failed_cancelled_in_correct_bucket(self, tmp_path: Path) -> None:
-        index = BuildIndex(tmp_path)
+        index = SqliteBuildIndex(tmp_path)
         index.insert_or_replace(
             run_id="ok-1", status="ok", started_at=None, finished_at="2026-08-15T09:15:00Z"
         )
@@ -761,7 +761,7 @@ class TestBuildStatistics:
 
     def test_bucket_boundary_is_half_open(self, tmp_path: Path) -> None:
         """정각 timestamp는 다음 bucket에 속한다([start, end) 반열린)."""
-        index = BuildIndex(tmp_path)
+        index = SqliteBuildIndex(tmp_path)
         index.insert_or_replace(
             run_id="on-boundary",
             status="ok",
@@ -777,7 +777,7 @@ class TestBuildStatistics:
         assert bucket_08.total == 0
 
     def test_entries_outside_window_are_excluded(self, tmp_path: Path) -> None:
-        index = BuildIndex(tmp_path)
+        index = SqliteBuildIndex(tmp_path)
         # window는 [2026-08-14T11:00, 2026-08-15T11:00) — 하루 전은 window 밖.
         index.insert_or_replace(
             run_id="too-old",
@@ -792,7 +792,7 @@ class TestBuildStatistics:
 
     def test_malformed_timestamp_excluded_and_marks_partial(self, tmp_path: Path) -> None:
         """날짜 prefix는 정상이지만 시각 부분이 손상된 legacy 값(#516)."""
-        index = BuildIndex(tmp_path)
+        index = SqliteBuildIndex(tmp_path)
         index.insert_or_replace(
             run_id="good", status="ok", started_at=None, finished_at="2026-08-15T09:00:00Z"
         )
@@ -809,7 +809,7 @@ class TestBuildStatistics:
 
     def test_null_finished_at_excluded_and_marks_partial(self, tmp_path: Path) -> None:
         """finished_at NULL 행도 침묵하며 누락되지 않고 partial로 집계된다 (#516)."""
-        index = BuildIndex(tmp_path)
+        index = SqliteBuildIndex(tmp_path)
         index.insert_or_replace(
             run_id="good", status="ok", started_at=None, finished_at="2026-08-15T09:00:00Z"
         )
@@ -825,7 +825,7 @@ class TestBuildStatistics:
     def test_index_query_failure_is_unavailable(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        index = BuildIndex(tmp_path)
+        index = SqliteBuildIndex(tmp_path)
 
         def _raise(*_args: object, **_kwargs: object) -> list:
             raise RuntimeError("simulated sqlite failure")
@@ -839,7 +839,7 @@ class TestBuildStatistics:
         assert stats.recent_runs == ()
 
     def test_deterministic_bucket_ordering(self, tmp_path: Path) -> None:
-        index = BuildIndex(tmp_path)
+        index = SqliteBuildIndex(tmp_path)
         stats = build_statistics(
             index, window="24h", bucket="hour", principal=None, enforce_ownership=False, now=_NOW
         )
@@ -848,7 +848,7 @@ class TestBuildStatistics:
         assert len(starts) == len(set(starts))
 
     def test_recent_runs_bounded_to_ten(self, tmp_path: Path) -> None:
-        index = BuildIndex(tmp_path)
+        index = SqliteBuildIndex(tmp_path)
         for i in range(15):
             index.insert_or_replace(
                 run_id=f"run-{i:02d}",
@@ -862,7 +862,7 @@ class TestBuildStatistics:
         assert len(stats.recent_runs) == 10
 
     def test_ownership_filters_other_principal_when_enforced(self, tmp_path: Path) -> None:
-        index = BuildIndex(tmp_path)
+        index = SqliteBuildIndex(tmp_path)
         index.insert_or_replace(
             run_id="mine",
             status="ok",
@@ -899,7 +899,7 @@ class TestBuildStatistics:
         ownership 필터 이전에 걸린 전역 LIMIT(10)에 밀려 잘리지 않는다 —
         필터가 LIMIT보다 먼저 SQL에서 적용돼야 한다(``BuildIndex.list_recent_owned``).
         """
-        index = BuildIndex(tmp_path)
+        index = SqliteBuildIndex(tmp_path)
         index.insert_or_replace(
             run_id="mine-old",
             status="ok",
@@ -929,7 +929,7 @@ class TestBuildStatistics:
         assert "theirs-00" not in run_ids
 
     def test_ownership_not_filtered_when_enforcement_off(self, tmp_path: Path) -> None:
-        index = BuildIndex(tmp_path)
+        index = SqliteBuildIndex(tmp_path)
         index.insert_or_replace(
             run_id="mine",
             status="ok",
@@ -957,7 +957,7 @@ class TestBuildStatistics:
         assert run_ids == {"mine", "theirs"}
 
     def test_dev_principal_bypasses_ownership_filter(self, tmp_path: Path) -> None:
-        index = BuildIndex(tmp_path)
+        index = SqliteBuildIndex(tmp_path)
         index.insert_or_replace(
             run_id="theirs",
             status="ok",

@@ -10,20 +10,29 @@ Bronze raw records를 Polars 테이블로 변환하고, spec에 선언된 정규
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 import polars as pl
 
 from ...errors import TabularError
+from ...spec import DerivedColumn
 from ...tabular.convert import records_to_dataframe
 from ...tabular.polars_helpers import DtypeSpec, cast_columns
 from ..bronze.models import BronzeArtifact
+
+#: join_key 파생 컬럼의 구분자 (#611).
+JOIN_KEY_SEPARATOR = "|"
+
+#: 구분자를 값 안에 담을 때 쓰는 이스케이프 문자 (#611).
+JOIN_KEY_ESCAPE = "\\"
 
 
 def normalize_table(
     bronze: BronzeArtifact,
     *,
     casts: Mapping[str, DtypeSpec] | None = None,
+    rename: Mapping[str, str] | None = None,
+    derived: Sequence[DerivedColumn] = (),
 ) -> pl.DataFrame:
     """Bronze raw records를 테이블로 변환하고 선언된 캐스팅만 적용한다.
 
@@ -35,6 +44,10 @@ def normalize_table(
     매개변수:
         bronze: 원천 Bronze 산출물.
         casts: 컬럼별 dtype 캐스팅 규칙. None이면 캐스팅 없이 tabularize만 수행.
+            키는 rename 적용 *후* 의 컬럼명이다.
+        rename: 원 필드명 → canonical 컬럼명 매핑 (#611). 캐스팅보다 먼저 적용된다.
+        derived: 기존 컬럼에서 새 컬럼을 만드는 규칙 (#611). 캐스팅 뒤에 적용된다 —
+            파생 규칙이 캐스팅된 값을 읽을 수 있어야 하기 때문이다.
 
     반환값:
         pl.DataFrame: 정규화된 테이블.
@@ -43,6 +56,13 @@ def normalize_table(
         TabularError: 선언된 캐스팅이 값을 null로 떨어뜨려 데이터가 손실된 경우.
     """
     table = records_to_dataframe(bronze.raw_records)
+    if rename:
+        missing = [source for source in rename if source not in table.columns]
+        if missing:
+            raise TabularError(
+                f"declared rename refers to columns absent from the source: {missing}"
+            )
+        table = table.rename(dict(rename))
     if casts:
         result = cast_columns(table, casts, audit=True)
         if result.has_nulls_introduced:
@@ -53,4 +73,51 @@ def normalize_table(
             )
             raise TabularError(f"declared cast dropped values to null (data loss): {details}")
         table = result.df
+    for rule in derived:
+        table = _apply_derived(table, rule)
     return table
+
+
+def _apply_derived(table: pl.DataFrame, rule: DerivedColumn) -> pl.DataFrame:
+    """파생 규칙 하나를 적용한다 (#611)."""
+    missing = [column for column in rule.columns if column not in table.columns]
+    if missing:
+        raise TabularError(
+            f"derived column {rule.name!r} refers to columns absent from the table: {missing}"
+        )
+    if rule.kind == "date_parts":
+        year, month, day = rule.columns
+        composed = (
+            pl.col(year).cast(pl.Utf8).str.zfill(4)
+            + pl.lit("-")
+            + pl.col(month).cast(pl.Utf8).str.zfill(2)
+            + pl.lit("-")
+            + pl.col(day).cast(pl.Utf8).str.zfill(2)
+        )
+        return table.with_columns(composed.str.to_date("%Y-%m-%d", strict=False).alias(rule.name))
+    if rule.kind == "join_key":
+        # 키 컬럼 중 하나라도 null이면 결과도 null이다(concat_str 기본 동작) —
+        # 조인 키를 만들 수 없는 행을 빈 문자열로 붙여 만들어내지 않는다.
+        composed_key = pl.concat_str(
+            [_escape_join_key_part(column) for column in rule.columns],
+            separator=JOIN_KEY_SEPARATOR,
+        )
+        return table.with_columns(composed_key.alias(rule.name))
+    raise TabularError(f"unsupported derived column kind: {rule.kind!r}")
+
+
+def _escape_join_key_part(column: str) -> pl.Expr:
+    """join_key 구성 요소 하나를 구분자와 충돌하지 않게 이스케이프한다 (#611).
+
+    구분자를 그냥 이어 붙이면 인코딩이 단사(injective)가 아니다 — ``("a|b", "c")``와
+    ``("a", "b|c")``가 모두 ``a|b|c``가 되어 서로 다른 키 조합이 같은 조인 키로
+    합쳐진다. Gold 합성(``stages/gold/compose.py``)은 이 값을 단일 equi-join 키로
+    쓰므로, 무관한 행이 조인되고 중복 키 통계까지 오염된다. 먼저 이스케이프 문자를
+    두 배로 늘린 뒤 구분자를 이스케이프해 원 구성 요소를 복원할 수 있게 만든다.
+    """
+    return (
+        pl.col(column)
+        .cast(pl.Utf8)
+        .str.replace_all(JOIN_KEY_ESCAPE, JOIN_KEY_ESCAPE * 2, literal=True)
+        .str.replace_all(JOIN_KEY_SEPARATOR, JOIN_KEY_ESCAPE + JOIN_KEY_SEPARATOR, literal=True)
+    )

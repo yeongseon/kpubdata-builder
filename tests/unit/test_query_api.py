@@ -1,4 +1,9 @@
-"""Query API routing and HTTP-worker starvation boundary tests."""
+"""Query API routing and HTTP-worker starvation boundary tests.
+
+``resolve_query_context`` 는 query 도메인 서비스로 옮겨갔다 (#596) — monkeypatch 대상도
+``service.query_service_api`` 다. 모듈 속성 패치는 타입 검사에 안 걸리므로, 모듈이 옮겨가면
+여기도 같이 따라가야 한다.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +15,7 @@ from typing import cast
 import pytest
 
 import kpubdata_builder.query.resolver as resolver_module
-import kpubdata_builder.service.app as app_module
+import kpubdata_builder.service.query_service_api as query_module
 from kpubdata_builder.query.engine import QueryExecutionError
 from kpubdata_builder.query.models import QueryResult
 from kpubdata_builder.query.resolver import ResolvedQueryContext
@@ -63,7 +68,7 @@ def test_query_response_contains_only_documented_result_fields(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        app_module, "resolve_query_context", lambda root, request, principal: _context(tmp_path)
+        query_module, "resolve_query_context", lambda root, request, principal: _context(tmp_path)
     )
     service = BuilderService(
         output_root=tmp_path,
@@ -88,7 +93,7 @@ def test_query_syntax_error_returns_400_with_unsafe_query_code(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        app_module, "resolve_query_context", lambda root, request, principal: _context(tmp_path)
+        query_module, "resolve_query_context", lambda root, request, principal: _context(tmp_path)
     )
     service = BuilderService(
         output_root=tmp_path,
@@ -119,7 +124,7 @@ def test_query_execution_error_returns_400_with_execution_failed_code(
     syntax/policy rejection (``unsafe_query``) — both surface as 400 but with
     different stable ``code`` values so clients can distinguish them."""
     monkeypatch.setattr(
-        app_module, "resolve_query_context", lambda root, request, principal: _context(tmp_path)
+        query_module, "resolve_query_context", lambda root, request, principal: _context(tmp_path)
     )
     service = BuilderService(
         output_root=tmp_path,
@@ -140,7 +145,7 @@ def test_query_saturation_rejects_immediately_and_version_remains_available(
     engine = _BlockingEngine()
     query_service = QueryService(engine=cast(object, engine), max_concurrency=2)  # type: ignore[arg-type]
     monkeypatch.setattr(
-        app_module, "resolve_query_context", lambda root, request, principal: _context(tmp_path)
+        query_module, "resolve_query_context", lambda root, request, principal: _context(tmp_path)
     )
     service = BuilderService(
         output_root=tmp_path,
@@ -317,7 +322,9 @@ class TestQueryRequestValidation:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(
-            app_module, "resolve_query_context", lambda root, request, principal: _context(tmp_path)
+            query_module,
+            "resolve_query_context",
+            lambda root, request, principal: _context(tmp_path),
         )
         service = BuilderService(
             output_root=tmp_path,
@@ -336,7 +343,9 @@ class TestQueryRequestValidation:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad_limit: int
     ) -> None:
         monkeypatch.setattr(
-            app_module, "resolve_query_context", lambda root, request, principal: _context(tmp_path)
+            query_module,
+            "resolve_query_context",
+            lambda root, request, principal: _context(tmp_path),
         )
         service = BuilderService(
             output_root=tmp_path,
@@ -354,7 +363,9 @@ class TestQueryRequestValidation:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(
-            app_module, "resolve_query_context", lambda root, request, principal: _context(tmp_path)
+            query_module,
+            "resolve_query_context",
+            lambda root, request, principal: _context(tmp_path),
         )
         service = BuilderService(
             output_root=tmp_path,

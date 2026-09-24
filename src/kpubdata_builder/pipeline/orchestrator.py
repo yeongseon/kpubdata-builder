@@ -371,6 +371,8 @@ def _run_source_pipeline(
             bronze,
             required_columns=required_columns,
             casts=source.schema.casts if source.schema else None,
+            rename=source.schema.rename if source.schema else None,
+            derived=source.schema.derived if source.schema else (),
             column_dtypes=column_dtypes,
         )
         evaluated_row_count = silver.statistics.row_count

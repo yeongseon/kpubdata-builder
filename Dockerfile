@@ -3,14 +3,17 @@
 # KPubData Builder — serve 배포 이미지 (#320, ADR 0006).
 #
 # uv sync --no-sources: [tool.uv.sources]의 editable ../kpubdata 오버라이드를 무시하고
-# pyproject의 PyPI 핀(kpubdata>=0.5.0,<0.6, #213)대로 kpubdata를 설치한다. 진입점은
+# pyproject의 PyPI 핀(kpubdata>=0.6.0,<0.7, #213)대로 kpubdata를 설치한다. 진입점은
 # kpubdata-builder serve이며, 환경변수로 설정을 주입한다 (docker-entrypoint.sh).
 #
 # ADR 0006 결정: 컨테이너는 fail-closed로 동작한다. KPUBDATA_BUILDER_API_KEY 없이는
 # 기동하지 않는다 (docker-entrypoint.sh에서 강제). 베이스는 pragmatic한 python-slim
 # (ADR-0006 미해결 질문: distroless 대안은 후속).
 
-FROM python:3.12-slim
+# Debian 12(bookworm)로 고정한다 (#581). `python:3.12-slim` 이 최근 Debian 13(trixie)로
+# 이동하면서 아직 mirror 에 배포되지 않은 OS 패키지 CVE(perl/gzip/pcre2 등)가 Trivy 스캔에
+# HIGH/CRITICAL 로 잡혔다 — 성숙한 stable 인 bookworm 은 해당 보안 패치가 이미 반영돼 있다.
+FROM python:3.12-slim-bookworm
 
 # 베이스 이미지에 포함된 Debian 패키지의 보안 패치를 적용한다.
 RUN apt-get update \
@@ -42,6 +45,9 @@ COPY README.md LICENSE ./
 # exporter(parquet/huggingface layout)는 polars/표준 라이브러리만 쓰므로 extras 없이 동작하지만,
 # publisher(huggingface_hub/kaggle)는 publish extra가 필요하다.
 # 여러 extra는 공백으로(예: --build-arg EXTRAS="publish parquet"), 빈 값(--build-arg EXTRAS=)이면 extra 없음.
+# CUBRID 상태 백엔드(ADR 0013)로 배포하려면 cubrid extra를 포함한다:
+#   --build-arg EXTRAS="publish cubrid"
+# sqlalchemy-cubrid[pycubrid]는 순수 파이썬이라 python:3.12-slim에서 C 툴체인 없이 설치된다.
 ARG EXTRAS=publish
 RUN if [ -z "${EXTRAS}" ]; then \
       uv sync --no-sources; \

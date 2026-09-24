@@ -11,6 +11,7 @@ import kpubdata_builder.service.app as app_module
 from kpubdata_builder.service import FileResponse, ServiceResponse
 from kpubdata_builder.service.app import BuilderService, dispatch
 from kpubdata_builder.service.auth import Principal
+from kpubdata_builder.service.auth_throttle import AuthFailureThrottle
 from kpubdata_builder.service.monitoring import LatencyRecorder
 from kpubdata_builder.service.responses import (
     FileResponse as ResponseModuleFileResponse,
@@ -22,10 +23,11 @@ from kpubdata_builder.spec import JsonValue
 
 
 class _RoutingStub:
-    """dispatch()의 latency recording wrapper가 _latency_recorder에 기록하므로
-    라우팅 구조 검증용 dummy에도 실제 recorder를 제공한다."""
+    """dispatch()의 latency recording wrapper가 _latency_recorder에 기록하고 인증
+    게이트가 _auth_throttle을 참조하므로, 라우팅 구조 검증용 dummy에도 실물을 제공한다."""
 
     _latency_recorder = LatencyRecorder()
+    _auth_throttle = AuthFailureThrottle()
 
 
 def _unused_service() -> BuilderService:

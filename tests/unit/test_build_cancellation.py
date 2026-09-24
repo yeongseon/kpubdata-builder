@@ -31,7 +31,7 @@ from kpubdata_builder.service.jobs import (
 )
 from kpubdata_builder.service.ownership import _OWNERSHIP_ENV
 from kpubdata_builder.spec import JsonValue
-from kpubdata_builder.store import BuildIndex, rebuild_index
+from kpubdata_builder.store import SqliteBuildIndex, rebuild_index
 
 VALID_SPEC_YAML = (
     """
@@ -509,7 +509,7 @@ class TestCancelledRunIndexSemantics:
 
         rebuild_index(tmp_path)
 
-        rebuilt = BuildIndex(tmp_path)
+        rebuilt = SqliteBuildIndex(tmp_path)
         try:
             entry = rebuilt.get("run1")
             assert entry is not None

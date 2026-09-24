@@ -266,6 +266,8 @@ def _preview_source(
         required_columns = source.schema.required if source.schema else ()
         column_dtypes = source.schema.dtypes if source.schema else None
         casts = source.schema.casts if source.schema else None
+        rename = source.schema.rename if source.schema else None
+        derived = source.schema.derived if source.schema else ()
         # kind(public_api/file/url)에 맞는 resolver로 원시 레코드를 가져온다
         # (#498) — Build와 동일한 resolver를 공유해 preview와 build가 같은
         # source에 대해 항상 같은 데이터를 본다.
@@ -280,6 +282,8 @@ def _preview_source(
             preview_limit=limit,
             required_columns=required_columns,
             casts=casts,
+            rename=rename,
+            derived=derived,
             column_dtypes=column_dtypes,
         )
         # Build와 동일한 공통 evaluator (#486) — 파일 persist는 하지 않는다.

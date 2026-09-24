@@ -5,7 +5,14 @@ from __future__ import annotations
 import pytest
 
 from kpubdata_builder import ValidationError
-from kpubdata_builder.spec import BuildSpec, ExportTarget, SourceRef, SplitSpec
+from kpubdata_builder.spec import (
+    BuildSpec,
+    DerivedColumn,
+    ExportTarget,
+    SchemaContract,
+    SourceRef,
+    SplitSpec,
+)
 from kpubdata_builder.spec.validator import validate_spec
 
 
@@ -276,3 +283,48 @@ def test_validate_spec_no_warning_for_ratio_without_time_key() -> None:
         splits=SplitSpec(mode="ratio", ratios={"train": 0.8, "test": 0.2}, key="region"),
     )
     validate_spec(spec)  # 예외 없음
+
+
+def _spec_with_schema(schema: SchemaContract) -> BuildSpec:
+    return BuildSpec(
+        dataset_id="dataset.trades",
+        title="Trades",
+        description="Seoul apartment trades",
+        sources=(SourceRef(provider="datago", dataset="apt_trade", schema=schema),),
+        exports=(ExportTarget(kind="markdown", output_path="README.md"),),
+    )
+
+
+def test_validate_spec_accepts_formatted_numeric_cast() -> None:
+    # #611 — int_comma는 dtype이 아니라 named cast다. validator가 _NAMED_DTYPES만
+    # 알고 있으면 선언이 validate 단계에서 막혀 Silver 빌드까지 가지도 못한다.
+    spec = _spec_with_schema(SchemaContract(casts={"deal_amount": "int_comma"}))
+
+    validate_spec(spec)
+
+
+def test_validate_spec_rejects_unknown_derived_kind() -> None:
+    # #611 — 알 수 없는 kind가 런타임(정규화)에서야 실패하는 것을 막는다.
+    spec = _spec_with_schema(
+        SchemaContract(
+            derived=(DerivedColumn(name="deal_date", kind="concat_date", columns=("a", "b")),)
+        )
+    )
+
+    with pytest.raises(ValidationError) as exc:
+        validate_spec(spec)
+
+    assert "concat_date" in str(exc.value)
+
+
+def test_validate_spec_rejects_date_parts_without_three_columns() -> None:
+    # date_parts는 (year, month, day) 정확히 3개를 요구한다. 2개로 선언하면
+    # normalize_table에서 unpack ValueError로 터진다 — 선언 시점에 막는다.
+    spec = _spec_with_schema(
+        SchemaContract(
+            derived=(DerivedColumn(name="deal_date", kind="date_parts", columns=("y", "m")),)
+        )
+    )
+
+    with pytest.raises(ValidationError):
+        validate_spec(spec)
