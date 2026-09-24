@@ -1722,8 +1722,8 @@ class BuilderService:
     # --- publish 도메인 (#637) ---------------------------------------------
     #
     # readiness/publish/receipt/reconcile/audit 은 PublishApiService 가 들고 있다.
-    # 여기 남은 것은 같은 이름의 위임뿐이다 — route adapter 와 dispatch 가 보는
-    # 표면은 그대로다.
+    # 여기 남은 것은 같은 시그니처의 위임뿐이다 — route adapter 와 dispatch 가
+    # 보는 표면은 그대로다.
 
     def publish_readiness(
         self, run_id: str, target: str, destination: str | None = None
@@ -1734,39 +1734,51 @@ class BuilderService:
     def publish(
         self,
         run_id: str,
+        body: Mapping[str, JsonValue] | None,
         *,
-        target: str,
-        destination: str,
-        options: Mapping[str, JsonValue] | None = None,
-        principal: Principal | None = None,
+        principal: Principal,
     ) -> ServiceResponse:
         """POST /builds/{run_id}/publish (#491)."""
-        return self._publish_api.publish(
-            run_id,
-            target=target,
-            destination=destination,
-            options=options,
-            principal=principal,
+        return self._publish_api.publish(run_id, body, principal=principal)
+
+    def get_publish_receipt(
+        self,
+        run_id: str,
+        target: str,
+        destination: str,
+        *,
+        principal: Principal,
+    ) -> ServiceResponse:
+        """GET /builds/{run_id}/publish/receipt (#551)."""
+        return self._publish_api.get_publish_receipt(
+            run_id, target, destination, principal=principal
         )
 
-    def get_publish_receipt(self, run_id: str, *, target: str, destination: str) -> ServiceResponse:
-        """GET /builds/{run_id}/publish/receipt (#551)."""
-        return self._publish_api.get_publish_receipt(run_id, target=target, destination=destination)
-
-    def publish_audit_log(self, run_id: str, *, limit: int) -> ServiceResponse:
+    def publish_audit_log(self, run_id: str, *, principal: Principal) -> ServiceResponse:
         """GET /builds/{run_id}/publish/audit (#563)."""
-        return self._publish_api.publish_audit_log(run_id, limit=limit)
+        return self._publish_api.publish_audit_log(run_id, principal=principal)
 
-    def reconcile_publish(self, run_id: str, *, target: str, destination: str) -> ServiceResponse:
+    def reconcile_publish(
+        self,
+        run_id: str,
+        body: Mapping[str, JsonValue] | None,
+        *,
+        principal: Principal,
+    ) -> ServiceResponse:
         """POST /builds/{run_id}/publish/reconcile (#551)."""
-        return self._publish_api.reconcile_publish(run_id, target=target, destination=destination)
+        return self._publish_api.reconcile_publish(run_id, body, principal=principal)
 
     def reset_publish_receipt(
-        self, run_id: str, *, target: str, destination: str
+        self,
+        run_id: str,
+        target: str,
+        destination: str,
+        *,
+        principal: Principal,
     ) -> ServiceResponse:
         """DELETE /builds/{run_id}/publish/receipt (#551)."""
         return self._publish_api.reset_publish_receipt(
-            run_id, target=target, destination=destination
+            run_id, target, destination, principal=principal
         )
 
     def get_build_events(self, run_id: str, *, limit: int, tail: bool) -> ServiceResponse:
