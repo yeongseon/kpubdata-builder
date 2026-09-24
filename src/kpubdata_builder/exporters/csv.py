@@ -19,6 +19,7 @@ from pathlib import Path
 from ..artifact import ArtifactDataset
 from ..errors import ExportError
 from ..spec import ExportTarget, JsonValue
+from ._json_safe import json_safe
 from .base import BaseExporter, ExportResult, ensure_output_dir
 
 
@@ -65,7 +66,12 @@ def _format_cell(value: JsonValue) -> str:
         if text and text[0] in _FORMULA_TRIGGER_CHARS:
             text = "'" + text
         return text
-    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    # date/datetime/Decimal 은 json.dumps 가 직렬화하지 못한다. 셀 하나 때문에
+    # 빌드 전체가 원인 불명으로 실패하던 자리다 (#629 후속).
+    safe = json_safe(value)
+    if isinstance(safe, str):
+        return safe
+    return json.dumps(safe, ensure_ascii=False, sort_keys=True)
 
 
 class CsvExporter(BaseExporter):
