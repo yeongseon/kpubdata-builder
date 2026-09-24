@@ -14,6 +14,7 @@ from typing import cast
 import pytest
 
 import kpubdata_builder.service.app as app_module
+import kpubdata_builder.service.stages_api as stages_api_module
 from kpubdata_builder.service import BuilderService, dispatch
 from kpubdata_builder.service.auth import Principal
 from kpubdata_builder.service.ownership import _OWNERSHIP_ENV
@@ -335,7 +336,7 @@ class TestStageOwnership:
         # created_by 자체는 ownership 판정에 필요해 그전에 읽히므로, 판정 *이후* 단계인
         # stage summary 계산 진입점을 직접 감시한다.)
         monkeypatch.setattr(
-            app_module.stages_service,
+            stages_api_module.stages_service,
             "list_run_stages",
             lambda *a, **kw: pytest.fail("stage sidecar read leaked past 403"),
         )
@@ -359,7 +360,7 @@ class TestStageOwnership:
         assert resp.status_code == 403
 
         monkeypatch.setattr(
-            app_module.stages_service,
+            stages_api_module.stages_service,
             "stage_status_for_source",
             lambda *a, **kw: pytest.fail("stage sidecar read leaked past 403"),
         )
