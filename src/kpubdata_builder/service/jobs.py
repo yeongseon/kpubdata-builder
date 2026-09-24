@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import logging
+from collections import deque
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -74,6 +75,11 @@ CancelOutcome = Literal["cancelled", "cancelling", "already", "terminal", "unkno
 
 # 다시 running/cancelling으로 돌아갈 수 없는 종단 상태.
 _TERMINAL_STATUSES: frozenset[BuildJobStatus] = frozenset({"succeeded", "failed", "cancelled"})
+
+# registry 가 메모리에 들고 있을 terminal job 수. 넘으면 먼저 끝난 것부터 버린다.
+# 완료된 run 의 정본은 manifest 와 event store 라, 이 캐시는 "방금 끝난 run 을
+# 폴링해서 결과를 받아가는" 창만 덮으면 된다.
+_DEFAULT_MAX_TERMINAL_JOBS = 256
 
 
 class RunCancellation:
@@ -195,15 +201,33 @@ class AsyncBuildJobCounts:
 
 
 class AsyncBuildJobRegistry:
-    """프로세스 메모리에만 유지되는 active/terminal job 레지스트리."""
+    """프로세스 메모리에만 유지되는 active/terminal job 레지스트리.
 
-    def __init__(self) -> None:
+    terminal job 은 **종결된 순서대로 최대 ``max_terminal_jobs`` 개**만 남는다.
+    예전에는 하나도 지우지 않아서, 오래 떠 있는 프로세스의 ``_jobs`` 가 그동안
+    실행한 모든 build 를 들고 있었다 — snapshot 에는 성공 응답 본문(``response``)
+    까지 들어 있어서 job 하나가 작지도 않다. 재시작 말고는 줄어들 방법이 없었다.
+
+    지워지는 것은 이 메모리 캐시뿐이다. run 의 정본 기록은 두 군데에 남는다 —
+    완료된 run 의 ``manifest.json`` 과 append-only event store 다. 그래서
+    ``GET /builds/{run_id}/events`` 와 manifest 기반 조회는 eviction 뒤에도
+    그대로 답하고, ownership 판정도 manifest 를 먼저 보므로(``_guards``)
+    산출물이 있는 run 의 소유권이 약해지지 않는다. ``GET /builds/{run_id}`` 만
+    아주 오래된 run 에 대해 404 가 된다.
+    """
+
+    def __init__(self, *, max_terminal_jobs: int = _DEFAULT_MAX_TERMINAL_JOBS) -> None:
         self._lock = Lock()
         self._jobs: dict[str, BuildJobSnapshot] = {}
         # run_id -> 협력적 취소 상태 (#481). snapshot과 같은 생명주기를 갖고,
         # mutable 상태 자체는 외부에 노출하지 않는다(``cancellation()``이
         # 반환하는 객체도 좁은 request/probe API만 제공한다).
         self._cancellations: dict[str, RunCancellation] = {}
+        # 종결된 순서대로의 run_id. 생성 순서(``_jobs`` 의 삽입 순서)가 아니라
+        # 종결 순서로 버려야 "먼저 끝난 것부터" 가 된다 — 오래 걸린 run 이
+        # 먼저 제출됐다는 이유로 방금 끝나자마자 지워지면 안 된다.
+        self._terminal_order: deque[str] = deque()
+        self._max_terminal_jobs = max(0, max_terminal_jobs)
 
     def create(
         self, *, run_id: str, created_by: str | None, owner_id: str | None = None
@@ -309,6 +333,7 @@ class AsyncBuildJobRegistry:
             if current.status == "queued":
                 cancelled = _transition(current, status="cancelled")
                 self._jobs[run_id] = cancelled
+                self._retire_locked(run_id)
                 return "cancelled", cancelled
             if current.status == "cancelling":
                 return "already", current
@@ -360,6 +385,7 @@ class AsyncBuildJobRegistry:
             else:
                 updated = _transition(current, status="succeeded", response=response)
             self._jobs[run_id] = updated
+            self._retire_locked(run_id)
             return updated
 
     def mark_failed(
@@ -419,6 +445,24 @@ class AsyncBuildJobRegistry:
                     running += 1
         return AsyncBuildJobCounts(queued=queued, running=running)
 
+    def _retire_locked(self, run_id: str) -> None:
+        """job 이 방금 terminal 이 됐다고 기록하고, 보존 한도를 넘으면 버린다.
+
+        반드시 ``self._lock`` 을 잡은 채로 부른다. 한 run_id 가 두 번 들어오는
+        일은 없다 — terminal 로 바꾸는 모든 경로가 이미 terminal 인 job 을
+        먼저 걸러내기 때문이다.
+        """
+        self._terminal_order.append(run_id)
+        while len(self._terminal_order) > self._max_terminal_jobs:
+            evicted = self._terminal_order.popleft()
+            job = self._jobs.get(evicted)
+            # discard() 로 이미 사라졌거나(있을 수 없지만) 어떤 이유로 terminal 이
+            # 아니게 된 항목은 건드리지 않는다 — 살아 있는 job 을 지우는 쪽이
+            # 한도를 조금 넘기는 쪽보다 훨씬 나쁘다.
+            if job is not None and job.status in _TERMINAL_STATUSES:
+                del self._jobs[evicted]
+                self._cancellations.pop(evicted, None)
+
     def _replace(
         self,
         run_id: str,
@@ -435,6 +479,8 @@ class AsyncBuildJobRegistry:
                 return current
             updated = _transition(current, status=status, response=response, error=error)
             self._jobs[run_id] = updated
+            if status in _TERMINAL_STATUSES:
+                self._retire_locked(run_id)
             return updated
 
 
@@ -460,6 +506,7 @@ class AsyncBuildExecutor:
         *,
         max_workers: int,
         max_queue_size: int = 10,
+        max_terminal_jobs: int = _DEFAULT_MAX_TERMINAL_JOBS,
         on_cancelled: Callable[[str], None] | None = None,
     ) -> None:
         self._executor = ThreadPoolExecutor(
@@ -474,7 +521,7 @@ class AsyncBuildExecutor:
         # event(run_cancelled)를 남긴다 — worker thread에서 호출되므로 hook은
         # 예외를 전파하지 않아야 한다(호출자 책임).
         self._on_cancelled = on_cancelled
-        self.registry = AsyncBuildJobRegistry()
+        self.registry = AsyncBuildJobRegistry(max_terminal_jobs=max_terminal_jobs)
 
     def stats(self) -> AsyncBuildStats:
         """monitoring용 read-only aggregate snapshot (#516).
