@@ -76,6 +76,12 @@ _EXPLICIT_MIME_TYPES: dict[str, str] = {
     ".yml": "text/yaml",
 }
 
+# 파일 응답을 소켓으로 흘려보낼 때의 한 번 읽기 크기.
+_FILE_CHUNK_BYTES = 64 * 1024
+
+# charset 을 붙여야 하는 형식. text/* 와 여기 끝나는 것들만 텍스트로 본다.
+_TEXTUAL_MIME_SUFFIXES = ("json", "xml", "yaml", "javascript")
+
 _logger = logging.getLogger(__name__)
 
 
@@ -134,6 +140,18 @@ def _get_mime_type(file_path: Path) -> str:
         return _EXPLICIT_MIME_TYPES[suffix]
     guessed = mimetypes.guess_type(file_path.name)[0]
     return guessed if guessed else _DEFAULT_MIME_TYPE
+
+
+def _content_type_header(mime_type: str) -> str:
+    """Content-Type 헤더 값. 텍스트 형식에만 charset 을 붙인다.
+
+    예전에는 파일 응답에 무조건 ``; charset=utf-8`` 을 붙였다 — parquet 에도
+    붙어서 ``application/vnd.apache.parquet; charset=utf-8`` 같은 값이 나갔다.
+    바이너리에 문자 인코딩을 선언하는 것은 그냥 틀린 말이다.
+    """
+    if mime_type.startswith("text/") or mime_type.endswith(_TEXTUAL_MIME_SUFFIXES):
+        return f"{mime_type}; charset=utf-8"
+    return mime_type
 
 
 def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
@@ -270,26 +288,54 @@ def make_handler(service: BuilderService) -> type[BaseHTTPRequestHandler]:
         def _write_file(self, response: FileResponse) -> None:
             """파일 응답을 작성한다 (#323).
 
-            파일 내용을 읽어 MIME 타입과 함께 전송한다. Content-Disposition
-            헤더를 추가하여 브라우저가 다운로드로 처리하도록 한다.
+            파일을 통째로 메모리에 올리지 않고 조각으로 흘려보낸다. 예전에는
+            ``read_bytes()`` 로 한 번에 읽었다 — 응답 하나가 파일 크기만큼
+            메모리를 썼고, 서빙하는 것은 build artifact(parquet/jsonl)라 크기에
+            상한이 없다. 동시 다운로드 몇 개로 프로세스가 죽을 수 있었다.
+
+            열기/stat 실패는 헤더를 보내기 전이라 500 으로 답할 수 있지만, 읽기
+            중간의 실패는 그럴 수 없다 — 이미 상태줄과 Content-Length 를 보냈다.
+            그 경우 연결을 끊어서 클라이언트가 잘린 파일을 온전한 것으로 받지
+            않게 한다.
             """
             try:
-                content = response.file_path.read_bytes()
+                size = response.file_path.stat().st_size
+                handle = response.file_path.open("rb")
             except OSError as exc:
                 _logger.error("Failed to read file %s: %s", response.file_path, exc)
                 self._write(500, {"error": "failed to read file"})
                 return
 
-            mime_type = _get_mime_type(response.file_path)
-            filename = response.filename
-
             self.send_response(response.status_code)
-            self.send_header("Content-Type", f"{mime_type}; charset=utf-8")
-            self.send_header("Content-Length", str(len(content)))
-            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+            self.send_header(
+                "Content-Type", _content_type_header(_get_mime_type(response.file_path))
+            )
+            self.send_header("Content-Length", str(size))
+            self.send_header("Content-Disposition", f'attachment; filename="{response.filename}"')
             self._send_cors_headers(origin=self.headers.get("Origin"))
             self.end_headers()
-            _ = self.wfile.write(content)
+
+            remaining = size
+            try:
+                with handle:
+                    while remaining > 0:
+                        chunk = handle.read(min(_FILE_CHUNK_BYTES, remaining))
+                        if not chunk:
+                            break
+                        _ = self.wfile.write(chunk)
+                        remaining -= len(chunk)
+            except OSError as exc:
+                _logger.error("Failed while streaming %s: %s", response.file_path, exc)
+                self.close_connection = True
+                return
+            if remaining:
+                # 약속한 Content-Length 만큼 보내지 못했다(서빙 도중 파일이 줄었다).
+                _logger.error(
+                    "File %s shrank while streaming: %d bytes short",
+                    response.file_path,
+                    remaining,
+                )
+                self.close_connection = True
 
         def do_GET(self) -> None:  # noqa: N802 - http.server 규약
             self._dispatch("GET")
