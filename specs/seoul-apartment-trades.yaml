@@ -1,0 +1,134 @@
+dataset_id: kpubdata/seoul-apartment-trades
+title: 서울시 아파트 매매 실거래
+description: 국토교통부 아파트 매매 실거래 자료 중 서울시 25개 자치구, 2020-01~2024-12.
+license: cc-by-4.0
+sources:
+- provider: datago
+  dataset: apt_trade
+  param_grid:
+    LAWD_CD:
+    - '11110'
+    - '11140'
+    - '11170'
+    - '11200'
+    - '11215'
+    - '11230'
+    - '11260'
+    - '11290'
+    - '11305'
+    - '11320'
+    - '11350'
+    - '11380'
+    - '11410'
+    - '11440'
+    - '11470'
+    - '11500'
+    - '11530'
+    - '11545'
+    - '11560'
+    - '11590'
+    - '11620'
+    - '11650'
+    - '11680'
+    - '11710'
+    - '11740'
+    DEAL_YMD:
+    - '202001'
+    - '202002'
+    - '202003'
+    - '202004'
+    - '202005'
+    - '202006'
+    - '202007'
+    - '202008'
+    - '202009'
+    - '202010'
+    - '202011'
+    - '202012'
+    - '202101'
+    - '202102'
+    - '202103'
+    - '202104'
+    - '202105'
+    - '202106'
+    - '202107'
+    - '202108'
+    - '202109'
+    - '202110'
+    - '202111'
+    - '202112'
+    - '202201'
+    - '202202'
+    - '202203'
+    - '202204'
+    - '202205'
+    - '202206'
+    - '202207'
+    - '202208'
+    - '202209'
+    - '202210'
+    - '202211'
+    - '202212'
+    - '202301'
+    - '202302'
+    - '202303'
+    - '202304'
+    - '202305'
+    - '202306'
+    - '202307'
+    - '202308'
+    - '202309'
+    - '202310'
+    - '202311'
+    - '202312'
+    - '202401'
+    - '202402'
+    - '202403'
+    - '202404'
+    - '202405'
+    - '202406'
+    - '202407'
+    - '202408'
+    - '202409'
+    - '202410'
+    - '202411'
+    - '202412'
+  schema:
+    rename:
+      sggCd: district_code
+      umdNm: neighborhood
+      aptNm: apartment_name
+      excluUseAr: exclusive_area_m2
+      floor: floor
+      buildYear: build_year
+      dealYear: deal_year
+      dealMonth: deal_month
+      dealDay: deal_day
+      dealAmount: deal_amount_10k_krw
+      jibun: lot_number
+      rgstDate: registration_date
+      aptSeq: apartment_seq
+    casts:
+      district_code: str
+      neighborhood: str
+      apartment_name: str
+      exclusive_area_m2: float
+      floor: int
+      build_year: int
+      deal_year: int
+      deal_month: int
+      deal_day: int
+      deal_amount_10k_krw: int_comma
+      lot_number: str
+      registration_date: str
+      apartment_seq: str
+    derived:
+    - name: deal_date
+      kind: date_parts
+      columns:
+      - deal_year
+      - deal_month
+      - deal_day
+exports:
+- kind: parquet
+  output_path: data/seoul-apartment-trades.parquet
