@@ -81,6 +81,14 @@ uv sync --extra dev    # ../kpubdata 를 editable로 연결
 
 형제 디렉터리가 존재하면 `uv sync`는 자동으로 PyPI 대신 로컬 소스를 사용합니다.
 
+> **`uv.lock`은 함께 커밋하지 마세요.** `uv.lock`은 `--no-sources` 해상도(CI와 배포가 실제로 설치하는 것)를 기록합니다. sources를 켠 `uv sync`는 lock의 `kpubdata`를 `registry` → `editable "../kpubdata"`로 뒤집고 배포 해시를 지웁니다. 로컬 개발에서는 정상이지만 커밋되면 CI가 설치하는 것과 lock이 서술하는 것이 갈립니다.
+>
+> ```bash
+> git checkout -- uv.lock   # uv sync 뒤 lock이 더럽혀졌다면
+> ```
+>
+> CI의 `uv lock --check --no-sources` 스텝이 이 드리프트를 막습니다. 의존성을 실제로 바꿀 때는 `uv lock --no-sources`로 갱신한 결과를 커밋하세요.
+
 #### CI / PyPI 배포 — `--no-sources` 플래그
 
 CI(`publish-dataset.yml`)와 패키지 배포 환경에서는 `--no-sources` 플래그를 사용합니다.
@@ -89,18 +97,20 @@ CI(`publish-dataset.yml`)와 패키지 배포 환경에서는 `--no-sources` 플
 uv sync --extra dev --extra publish --no-sources
 ```
 
-`--no-sources`는 `[tool.uv.sources]`를 무시하고, `pyproject.toml`의 `dependencies`에 명시된 **PyPI 릴리스 핀**(`kpubdata>=0.5.0,<0.6`)을 직접 설치합니다. 형제 디렉터리가 없어도 작동합니다.
+`--no-sources`는 `[tool.uv.sources]`를 무시하고, `pyproject.toml`의 `dependencies`에 명시된 **PyPI 릴리스 핀**(`kpubdata>=0.6.0,<0.7`)을 직접 설치합니다. 형제 디렉터리가 없어도 작동합니다.
 
-#### 핀 범위(`>=0.5.0,<0.6`)를 이렇게 설정한 이유
+#### 핀 범위(`>=0.6.0,<0.7`)를 이렇게 설정한 이유
 
-`kpubdata-builder`는 `kpubdata` 0.5.x의 API(`Client.dataset(...).list` 등)에 의존합니다. 0.6 이상은 호환성 정책이 확정되지 않아 현재로서는 허용하지 않습니다. 호환 정책이 확정되면 상한을 올릴 예정입니다 (관련 이슈: #213).
+`kpubdata-builder`는 `kpubdata` 0.6.x의 API(`Client.dataset(...).list` 등)에 의존합니다. kpubdata 0.6.0은 폐기된 데이터셋 141개를 제거한 breaking 릴리스이지만 Builder는 그중 어느 것도 참조하지 않습니다(2026-09-09 확인). 0.7 이상은 호환성 정책이 확정되지 않아 현재로서는 허용하지 않습니다 (관련 이슈: #213).
+
+핀의 정본은 `pyproject.toml`의 `dependencies`입니다. 이 표와 어긋나면 `pyproject.toml`이 맞습니다.
 
 #### 요약
 
 | 환경 | 명령 | `kpubdata` 소스 |
 | :--- | :--- | :--- |
 | 로컬 개발 | `uv sync --extra dev` | `../kpubdata` (editable, 형제 디렉터리 필요) |
-| CI / 배포 | `uv sync ... --no-sources` | PyPI (`kpubdata>=0.5.0,<0.6`) |
+| CI / 배포 | `uv sync ... --no-sources` | PyPI (`kpubdata>=0.6.0,<0.7`) |
 
 ## 3. 브랜치 전략과 협업 규칙
 

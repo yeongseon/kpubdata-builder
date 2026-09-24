@@ -31,6 +31,14 @@ jobs:
         with:
           enable-cache: true
 
+      # uv.lock 은 --no-sources 해상도(= CI 와 배포가 설치하는 것)를 기록한다.
+      # 그런데 문서가 안내하는 로컬 명령 `uv sync --extra dev` 는 sources 를 켜고
+      # 돌기 때문에 lock 의 kpubdata 를 registry -> editable "../kpubdata" 로
+      # 뒤집고 해시를 지운다. 그 상태가 커밋되면 CI 가 설치하는 것과 lock 이
+      # 서술하는 것이 갈리는데, 지금까지 그것을 잡는 검사가 없었다 (#625).
+      - name: Lockfile matches the published resolution
+        run: uv lock --check --no-sources
+
       - name: Install dependencies
         run: uv sync --extra dev --no-sources
 

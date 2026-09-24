@@ -85,4 +85,8 @@ jobs:
               fi
               ;;
           esac
-          uv run python scripts/publish_to_hf.py "${CONFIG}" ${MODE}
+          # --no-sources 는 여기서도 필요하다. uv run 은 실행 전에 환경을 다시
+          # 해석하므로, 위 sync 에서 무시한 [tool.uv.sources] 의 editable
+          # ../kpubdata 오버라이드가 이 줄에서 되살아난다. 러너에는 형제
+          # 디렉터리가 없어 Distribution not found 로 죽는다.
+          uv run --no-sources python scripts/publish_to_hf.py "${CONFIG}" ${MODE}
