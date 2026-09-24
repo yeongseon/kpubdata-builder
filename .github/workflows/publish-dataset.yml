@@ -56,7 +56,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Install uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
 
       - name: Install dependencies
         run: uv sync --extra dev --extra publish --no-sources
@@ -85,4 +85,8 @@ jobs:
               fi
               ;;
           esac
-          uv run python scripts/publish_to_hf.py "${CONFIG}" ${MODE}
+          # --no-sources 는 여기서도 필요하다. uv run 은 실행 전에 환경을 다시
+          # 해석하므로, 위 sync 에서 무시한 [tool.uv.sources] 의 editable
+          # ../kpubdata 오버라이드가 이 줄에서 되살아난다. 러너에는 형제
+          # 디렉터리가 없어 Distribution not found 로 죽는다.
+          uv run --no-sources python scripts/publish_to_hf.py "${CONFIG}" ${MODE}
