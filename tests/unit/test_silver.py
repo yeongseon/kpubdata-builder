@@ -542,3 +542,20 @@ class TestNullTokenNormalization:
         table = normalize_table(bronze, null_tokens=("",))
 
         assert table["grade"].to_list() == ["-", "A"]
+
+    def test_native_numeric_next_to_a_null_token_is_not_rejected(self) -> None:
+        # JSON/공공 API 레코드는 84.5를 네이티브 숫자로, 결측을 ""로 준다. 선언이
+        # 테이블 생성 *뒤* 에 적용되면 이질 타입 가드(#187)가 먼저 걸려, 올바른
+        # null_tokens 선언이 무관한 read_as 선언 없이는 통하지 않는다.
+        bronze = _bronze(({"area": 84.5}, {"area": ""}))
+
+        table = normalize_table(bronze, null_tokens=("",))
+
+        assert table["area"].to_list() == [84.5, None]
+
+    def test_native_numeric_next_to_a_null_token_casts_cleanly(self) -> None:
+        bronze = _bronze(({"area": 84.5}, {"area": ""}))
+
+        table = normalize_table(bronze, casts={"area": "float"}, null_tokens=("",))
+
+        assert table["area"].to_list() == [84.5, None]

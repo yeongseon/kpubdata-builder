@@ -121,3 +121,32 @@ def test_parse_csv_rejects_malformed_csv() -> None:
 
     with pytest.raises(IngestionError, match="failed to parse csv"):
         parse_tabular_bytes(raw, format="csv")
+
+
+def test_parse_csv_reads_declared_column_as_text() -> None:
+    # CSV는 파싱이 곧 타입 추론이다. 선언이 Silver까지 늦게 도착하면 `00123`은
+    # 이미 정수 123이 된 뒤라 앞자리 0을 복구할 방법이 없다 (#613).
+    raw = b"code,amount\n00123,1000\n00456,2500\n"
+
+    records = parse_tabular_bytes(raw, format="csv", read_as={"code": "str"})
+
+    assert records == (
+        {"code": "00123", "amount": 1000},
+        {"code": "00456", "amount": 2500},
+    )
+
+
+def test_parse_csv_leaves_undeclared_columns_to_inference() -> None:
+    raw = b"code,amount\n00123,1000\n"
+
+    records = parse_tabular_bytes(raw, format="csv", read_as={"code": "str"})
+
+    assert records[0]["amount"] == 1000
+
+
+def test_parse_csv_without_declaration_is_unchanged() -> None:
+    raw = b"code,amount\n00123,1000\n"
+
+    assert parse_tabular_bytes(raw, format="csv") == parse_tabular_bytes(
+        raw, format="csv", read_as={}
+    )
