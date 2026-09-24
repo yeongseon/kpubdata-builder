@@ -1351,3 +1351,40 @@ class TestResponseConformance:
         resp = dispatch(_conform_service(tmp_path), "DELETE", f"/uploads/upl_{'0' * 32}", None)
         assert resp.status_code == 404
         _assert_conforms(resp, "/uploads/{upload_id}", "DELETE")
+
+
+class TestBuildSpecSchemaContractIsPublished:
+    """BuildSpec 선언 모델이 공개 OpenAPI 계약과 함께 움직인다 (#611).
+
+    ``contract/builder-api.yaml``은 Studio와 타입 생성기가 읽는 HTTP 계약이다.
+    파이썬 모델에만 필드를 더하면 손으로 쓴 YAML에서는 동작하지만 계약 소비자는
+    그 기능을 발견하지도, 타이핑하지도 못한다. 드리프트를 테스트로 고정한다.
+    """
+
+    @staticmethod
+    def _schemas() -> dict[str, Any]:
+        return cast(dict[str, Any], _load_contract()["components"]["schemas"])
+
+    def test_schema_contract_properties_cover_the_dataclass(self) -> None:
+        from dataclasses import fields
+
+        from kpubdata_builder.spec import SchemaContract
+
+        published = set(self._schemas()["SchemaContract"]["properties"])
+        declared = {f.name for f in fields(SchemaContract)}
+        assert declared <= published, f"OpenAPI에 없는 SchemaContract 필드: {declared - published}"
+
+    def test_derived_column_properties_cover_the_dataclass(self) -> None:
+        from dataclasses import fields
+
+        from kpubdata_builder.spec import DerivedColumn
+
+        published = set(self._schemas()["DerivedColumn"]["properties"])
+        declared = {f.name for f in fields(DerivedColumn)}
+        assert declared <= published, f"OpenAPI에 없는 DerivedColumn 필드: {declared - published}"
+
+    def test_derived_column_kind_enum_matches_the_supported_kinds(self) -> None:
+        from kpubdata_builder.spec.models import DERIVED_KINDS
+
+        published = self._schemas()["DerivedColumn"]["properties"]["kind"]["enum"]
+        assert sorted(published) == sorted(DERIVED_KINDS)

@@ -20,9 +20,11 @@ from ...tabular.convert import records_to_dataframe
 from ...tabular.polars_helpers import DtypeSpec, cast_columns
 from ..bronze.models import BronzeArtifact
 
-#: join_key 파생 컬럼의 구분자 (#611). 값에 나타나지 않는 문자를 써서 서로 다른
-#: 키 조합이 같은 문자열로 합쳐지지 않게 한다.
+#: join_key 파생 컬럼의 구분자 (#611).
 JOIN_KEY_SEPARATOR = "|"
+
+#: 구분자를 값 안에 담을 때 쓰는 이스케이프 문자 (#611).
+JOIN_KEY_ESCAPE = "\\"
 
 
 def normalize_table(
@@ -97,8 +99,25 @@ def _apply_derived(table: pl.DataFrame, rule: DerivedColumn) -> pl.DataFrame:
         # 키 컬럼 중 하나라도 null이면 결과도 null이다(concat_str 기본 동작) —
         # 조인 키를 만들 수 없는 행을 빈 문자열로 붙여 만들어내지 않는다.
         composed_key = pl.concat_str(
-            [pl.col(column).cast(pl.Utf8) for column in rule.columns],
+            [_escape_join_key_part(column) for column in rule.columns],
             separator=JOIN_KEY_SEPARATOR,
         )
         return table.with_columns(composed_key.alias(rule.name))
     raise TabularError(f"unsupported derived column kind: {rule.kind!r}")
+
+
+def _escape_join_key_part(column: str) -> pl.Expr:
+    """join_key 구성 요소 하나를 구분자와 충돌하지 않게 이스케이프한다 (#611).
+
+    구분자를 그냥 이어 붙이면 인코딩이 단사(injective)가 아니다 — ``("a|b", "c")``와
+    ``("a", "b|c")``가 모두 ``a|b|c``가 되어 서로 다른 키 조합이 같은 조인 키로
+    합쳐진다. Gold 합성(``stages/gold/compose.py``)은 이 값을 단일 equi-join 키로
+    쓰므로, 무관한 행이 조인되고 중복 키 통계까지 오염된다. 먼저 이스케이프 문자를
+    두 배로 늘린 뒤 구분자를 이스케이프해 원 구성 요소를 복원할 수 있게 만든다.
+    """
+    return (
+        pl.col(column)
+        .cast(pl.Utf8)
+        .str.replace_all(JOIN_KEY_ESCAPE, JOIN_KEY_ESCAPE * 2, literal=True)
+        .str.replace_all(JOIN_KEY_SEPARATOR, JOIN_KEY_ESCAPE + JOIN_KEY_SEPARATOR, literal=True)
+    )

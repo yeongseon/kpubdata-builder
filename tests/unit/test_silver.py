@@ -392,6 +392,47 @@ class TestDerivedColumns:
 
         assert table["join_key"].to_list() == ["11110|202609"]
 
+    def test_join_key_separator_in_value_does_not_collide(self) -> None:
+        # 구분자를 그냥 이어 붙이면 ("a|b", "c")와 ("a", "b|c")가 같은 키가 되어
+        # 무관한 행이 조인된다. 구성 요소를 이스케이프해 인코딩을 단사로 유지한다.
+        from kpubdata_builder.spec import DerivedColumn
+
+        bronze = _bronze(
+            (
+                {"left": "a|b", "right": "c"},
+                {"left": "a", "right": "b|c"},
+            )
+        )
+
+        table = normalize_table(
+            bronze,
+            derived=(DerivedColumn(name="join_key", kind="join_key", columns=("left", "right")),),
+        )
+
+        keys = table["join_key"].to_list()
+        assert keys[0] != keys[1]
+        assert keys == ["a\\|b|c", "a|b\\|c"]
+
+    def test_join_key_escape_character_in_value_does_not_collide(self) -> None:
+        # 이스케이프 문자 자체도 값에 나타날 수 있다. 두 배로 늘리지 않으면
+        # ("a\\", "b")와 ("a", "\\b")가 다시 같은 키로 뭉친다.
+        from kpubdata_builder.spec import DerivedColumn
+
+        bronze = _bronze(
+            (
+                {"left": "a\\", "right": "b"},
+                {"left": "a", "right": "\\b"},
+            )
+        )
+
+        table = normalize_table(
+            bronze,
+            derived=(DerivedColumn(name="join_key", kind="join_key", columns=("left", "right")),),
+        )
+
+        keys = table["join_key"].to_list()
+        assert keys[0] != keys[1]
+
 
 class TestSchemaContractReachesNormalization:
     """BuildSpec의 rename/derived 선언이 실제 Silver 테이블에 도달한다 (#611).
