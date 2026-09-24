@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import pathlib
 from collections.abc import Iterable
 from pathlib import Path
 from typing import cast
@@ -278,20 +279,14 @@ def test_run_build_dataset_card_ignores_non_string_metadata_version(tmp_path: Pa
     assert "None" not in text
 
 
-def test_run_build_does_not_forward_arbitrary_metadata_to_exporters(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    captured: list[dict[str, str]] = []
+def test_run_build_does_not_forward_arbitrary_metadata_to_exporters(tmp_path: Path) -> None:
+    """임의 metadata는 exporter에 새지 않는다.
 
-    def _capture_exports(
-        _gold_dir: Path,
-        artifact: orchestrator.ArtifactDataset,
-        _exports: tuple[ExportTarget, ...],
-    ) -> list[Path]:
-        captured.append(artifact.metadata)
-        return []
-
-    monkeypatch.setattr(orchestrator, "_execute_exports", _capture_exports)
+    #629 이전에는 orchestrator가 exporter용 metadata를 두 곳에서 만들었고, 이
+    테스트는 그중 두 번째(``_execute_exports``)를 가로채 확인했다. 이제 그 두 번째
+    경로는 없다 — ``_gold_package_metadata``가 exporter가 보는 유일한 출처이므로
+    계약을 거기서 확인한다.
+    """
     spec = BuildSpec(
         dataset_id="apt_trade",
         title="Apartment Trades",
@@ -307,13 +302,21 @@ def test_run_build_does_not_forward_arbitrary_metadata_to_exporters(
     assert result.status == "ok"
     # dataset_id는 #550부터 exporter에 전달되는 공개 필드다(Kaggle metadata id
     # 정합). 임의 metadata(nested/tags)는 여전히 새지 않는다.
-    assert captured == [
-        {
-            "title": "Apartment Trades",
-            "description": "seoul apartment trades",
-            "dataset_id": "apt_trade",
-        }
-    ]
+    assert orchestrator._gold_package_metadata(spec) == {
+        "title": "Apartment Trades",
+        "description": "seoul apartment trades",
+        "dataset_id": "apt_trade",
+    }
+
+
+def test_gold_package_is_the_only_exporter_metadata_source(tmp_path: Path) -> None:
+    """orchestrator가 exporter용 metadata를 따로 조립하지 않는다 (#629).
+
+    출처가 둘이면 갈리고, 뒤가 앞을 덮는다 — schema가 사라진 것이 그 결과였다.
+    """
+    source = pathlib.Path(orchestrator.__file__).read_text(encoding="utf-8")
+
+    assert "_execute_exports(" not in source.split("def _execute_exports(", 1)[1]
 
 
 def test_run_build_uses_alias_as_source_key(tmp_path: Path) -> None:
@@ -761,3 +764,80 @@ def test_run_build_with_url_source_runs_full_pipeline(
     assert result.outcomes[0].source_key == "external_feed"
     gold_parquet = tmp_path / "url-run" / "gold" / "external_feed" / "table.parquet"
     assert pl.read_parquet(gold_parquet).to_dicts() == [{"id": 1, "amount": 1000}]
+
+
+class TestExportsRunExactlyOnce:
+    """BuildSpec.exports가 소스마다 두 번 실행되지 않는다 (#629).
+
+    ``package.export_plan.targets``가 곧 ``spec.exports``이므로
+    ``export_gold_package``가 이미 전부 내보낸다. 그런데 오케스트레이터가 같은
+    타깃을 같은 디렉터리에 한 번 더 썼다. 두 번째가 만든 ArtifactDataset에는
+    schema가 없어서, 덮어쓴 결과로 **게시되는 산출물에서 schema가 사라졌다.**
+    """
+
+    @staticmethod
+    def _spec_with_exports(*, license_value: str | None = None) -> BuildSpec:
+        return BuildSpec(
+            dataset_id="owner/apt-trade",
+            title="Apartment Trades",
+            description="seoul apartment trades",
+            sources=(SourceRef(provider="datago", dataset="apt_trade"),),
+            exports=(ExportTarget(kind="jsonl", output_path="exports/data.jsonl"),),
+            license=license_value,
+        )
+
+    def test_manifest_does_not_list_the_same_export_twice(self, tmp_path: Path) -> None:
+        client = _FakeClient({"datago.apt_trade": [{"id": "1", "amount": 1000}]})
+
+        result = run_build(
+            self._spec_with_exports(), client=client, output_root=tmp_path, run_id="run1"
+        )
+
+        manifest = cast(
+            dict[str, JsonValue], json.loads(result.manifest_path.read_text(encoding="utf-8"))
+        )
+        outputs = cast(list[str], manifest["outputs"])
+        assert len(outputs) == len(set(outputs)), f"duplicated manifest outputs: {outputs}"
+
+    def test_the_export_file_count_matches_the_files_written(self, tmp_path: Path) -> None:
+        # file_count가 실제의 두 배면, 그 수를 읽는 쪽은 존재하지 않는 파일을 센다.
+        client = _FakeClient({"datago.apt_trade": [{"id": "1", "amount": 1000}]})
+
+        result = run_build(
+            self._spec_with_exports(), client=client, output_root=tmp_path, run_id="run1"
+        )
+
+        gold_dir = tmp_path / "run1" / "gold" / "datago.apt_trade"
+        assert (gold_dir / "exports" / "data.jsonl").is_file()
+        manifest = cast(
+            dict[str, JsonValue], json.loads(result.manifest_path.read_text(encoding="utf-8"))
+        )
+        outputs = [p for p in cast(list[str], manifest["outputs"]) if p.endswith("data.jsonl")]
+        assert len(outputs) == 1
+
+    def test_a_declared_license_reaches_the_gold_package_metadata(self, tmp_path: Path) -> None:
+        # Kaggle exporter는 artifact.metadata["license"]만 본다. 이 키가 없으면
+        # spec.license를 무엇으로 선언하든 항상 CC-BY-4.0이 게시됐다.
+        assert (
+            orchestrator._gold_package_metadata(
+                self._spec_with_exports(license_value="CC-BY-NC-4.0")
+            )["license"]
+            == "CC-BY-NC-4.0"
+        )
+
+    def test_an_undeclared_license_leaves_the_key_out(self, tmp_path: Path) -> None:
+        # 빈 문자열을 실으면 exporter의 기본값 대신 빈 라이선스가 게시된다 —
+        # 선언하지 않은 것과 빈 값으로 선언한 것은 다르다.
+        assert "license" not in orchestrator._gold_package_metadata(self._spec_with_exports())
+
+    def test_a_legacy_metadata_license_is_still_carried(self, tmp_path: Path) -> None:
+        spec = BuildSpec(
+            dataset_id="owner/apt-trade",
+            title="Apartment Trades",
+            description="seoul apartment trades",
+            sources=(SourceRef(provider="datago", dataset="apt_trade"),),
+            exports=(ExportTarget(kind="jsonl", output_path="exports/data.jsonl"),),
+            metadata={"license": "ODbL-1.0"},
+        )
+
+        assert orchestrator._gold_package_metadata(spec)["license"] == "ODbL-1.0"
