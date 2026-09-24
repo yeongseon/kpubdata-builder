@@ -49,7 +49,7 @@ class TestResolution:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("HF_TOKEN", "server-token")
-        repo = _Repo({"oidc:a|publish:huggingface:HF_TOKEN": "her-own-token"})
+        repo = _Repo({f"oidc:a|{_slot('huggingface', 'HF_TOKEN')}": "her-own-token"})
 
         assert resolve_publish_credentials(repo, "oidc:a", "huggingface") == {
             "HF_TOKEN": "her-own-token"
@@ -85,7 +85,7 @@ class TestResolution:
         """하나는 요청자 것, 하나는 서버 것을 섞으면 어느 계정인지 알 수 없다."""
         monkeypatch.setenv("KAGGLE_USERNAME", "server-user")
         monkeypatch.setenv("KAGGLE_KEY", "server-key")
-        repo = _Repo({"oidc:a|publish:kaggle:KAGGLE_USERNAME": "her-user"})
+        repo = _Repo({f"oidc:a|{_slot('kaggle', 'KAGGLE_USERNAME')}": "her-user"})
 
         assert resolve_publish_credentials(repo, "oidc:a", "kaggle") == {
             "KAGGLE_USERNAME": "her-user"
