@@ -219,6 +219,43 @@ class AsyncBuildJobRegistry:
             self._cancellations[run_id] = RunCancellation()
         return snapshot
 
+    def try_create(
+        self,
+        *,
+        run_id: str,
+        created_by: str | None,
+        owner_id: str | None = None,
+        max_queued: int,
+    ) -> tuple[str, BuildJobSnapshot | None]:
+        """존재 확인·큐 용량 확인·생성을 **한 lock scope** 안에서 한다 (#482 후속).
+
+        ``get`` → ``queued_count`` → ``create`` 를 따로 부르면 그 사이에 다른
+        스레드가 끼어든다. 같은 run_id 로 동시에 POST 하면 둘 다 존재 확인을
+        통과해 ``on_accept`` 가 두 번 불리고 event 가 두 번 남으며, 큐 용량도
+        ``max_queue_size`` 를 넘길 수 있다.
+
+        반환값: ``("existing"|"queue_full"|"created", snapshot|None)``.
+        """
+        now = _utc_now_text()
+        with self._lock:
+            existing = self._jobs.get(run_id)
+            if existing is not None:
+                return "existing", existing
+            queued = sum(1 for job in self._jobs.values() if job.status == "queued")
+            if queued >= max_queued:
+                return "queue_full", None
+            snapshot = BuildJobSnapshot(
+                run_id=run_id,
+                status="queued",
+                created_at=now,
+                updated_at=now,
+                created_by=created_by,
+                owner_id=owner_id,
+            )
+            self._jobs[run_id] = snapshot
+            self._cancellations[run_id] = RunCancellation()
+            return "created", snapshot
+
     def cancellation(self, run_id: str) -> RunCancellation | None:
         """이 run의 협력적 취소 상태를 반환한다 (#481). 없으면 None."""
         with self._lock:
@@ -337,6 +374,17 @@ class AsyncBuildJobRegistry:
     def get(self, run_id: str) -> BuildJobSnapshot | None:
         with self._lock:
             return self._jobs.get(run_id)
+
+    def discard(self, run_id: str) -> None:
+        """생성 직후의 job 을 없던 것으로 되돌린다.
+
+        ``on_accept`` 가 실패하면 event store 에 ``run_submitted`` 가 남지 않으므로
+        registry 에만 있는 job 은 아무도 관찰할 수 없다 — 유령 queued 항목이 되어
+        큐 용량만 차지한다.
+        """
+        with self._lock:
+            self._jobs.pop(run_id, None)
+            self._cancellations.pop(run_id, None)
 
     def queued_count(self) -> int:
         with self._lock:
@@ -484,14 +532,28 @@ class AsyncBuildExecutor:
         까지 가지도 못하므로 여기 도달하지 않고, ``run_submitted``도
         ``run_failed``도 남기지 않는다.
         """
-        existing = self.registry.get(run_id)
-        if existing is not None:
-            return BuildJobSubmitResult(status="existing", snapshot=existing)
-        if self.registry.queued_count() >= self._max_queue_size:
+        # 존재·용량·생성을 한 번에 판정한다. 셋을 따로 부르던 시절에는 같은
+        # run_id 로 동시에 POST 하면 둘 다 통과해 on_accept 가 두 번 불리고
+        # queue 상한도 넘길 수 있었다.
+        outcome, snapshot = self.registry.try_create(
+            run_id=run_id,
+            created_by=created_by,
+            owner_id=owner_id,
+            max_queued=self._max_queue_size,
+        )
+        if outcome == "existing":
+            return BuildJobSubmitResult(status="existing", snapshot=snapshot)
+        if outcome == "queue_full":
             return BuildJobSubmitResult(status="queue_full")
+        assert snapshot is not None  # noqa: S101 - "created" 는 항상 snapshot 을 준다
         if on_accept is not None:
-            on_accept()
-        snapshot = self.registry.create(run_id=run_id, created_by=created_by, owner_id=owner_id)
+            # 생성 뒤에 부른다. 이 hook 이 던지면 아래에서 job 을 정리한다 —
+            # 예전에는 생성 전에 불러서, 두 요청이 모두 여기에 도달할 수 있었다.
+            try:
+                on_accept()
+            except Exception:
+                self.registry.discard(run_id)
+                raise
         try:
             self._executor.submit(self._run, spec_yaml, run_id, created_by, runner)
         except Exception:

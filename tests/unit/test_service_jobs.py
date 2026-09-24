@@ -706,3 +706,85 @@ class TestSyncBuildRespectsRunOwnership:
         resp = dispatch(service, "POST", "/build", {"spec": VALID_SPEC_YAML})
 
         assert resp.status_code < 400
+
+
+class TestConcurrentSubmitOfTheSameRunId:
+    """존재 확인·용량 확인·생성이 한 lock scope 안에서 일어난다 (#482 후속).
+
+    셋을 따로 부르면 그 사이에 다른 스레드가 끼어든다. 같은 run_id 로 동시에
+    POST 하면 둘 다 존재 확인을 통과해 ``on_accept`` 가 두 번 불리고 event 가
+    두 번 남으며, 큐 용량도 상한을 넘길 수 있다.
+    """
+
+    def test_only_one_of_two_concurrent_creates_wins(self) -> None:
+        from kpubdata_builder.service.jobs import AsyncBuildJobRegistry
+
+        registry = AsyncBuildJobRegistry()
+        outcomes: list[str] = []
+        start = threading.Barrier(2)
+
+        def _submit() -> None:
+            start.wait(timeout=5)
+            outcome, _ = registry.try_create(
+                run_id="run1", created_by="a", owner_id=None, max_queued=10
+            )
+            outcomes.append(outcome)
+
+        threads = [threading.Thread(target=_submit) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5)
+
+        assert sorted(outcomes) == ["created", "existing"]
+
+    def test_the_queue_cap_is_not_exceeded_under_concurrency(self) -> None:
+        from kpubdata_builder.service.jobs import AsyncBuildJobRegistry
+
+        registry = AsyncBuildJobRegistry()
+        created: list[str] = []
+        start = threading.Barrier(4)
+
+        def _submit(index: int) -> None:
+            start.wait(timeout=5)
+            outcome, _ = registry.try_create(
+                run_id=f"run{index}", created_by="a", owner_id=None, max_queued=2
+            )
+            if outcome == "created":
+                created.append(f"run{index}")
+
+        threads = [threading.Thread(target=_submit, args=(i,)) for i in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5)
+
+        assert len(created) == 2
+
+
+class TestAcceptHookFailureLeavesNoGhostJob:
+    """``on_accept`` 가 실패하면 아무도 관찰할 수 없는 job 이 남으면 안 된다.
+
+    event store 에 ``run_submitted`` 가 없으면 그 job 은 registry 에만 있고,
+    조회도 취소도 되지 않은 채 큐 용량만 차지한다.
+    """
+
+    def test_a_failed_accept_hook_discards_the_job(self, tmp_path: Path) -> None:
+        completed = threading.Event()
+        service = _service(tmp_path, completed)
+
+        def _boom() -> None:
+            raise RuntimeError("event store outage")
+
+        with pytest.raises(RuntimeError):
+            service._async_builds.submit(
+                spec_yaml=VALID_SPEC_YAML,
+                run_id="run-ghost",
+                created_by="tester",
+                owner_id=None,
+                runner=lambda *_a: ServiceResponse(200, {}),
+                on_accept=_boom,
+            )
+
+        assert service._async_builds.get("run-ghost") is None
+        assert service._async_builds.registry.queued_count() == 0
