@@ -16,10 +16,15 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 
 from kpubdata_builder.credentials.store import CredentialRepository
 
-__all__ = ["PUBLISH_CREDENTIAL_SLOTS", "resolve_publish_credentials"]
+__all__ = [
+    "PUBLISH_CREDENTIAL_SLOTS",
+    "PublishCredentialResolution",
+    "resolve_publish_credentials",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -49,11 +54,30 @@ def _slot(target: str, variable: str) -> str:
     return f"publish-{target}-{variable}".lower().replace("_", "-")
 
 
+@dataclass(frozen=True, slots=True)
+class PublishCredentialResolution:
+    """이 게시에 쓸 credential 과, 왜 비어 있는지.
+
+    빈 mapping 하나로는 세 가지 서로 다른 상황을 구분할 수 없다 — target 이
+    credential 을 아예 요구하지 않는 경우(local), 아무 데도 값이 없는 경우,
+    그리고 요청자에게 저장된 값이 없어서 **정책상 거절된** 경우다. 호출자가
+    빈 dict 를 보고 "그럼 안 넘기면 되지" 로 처리하는 바람에 publisher 가
+    ``os.environ`` 으로 내려갔고, ``REQUIRE_OWN_PUBLISH_CREDENTIAL`` 이 아무
+    일도 하지 않았다.
+    """
+
+    values: Mapping[str, str] = field(default_factory=dict)
+    #: 요청자에게 저장된 credential 이 없고, 서버 폴백도 닫혀 있다.
+    refused: bool = False
+    #: 이 target 은 credential 자체가 필요 없다(local).
+    not_required: bool = False
+
+
 def resolve_publish_credentials(
     repository: CredentialRepository | None,
     owner_id: str | None,
     target: str,
-) -> dict[str, str]:
+) -> PublishCredentialResolution:
     """이 게시에 쓸 credential 을 해석한다.
 
     우선순위는 ``CredentialResolver`` 와 같다 — 요청자 credential, 그다음 서버
@@ -66,7 +90,7 @@ def resolve_publish_credentials(
     """
     variables = PUBLISH_CREDENTIAL_SLOTS.get(target, ())
     if not variables:
-        return {}
+        return PublishCredentialResolution(not_required=True)
 
     stored: dict[str, str] = {}
     if repository is not None and owner_id is not None:
@@ -88,20 +112,20 @@ def resolve_publish_credentials(
             if value:
                 stored[variable] = value
     if stored:
-        return stored
+        return PublishCredentialResolution(values=stored)
 
     if not _server_fallback_allowed():
         # 서버 토큰 폴백을 닫으면, credential 을 저장하지 않은 principal 은
         # 게시할 수 없다. 다중 사용자 배포가 "아무나 서버 소유자 계정으로 게시"
         # 를 끝내려면 이 스위치가 필요하다 (#635).
-        return {}
+        return PublishCredentialResolution(refused=True)
 
     resolved: dict[str, str] = {}
     for variable in variables:
         value = os.environ.get(variable, "").strip()
         if value:
             resolved[variable] = value
-    return resolved
+    return PublishCredentialResolution(values=resolved)
 
 
 def _server_fallback_allowed() -> bool:

@@ -127,12 +127,21 @@ class PublishApiService:
         return "failed", None, None
 
     def publish_readiness(
-        self, run_id: str, target: str, destination: str | None = None
+        self,
+        run_id: str,
+        target: str,
+        destination: str | None = None,
+        owner_id: str | None = None,
     ) -> ServiceResponse:
         """GET /builds/{run_id}/publish/readiness (#491).
 
         side-effect-free다 — Publisher를 호출하거나 원격 dataset을 만들지
         않는다. ready == blockers가 하나도 없음으로 deterministic하게 계산한다.
+
+        ``owner_id`` 는 credential blocker 판정에만 쓴다. 이게 없으면 readiness
+        는 서버 환경변수만 보고 ready 를 답했다 — 정작 POST 는 요청자 기준으로
+        판정하므로, 폴백을 닫아 둔 배포에서 readiness 와 publish 가 서로 다른
+        답을 냈다.
         """
         resolved_target, error = publish_service.resolve_target(target)
         if resolved_target is None:
@@ -150,6 +159,9 @@ class PublishApiService:
             manifest=cast("dict[str, object] | None", manifest),
             spec=spec,
             output_root=self._output_root,
+            credentials=resolve_publish_credentials(
+                self._credential_repository, owner_id, resolved_target
+            ),
         )
         return ServiceResponse(
             200,
@@ -235,6 +247,14 @@ class PublishApiService:
             if existing_response is not None:
                 return existing_response
 
+        # credential 해석을 readiness **앞**으로 옮긴다. 예전에는 publisher 를
+        # 부르기 직전에 해석했는데, 그 자리에서는 이미 receipt 를 claim 한
+        # 뒤라 거절해도 claim 이 남는다. 그리고 결과가 비면 kwarg 를 생략해서
+        # publisher 가 ``os.environ`` 으로 내려갔다 — 그래서
+        # ``REQUIRE_OWN_PUBLISH_CREDENTIAL`` 이 아무 일도 하지 않았다.
+        credentials = resolve_publish_credentials(
+            self._credential_repository, principal.owner_id, resolved_target
+        )
         status, manifest, spec = self._publish_context(run_id)
         readiness = publish_service.build_readiness(
             run_id=run_id,
@@ -244,6 +264,7 @@ class PublishApiService:
             manifest=cast("dict[str, object] | None", manifest),
             spec=spec,
             output_root=self._output_root,
+            credentials=credentials,
         )
         if not readiness.ready or readiness.artifacts is None:
             return ServiceResponse(
@@ -298,15 +319,12 @@ class PublishApiService:
                 )
             effective_destination = str(resolved_local[1])
         publish_kwargs: dict[str, object] = {"destination": effective_destination, **options}
+        # 값이 비어 있어도 항상 넘긴다. publisher 는 ``credentials=None`` 만
+        # "호출자가 정하지 않았다"(CLI 경로)로 보고 환경변수를 읽는다 — 서비스
+        # 경로는 언제나 정한다. 여기서 생략하면 그 구분이 무너진다.
+        if not credentials.not_required:
+            publish_kwargs["credentials"] = dict(credentials.values)
         try:
-            # credential 해석은 try 안에 둔다. 밖에 두면 저장소가 던지는 어떤
-            # 예외든 그대로 올라가 500 이 되고, 아래의 "원격 응답/경로가 섞인
-            # 예외 메시지를 client 에 보내지 않는다" 규칙도 우회한다 (#635).
-            credentials = resolve_publish_credentials(
-                self._credential_repository, principal.owner_id, resolved_target
-            )
-            if credentials:
-                publish_kwargs["credentials"] = credentials
             result = publisher.publish(readiness.artifacts.paths, **publish_kwargs)  # type: ignore[arg-type]
         except Exception as exc:
             # Publisher가 던지는 예외(PublishError, credential/dependency

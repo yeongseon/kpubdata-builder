@@ -39,6 +39,7 @@ from ..spec.validator import validate_spec
 from ..stages._path_safety import ensure_within
 from ..stages._stage_reader import gold_source_dir
 from . import stages as stages_service
+from .publish_credentials import PublishCredentialResolution
 
 # HTTP로 안전하게 노출 가능한 publish target. PUBLISHER_REGISTRY에는 "local"도
 # 있지만, LocalPublisher는 caller-provided destination을 그대로 로컬
@@ -683,26 +684,49 @@ def kaggle_package_id(artifacts: ResolvedArtifacts) -> tuple[Path, str] | Publis
     return metadata_path.parent, metadata_id
 
 
-def credential_blocker(target: str) -> PublishIssue | None:
-    """target publish credential/경계가 서버에 설정돼 있는지만 확인한다.
+def credential_blocker(
+    target: str, resolution: PublishCredentialResolution | None = None
+) -> PublishIssue | None:
+    """이 게시에 실제로 쓸 credential 이 있는지 확인한다.
 
     원문 credential은 절대 읽거나 반환하지 않는다. 설정 여부를 확인할 수 없으면
     (지원 불가능한 credential shape 포함) ready=true로 추정하지 않고 명시적으로
     unavailable로 처리한다(#491 지침 7). local target의 "credential"은
     publish-root 설정이다(#550).
-    """
-    if target == "huggingface" and _huggingface_credential_configured():
-        return None
-    if target == "kaggle" and _kaggle_credential_configured():
-        return None
-    if target == "local" and local_publish_root() is not None:
-        return None
 
+    ``resolution`` 이 주어지면 그것이 정답이다 — 요청자 credential 과 서버 폴백
+    정책(#635)을 이미 반영한 결과이기 때문이다. 예전에는 이 함수가 서버
+    환경변수만 봤다. 그래서 ``REQUIRE_OWN_PUBLISH_CREDENTIAL=true`` 로 폴백을
+    닫아 둔 배포에서도, 저장된 credential 이 없는 principal 에게 readiness 가
+    ready 를 답했다 — 서버에 토큰이 있다는 이유 하나로.
+    """
     if target == "local":
+        if local_publish_root() is not None:
+            return None
         return PublishIssue(
             "local_publish_root_unconfigured",
             "no local publish root is configured for target 'local'",
         )
+
+    if resolution is not None:
+        if resolution.refused:
+            return PublishIssue(
+                "credential_required",
+                f"target {target!r} requires a credential stored for this principal; "
+                "this deployment does not lend out the server credential",
+            )
+        if resolution.values or resolution.not_required:
+            return None
+        return PublishIssue(
+            "credential_unavailable",
+            f"no credential is available for target {target!r}",
+        )
+
+    # resolution 을 주지 않는 호출자(CLI/테스트)는 예전처럼 서버 환경만 본다.
+    if target == "huggingface" and _huggingface_credential_configured():
+        return None
+    if target == "kaggle" and _kaggle_credential_configured():
+        return None
     return PublishIssue(
         "credential_unavailable",
         f"no server-side credential is configured for target {target!r}",
@@ -856,6 +880,7 @@ def build_readiness(
     manifest: dict[str, object] | None,
     spec: BuildSpec | None,
     output_root: Path,
+    credentials: PublishCredentialResolution | None = None,
 ) -> ReadinessResult:
     """readiness/POST가 공유하는 단일 deterministic 판정.
 
@@ -921,7 +946,7 @@ def build_readiness(
         if license_issue is not None:
             blockers.append(license_issue)
 
-    credential_issue = credential_blocker(target)
+    credential_issue = credential_blocker(target, credentials)
     if credential_issue is not None:
         blockers.append(credential_issue)
 

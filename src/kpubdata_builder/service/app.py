@@ -1370,10 +1370,14 @@ class BuilderService:
     # 보는 표면은 그대로다.
 
     def publish_readiness(
-        self, run_id: str, target: str, destination: str | None = None
+        self,
+        run_id: str,
+        target: str,
+        destination: str | None = None,
+        owner_id: str | None = None,
     ) -> ServiceResponse:
         """GET /builds/{run_id}/publish/readiness (#491)."""
-        return self._publish_api.publish_readiness(run_id, target, destination)
+        return self._publish_api.publish_readiness(run_id, target, destination, owner_id)
 
     def publish(
         self,
