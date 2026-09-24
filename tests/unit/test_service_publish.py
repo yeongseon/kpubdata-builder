@@ -19,6 +19,7 @@ from typing import cast
 import pytest
 
 import kpubdata_builder.service.app as app_module
+import kpubdata_builder.service.publish_api as publish_api_module
 from kpubdata_builder.errors import PublishError
 from kpubdata_builder.publishers.base import BasePublisher, PublishResult
 from kpubdata_builder.publishers.huggingface import HuggingFacePublisher
@@ -370,7 +371,7 @@ class TestReadiness:
     ) -> None:
         _with_credentials(monkeypatch, "huggingface")
         spy = _SpyPublisher("huggingface")
-        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "huggingface", spy)
+        monkeypatch.setitem(publish_api_module.PUBLISHER_REGISTRY, "huggingface", spy)
         service = _service(tmp_path)
         _build(service, "run-side-effect-free", LICENSED_SPEC_YAML)
 
@@ -385,7 +386,7 @@ class TestPublish:
     ) -> None:
         _with_credentials(monkeypatch, "huggingface")
         spy = _SpyPublisher("huggingface")
-        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "huggingface", spy)
+        monkeypatch.setitem(publish_api_module.PUBLISHER_REGISTRY, "huggingface", spy)
         service = _service(tmp_path)
         _build(service, "run-publish-ok", LICENSED_SPEC_YAML)
 
@@ -407,7 +408,7 @@ class TestPublish:
     ) -> None:
         """GET을 아예 호출하지 않아도 POST 자체가 모든 검사를 한다."""
         spy = _SpyPublisher("huggingface")
-        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "huggingface", spy)
+        monkeypatch.setitem(publish_api_module.PUBLISHER_REGISTRY, "huggingface", spy)
         service = _service(tmp_path)
         _build(service, "run-no-license-post", UNLICENSED_SPEC_YAML)
         monkeypatch.setenv("HF_TOKEN", "token")
@@ -421,7 +422,7 @@ class TestPublish:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         spy = _SpyPublisher("huggingface")
-        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "huggingface", spy)
+        monkeypatch.setitem(publish_api_module.PUBLISHER_REGISTRY, "huggingface", spy)
         service = _service(tmp_path)
         _build(service, "run-blocked", LICENSED_SPEC_YAML)
         # HF_TOKEN 미설정 → credential_unavailable blocker.
@@ -498,7 +499,7 @@ class TestPublish:
     ) -> None:
         _with_credentials(monkeypatch, "huggingface")
         spy = _SpyPublisher("huggingface")
-        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "huggingface", spy)
+        monkeypatch.setitem(publish_api_module.PUBLISHER_REGISTRY, "huggingface", spy)
         service = _service(tmp_path)
         _build(service, "run-unsafe-dest", LICENSED_SPEC_YAML)
 
@@ -509,7 +510,7 @@ class TestPublish:
     def test_unknown_option_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _with_credentials(monkeypatch, "huggingface")
         spy = _SpyPublisher("huggingface")
-        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "huggingface", spy)
+        monkeypatch.setitem(publish_api_module.PUBLISHER_REGISTRY, "huggingface", spy)
         service = _service(tmp_path)
         _build(service, "run-unknown-option", LICENSED_SPEC_YAML)
 
@@ -526,7 +527,7 @@ class TestPublish:
     ) -> None:
         _with_credentials(monkeypatch, "huggingface")
         spy = _SpyPublisher("huggingface")
-        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "huggingface", spy)
+        monkeypatch.setitem(publish_api_module.PUBLISHER_REGISTRY, "huggingface", spy)
         service = _service(tmp_path)
         _build(service, f"run-private-{private}", LICENSED_SPEC_YAML)
 
@@ -539,7 +540,7 @@ class TestPublish:
     ) -> None:
         _with_credentials(monkeypatch, "huggingface")
         spy = _SpyPublisher("huggingface")
-        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "huggingface", spy)
+        monkeypatch.setitem(publish_api_module.PUBLISHER_REGISTRY, "huggingface", spy)
         service = _service(tmp_path)
         _build(service, "run-bad-option-type", LICENSED_SPEC_YAML)
 
@@ -590,7 +591,7 @@ class TestPublish:
     ) -> None:
         _with_credentials(monkeypatch, "huggingface")
         spy = _SpyPublisher("huggingface", error=PublishError("remote rejected the upload"))
-        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "huggingface", spy)
+        monkeypatch.setitem(publish_api_module.PUBLISHER_REGISTRY, "huggingface", spy)
         service = _service(tmp_path)
         _build(service, "run-publish-error", LICENSED_SPEC_YAML)
 
@@ -607,7 +608,7 @@ class TestPublish:
     ) -> None:
         _with_credentials(monkeypatch, "huggingface")
         spy = _SpyPublisher("huggingface", error=RuntimeError("HF_TOKEN is not set"))
-        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "huggingface", spy)
+        monkeypatch.setitem(publish_api_module.PUBLISHER_REGISTRY, "huggingface", spy)
         service = _service(tmp_path)
         _build(service, "run-publish-runtime-error", LICENSED_SPEC_YAML)
 
@@ -636,7 +637,9 @@ class TestPublish:
         fake_module.HfApi = FailingHfApi  # type: ignore[attr-defined]
         monkeypatch.setitem(sys.modules, "huggingface_hub", fake_module)
         _with_credentials(monkeypatch, "huggingface")
-        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "huggingface", HuggingFacePublisher())
+        monkeypatch.setitem(
+            publish_api_module.PUBLISHER_REGISTRY, "huggingface", HuggingFacePublisher()
+        )
         service = _service(tmp_path)
         _build(service, "run-create-repo-failure", LICENSED_SPEC_YAML)
 
@@ -654,7 +657,7 @@ class TestPublish:
         secret_bearing_message = "connection failed for token=hf_leak_me_1234567890"
         spy = _SpyPublisher("huggingface", error=ValueError(secret_bearing_message))
         _with_credentials(monkeypatch, "huggingface")
-        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "huggingface", spy)
+        monkeypatch.setitem(publish_api_module.PUBLISHER_REGISTRY, "huggingface", spy)
         service = _service(tmp_path)
         _build(service, "run-publish-unexpected", LICENSED_SPEC_YAML)
 
@@ -682,7 +685,7 @@ class TestPublish:
         예외를 던져도 HTTP response와 서버 log 어디에도 원문이 남지 않는다."""
         _with_credentials(monkeypatch, "huggingface")
         spy = _SpyPublisher("huggingface", error=PublishError(secret_message))
-        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "huggingface", spy)
+        monkeypatch.setitem(publish_api_module.PUBLISHER_REGISTRY, "huggingface", spy)
         service = _service(tmp_path)
         _build(service, "run-publish-secret-leak", LICENSED_SPEC_YAML)
 
@@ -711,7 +714,7 @@ class TestPublish:
     ) -> None:
         _with_credentials(monkeypatch, "huggingface")
         spy = _SpyPublisher("huggingface")
-        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "huggingface", spy)
+        monkeypatch.setitem(publish_api_module.PUBLISHER_REGISTRY, "huggingface", spy)
         service = _service(tmp_path)
         _build(service, "run-retry", LICENSED_SPEC_YAML)
 
@@ -731,7 +734,7 @@ class TestPublish:
     ) -> None:
         _with_credentials(monkeypatch, "huggingface")
         spy = _SpyPublisher("huggingface")
-        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "huggingface", spy)
+        monkeypatch.setitem(publish_api_module.PUBLISHER_REGISTRY, "huggingface", spy)
         first_service = _service(tmp_path)
         _build(first_service, "run-restart-replay", LICENSED_SPEC_YAML)
         first = _publish(first_service, "run-restart-replay")
@@ -747,7 +750,7 @@ class TestPublish:
     ) -> None:
         _with_credentials(monkeypatch, "huggingface")
         publisher = _DeferredPublisher()
-        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "huggingface", publisher)
+        monkeypatch.setitem(publish_api_module.PUBLISHER_REGISTRY, "huggingface", publisher)
         service = _service(tmp_path)
         _build(service, "run-concurrent", LICENSED_SPEC_YAML)
         first_responses: list[ServiceResponse] = []
@@ -774,7 +777,7 @@ class TestPublish:
     ) -> None:
         _with_credentials(monkeypatch, "huggingface")
         spy = _SpyPublisher("huggingface")
-        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "huggingface", spy)
+        monkeypatch.setitem(publish_api_module.PUBLISHER_REGISTRY, "huggingface", spy)
         service = _service(tmp_path)
         _build(service, "run-options-conflict", LICENSED_SPEC_YAML)
 
@@ -790,7 +793,7 @@ class TestPublish:
     ) -> None:
         _with_credentials(monkeypatch, "huggingface")
         spy = _SpyPublisher("huggingface", error=RuntimeError("remote outcome unknown"))
-        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "huggingface", spy)
+        monkeypatch.setitem(publish_api_module.PUBLISHER_REGISTRY, "huggingface", spy)
         service = _service(tmp_path)
         _build(service, "run-unknown-outcome", LICENSED_SPEC_YAML)
 
@@ -812,7 +815,7 @@ class TestPublish:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         spy = _SpyPublisher("kaggle", expects_directory=True)
-        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "kaggle", spy)
+        monkeypatch.setitem(publish_api_module.PUBLISHER_REGISTRY, "kaggle", spy)
         service = _service(tmp_path)
         _build(service, "run-kaggle-disabled-post", LICENSED_SPEC_YAML)
 
@@ -828,7 +831,7 @@ class TestPublish:
     ) -> None:
         _with_credentials(monkeypatch, "huggingface")
         spy = _SpyPublisher("huggingface")
-        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "huggingface", spy)
+        monkeypatch.setitem(publish_api_module.PUBLISHER_REGISTRY, "huggingface", spy)
         service = _service(tmp_path)
         _build(service, "run-pii-post", PII_ALLOW_SPEC_YAML)
 
@@ -856,7 +859,7 @@ class TestSecurity:
         token = "hf_super_secret_token_value"
         monkeypatch.setenv("HF_TOKEN", token)
         spy = _SpyPublisher("huggingface")
-        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "huggingface", spy)
+        monkeypatch.setitem(publish_api_module.PUBLISHER_REGISTRY, "huggingface", spy)
         service = _service(tmp_path)
         _build(service, "run-secret-publish", LICENSED_SPEC_YAML)
 
@@ -868,7 +871,7 @@ class TestSecurity:
     ) -> None:
         _with_credentials(monkeypatch, "huggingface")
         spy = _SpyPublisher("huggingface")
-        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "huggingface", spy)
+        monkeypatch.setitem(publish_api_module.PUBLISHER_REGISTRY, "huggingface", spy)
         service = _service(tmp_path)
         _build(service, "run-no-path-leak", LICENSED_SPEC_YAML)
 
@@ -891,7 +894,7 @@ class TestSecurity:
         token = "hf_receipt_secret_value"
         monkeypatch.setenv("HF_TOKEN", token)
         spy = _SpyPublisher("huggingface")
-        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "huggingface", spy)
+        monkeypatch.setitem(publish_api_module.PUBLISHER_REGISTRY, "huggingface", spy)
         service = _service(tmp_path)
         _build(service, "run-receipt-security", LICENSED_SPEC_YAML)
 
@@ -920,7 +923,7 @@ class TestArtifactScope:
     ) -> None:
         _with_credentials(monkeypatch, "huggingface")
         spy = _SpyPublisher("huggingface")
-        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "huggingface", spy)
+        monkeypatch.setitem(publish_api_module.PUBLISHER_REGISTRY, "huggingface", spy)
         service = _service(tmp_path)
         _build(service, "run-artifact-scope", LICENSED_SPEC_YAML)
 
@@ -941,7 +944,7 @@ class TestArtifactScope:
         gold 디렉터리 안에 있어도 절대 publish되지 않는다 — glob하지 않는다."""
         _with_credentials(monkeypatch, "huggingface")
         spy = _SpyPublisher("huggingface")
-        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "huggingface", spy)
+        monkeypatch.setitem(publish_api_module.PUBLISHER_REGISTRY, "huggingface", spy)
         service = _service(tmp_path)
         _build(service, "run-decoy", LICENSED_SPEC_YAML)
 
@@ -964,7 +967,7 @@ class TestArtifactScope:
         0회 호출된다."""
         _with_credentials(monkeypatch, "huggingface")
         spy = _SpyPublisher("huggingface")
-        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "huggingface", spy)
+        monkeypatch.setitem(publish_api_module.PUBLISHER_REGISTRY, "huggingface", spy)
         service = _service(tmp_path)
         _build(service, "run-escape", LICENSED_SPEC_YAML)
 
@@ -994,7 +997,7 @@ class TestArtifactScope:
         검사) 같은 fail-closed 경로를 탄다."""
         _with_credentials(monkeypatch, "huggingface")
         spy = _SpyPublisher("huggingface")
-        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "huggingface", spy)
+        monkeypatch.setitem(publish_api_module.PUBLISHER_REGISTRY, "huggingface", spy)
         service = _service(tmp_path)
         _build(service, "run-symlink-escape", LICENSED_SPEC_YAML)
 
@@ -1090,7 +1093,7 @@ class TestKaggleLocalTargets:
         root.mkdir()
         _with_credentials(monkeypatch, "local", publish_root=root)
         spy = _SpyPublisher("local")
-        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "local", spy)
+        monkeypatch.setitem(publish_api_module.PUBLISHER_REGISTRY, "local", spy)
         service = _service(tmp_path)
         _build(service, "run-local-ok", LICENSED_SPEC_YAML)
 
@@ -1140,7 +1143,7 @@ class TestKaggleLocalTargets:
 
         # packaging id와 일치하는 destination이면 publisher에 디렉터리가 전달된다.
         spy = _SpyPublisher("kaggle", expects_directory=True)
-        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "kaggle", spy)
+        monkeypatch.setitem(publish_api_module.PUBLISHER_REGISTRY, "kaggle", spy)
         resp = dispatch(
             service,
             "POST",
@@ -1168,7 +1171,7 @@ class TestReceiptReconcile:
         """publish가 실패해 receipt가 unknown인 service를 만든다."""
         _with_credentials(monkeypatch, "huggingface")
         failing = _SpyPublisher("huggingface", error=RuntimeError("remote blew up"))
-        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "huggingface", failing)
+        monkeypatch.setitem(publish_api_module.PUBLISHER_REGISTRY, "huggingface", failing)
         service = _service(tmp_path)
         _build(service, run_id, LICENSED_SPEC_YAML)
         resp = _publish(service, run_id)
@@ -1206,7 +1209,9 @@ class TestReceiptReconcile:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         service = self._unknown_receipt_service(tmp_path, monkeypatch, "run-exists")
-        monkeypatch.setattr(service, "_probe_remote_publish_target", lambda *_args: True)
+        monkeypatch.setattr(
+            service._publish_api, "_probe_remote_publish_target", lambda *_args: True
+        )
 
         resp = dispatch(
             service,
@@ -1220,7 +1225,7 @@ class TestReceiptReconcile:
 
         # 이후 동일 publish 요청은 receipt 결과를 replay한다(중복 게시 없음).
         ok_publisher = _SpyPublisher("huggingface")
-        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "huggingface", ok_publisher)
+        monkeypatch.setitem(publish_api_module.PUBLISHER_REGISTRY, "huggingface", ok_publisher)
         replay = _publish(service, "run-exists")
         assert replay.status_code == 200
         assert ok_publisher.calls == []
@@ -1229,7 +1234,9 @@ class TestReceiptReconcile:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         service = self._unknown_receipt_service(tmp_path, monkeypatch, "run-absent")
-        monkeypatch.setattr(service, "_probe_remote_publish_target", lambda *_args: False)
+        monkeypatch.setattr(
+            service._publish_api, "_probe_remote_publish_target", lambda *_args: False
+        )
 
         resp = dispatch(
             service,
@@ -1243,7 +1250,7 @@ class TestReceiptReconcile:
 
         # reset 이후 같은 operation을 다시 게시할 수 있다(새 claim).
         ok_publisher = _SpyPublisher("huggingface")
-        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "huggingface", ok_publisher)
+        monkeypatch.setitem(publish_api_module.PUBLISHER_REGISTRY, "huggingface", ok_publisher)
         retry = _publish(service, "run-absent")
         assert retry.status_code == 200
         assert len(ok_publisher.calls) == 1
@@ -1252,7 +1259,9 @@ class TestReceiptReconcile:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         service = self._unknown_receipt_service(tmp_path, monkeypatch, "run-probe-down")
-        monkeypatch.setattr(service, "_probe_remote_publish_target", lambda *_args: None)
+        monkeypatch.setattr(
+            service._publish_api, "_probe_remote_publish_target", lambda *_args: None
+        )
 
         resp = dispatch(
             service,
@@ -1272,13 +1281,13 @@ class TestReceiptReconcile:
     ) -> None:
         _with_credentials(monkeypatch, "huggingface")
         spy = _SpyPublisher("huggingface")
-        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "huggingface", spy)
+        monkeypatch.setitem(publish_api_module.PUBLISHER_REGISTRY, "huggingface", spy)
         service = _service(tmp_path)
         _build(service, "run-done", LICENSED_SPEC_YAML)
         assert _publish(service, "run-done").status_code == 200
         probes: list[tuple[str, str]] = []
         monkeypatch.setattr(
-            service,
+            service._publish_api,
             "_probe_remote_publish_target",
             lambda target, destination: probes.append((target, destination)),
         )
@@ -1340,7 +1349,7 @@ class TestReceiptReconcile:
         monkeypatch.setattr(app_module, "authenticate", lambda **_kwargs: owner)
         _with_credentials(monkeypatch, "huggingface")
         failing = _SpyPublisher("huggingface", error=RuntimeError("boom"))
-        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "huggingface", failing)
+        monkeypatch.setitem(publish_api_module.PUBLISHER_REGISTRY, "huggingface", failing)
         service = _service(tmp_path)
         _build(service, "run-owned-reconcile", LICENSED_SPEC_YAML)
         assert _publish(service, "run-owned-reconcile").status_code == 502
@@ -1412,7 +1421,9 @@ class TestReceiptReconcile:
     def test_reconcile_succeeded_records_owner_run_audit(self, tmp_path, monkeypatch):
         """reconcile 성공 감사 행도 owner/run을 스스로 들고 있다 (#563)."""
         service = self._unknown_receipt_service(tmp_path, monkeypatch, "run-rec-audit")
-        monkeypatch.setattr(service, "_probe_remote_publish_target", lambda *_args: True)
+        monkeypatch.setattr(
+            service._publish_api, "_probe_remote_publish_target", lambda *_args: True
+        )
         resp = dispatch(
             service,
             "POST",
@@ -1463,7 +1474,7 @@ class TestOpenApiConformance:
     def test_publish_200_conforms(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _with_credentials(monkeypatch, "huggingface")
         spy = _SpyPublisher("huggingface")
-        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "huggingface", spy)
+        monkeypatch.setitem(publish_api_module.PUBLISHER_REGISTRY, "huggingface", spy)
         service = _service(tmp_path)
         _build(service, "conform-publish-ok", LICENSED_SPEC_YAML)
         resp = _publish(service, "conform-publish-ok")
@@ -1493,7 +1504,7 @@ class TestOpenApiConformance:
     def test_publish_502_conforms(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _with_credentials(monkeypatch, "huggingface")
         spy = _SpyPublisher("huggingface", error=PublishError("boom"))
-        monkeypatch.setitem(app_module.PUBLISHER_REGISTRY, "huggingface", spy)
+        monkeypatch.setitem(publish_api_module.PUBLISHER_REGISTRY, "huggingface", spy)
         service = _service(tmp_path)
         _build(service, "conform-publish-502", LICENSED_SPEC_YAML)
         resp = _publish(service, "conform-publish-502")
@@ -1541,7 +1552,9 @@ class TestRemotePublishProbe:
         service = _service(tmp_path)
         calls = self._install_fake_hub(monkeypatch, object())
 
-        result = service._probe_remote_publish_target("huggingface", "kpubdata/air-quality")
+        result = service._publish_api._probe_remote_publish_target(
+            "huggingface", "kpubdata/air-quality"
+        )
 
         assert result is True
         # dataset_info는 이미 dataset 전용이라 repo_type을 받지 않는다.
@@ -1559,7 +1572,10 @@ class TestRemotePublishProbe:
         service = _service(tmp_path)
         self._install_fake_hub(monkeypatch, _raise)
 
-        assert service._probe_remote_publish_target("huggingface", "kpubdata/missing") is False
+        assert (
+            service._publish_api._probe_remote_publish_target("huggingface", "kpubdata/missing")
+            is False
+        )
 
     def test_probe_is_inconclusive_without_a_token(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1568,7 +1584,9 @@ class TestRemotePublishProbe:
         self._install_fake_hub(monkeypatch, object())
         monkeypatch.setenv("HF_TOKEN", "")
 
-        assert service._probe_remote_publish_target("huggingface", "kpubdata/x") is None
+        assert (
+            service._publish_api._probe_remote_publish_target("huggingface", "kpubdata/x") is None
+        )
 
     def test_a_signature_mismatch_is_not_reported_as_an_unreachable_remote(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1582,7 +1600,7 @@ class TestRemotePublishProbe:
         self._install_fake_hub(monkeypatch, _raise)
 
         with pytest.raises(TypeError):
-            service._probe_remote_publish_target("huggingface", "kpubdata/x")
+            service._publish_api._probe_remote_publish_target("huggingface", "kpubdata/x")
 
 
 class TestCancelledRunIsNotPublishable:
