@@ -15,7 +15,7 @@ from collections.abc import Mapping, Sequence
 import polars as pl
 
 from ...errors import TabularError
-from ...spec import DerivedColumn
+from ...spec import DerivedColumn, JsonValue
 from ...tabular.convert import records_to_dataframe
 from ...tabular.polars_helpers import (
     YEAR_MONTH_COMPACT,
@@ -25,9 +25,11 @@ from ...tabular.polars_helpers import (
 )
 from ..bronze.models import BronzeArtifact
 
-#: join_key 파생 컬럼의 구분자 (#611). 값에 나타나지 않는 문자를 써서 서로 다른
-#: 키 조합이 같은 문자열로 합쳐지지 않게 한다.
+#: join_key 파생 컬럼의 구분자 (#611).
 JOIN_KEY_SEPARATOR = "|"
+
+#: 구분자를 값 안에 담을 때 쓰는 이스케이프 문자 (#611).
+JOIN_KEY_ESCAPE = "\\"
 
 
 def normalize_table(
@@ -78,22 +80,15 @@ def normalize_table(
     예외:
         TabularError: 선언된 캐스팅이 값을 null로 떨어뜨려 데이터가 손실된 경우.
     """
-    table = records_to_dataframe(bronze.raw_records, read_as=read_as)
-    if null_tokens:
-        tokens = list(null_tokens)
-        table = table.with_columns(
-            [
-                pl.when(pl.col(name).cast(pl.Utf8).is_in(tokens))
-                .then(None)
-                .otherwise(pl.col(name))
-                .alias(name)
-                for name, dtype in table.schema.items()
-                if dtype == pl.Utf8
-            ]
-        )
+    # null_tokens는 테이블이 만들어지기 *전* 에 적용한다. records_to_dataframe은
+    # 이질 타입 컬럼을 거부하는데(#187), 공공 API가 결측을 ""로 주면 같은 컬럼에
+    # 숫자 84.5와 문자열 ""이 섞여 선언이 닿기도 전에 빌드가 멈춘다 — 선언된
+    # 표기를 먼저 null로 모아야 그 선언이 실제로 효력을 갖는다.
+    records = _replace_null_tokens(bronze.raw_records, null_tokens)
+    table = records_to_dataframe(records, read_as=read_as)
     if coalesce:
-        for target, candidates in coalesce.items():
-            table = _apply_coalesce(table, target, tuple(candidates))
+        for target, candidates in _coalesce_order(coalesce):
+            table = _apply_coalesce(table, target, candidates)
     if rename:
         missing = [source for source in rename if source not in table.columns]
         if missing:
@@ -118,6 +113,42 @@ def normalize_table(
     for rule in derived:
         table = _apply_derived(table, rule)
     return table
+
+
+def _coalesce_order(
+    coalesce: Mapping[str, Sequence[str]],
+) -> list[tuple[str, tuple[str, ...]]]:
+    """coalesce 규칙들이 서로 겹치지 않는지 확인하고 적용 순서를 낸다 (#620).
+
+    각 규칙은 수렴한 후보 컬럼을 지운다. 그래서 한 규칙의 target이 다른 규칙의
+    후보이면(또는 두 규칙이 같은 후보를 두고 다투면) 결과가 매핑 순회 순서에 달린다
+    — 소스 컬럼 ``x`` 에 대해 ``{"a": ["x"], "b": ["a"]}`` 는 ``a,b`` 순서에서는
+    성공하지만 ``b,a`` 순서에서는 실패한다. 게다가 ``canonical_spec_mapping()`` 이
+    키를 정렬해 스냅샷을 쓰므로, 같은 digest의 선언이 원래 빌드와 다르게 동작할 수
+    있다. 재현 가능한 recipe라는 계약이 거기서 깨진다 — 그래서 겹치는 그룹은
+    순서를 고르는 대신 거부한다.
+    """
+    rules = [(target, tuple(candidates)) for target, candidates in coalesce.items()]
+    targets = {target for target, _ in rules}
+    seen: dict[str, str] = {}
+    for target, candidates in rules:
+        for candidate in candidates:
+            if candidate in targets and candidate != target:
+                raise TabularError(
+                    f"coalesce target {candidate!r} is also a candidate of {target!r}; "
+                    "overlapping coalesce groups make the result depend on declaration "
+                    "order. Declare independent alias groups."
+                )
+            owner = seen.setdefault(candidate, target)
+            if owner != target:
+                raise TabularError(
+                    f"coalesce candidate {candidate!r} is claimed by both {owner!r} and "
+                    f"{target!r}; overlapping coalesce groups make the result depend on "
+                    "declaration order. Declare independent alias groups."
+                )
+    # 겹치지 않으므로 어떤 순서로 적용해도 결과가 같다. 선언 순서가 결과에 남지
+    # 않도록 정렬해, 스냅샷 재생이 원래 빌드와 같은 순서를 밟게 한다.
+    return sorted(rules)
 
 
 def _apply_coalesce(table: pl.DataFrame, target: str, candidates: tuple[str, ...]) -> pl.DataFrame:
@@ -188,9 +219,17 @@ def _apply_zfill(table: pl.DataFrame, column: str, width: int) -> pl.DataFrame:
     """
     if column not in table.columns:
         raise TabularError(f"declared zfill refers to a column absent from the table: {column!r}")
-    if table.schema[column] != pl.Utf8:
+    dtype = table.schema[column]
+    if dtype == pl.Null:
+        # 값이 전부 null이면 Polars는 pl.Null로 추론한다 — 세대가 섞인 스냅샷이나
+        # 전부 null인 alias를 coalesce한 결과에서 흔하다. read_as로도 풀 수 없다
+        # (_apply_read_as는 null을 일부러 건드리지 않는다). zfill이 null을 null로
+        # 둔다고 약속한 이상 이 모양을 거부할 이유가 없으므로, 문자열 컬럼으로
+        # 승격만 하고 값은 그대로 null로 남긴다.
+        return table.with_columns(pl.col(column).cast(pl.Utf8).alias(column))
+    if dtype != pl.Utf8:
         raise TabularError(
-            f"zfill target {column!r} is {table.schema[column]}, not a string; "
+            f"zfill target {column!r} is {dtype}, not a string; "
             "declare read_as so the leading zeros survive reading"
         )
     # 선언 폭보다 긴 값은 자르지 않고 실패한다. 조용한 절단은 식별자를 망가뜨리고,
@@ -230,6 +269,26 @@ def _check_year_month(table: pl.DataFrame, casts: Mapping[str, DtypeSpec]) -> No
             )
 
 
+def _replace_null_tokens(
+    records: Sequence[dict[str, JsonValue]], null_tokens: Sequence[str]
+) -> Sequence[dict[str, JsonValue]]:
+    """선언된 결측 표기를 원시 레코드 단계에서 null로 모은다 (#613).
+
+    문자열 값만 본다 — 결측을 지우는 것이 아니라 표기를 하나로 맞추는 것이고,
+    선언되지 않은 값은 건드리지 않는다.
+    """
+    if not null_tokens:
+        return records
+    tokens = frozenset(null_tokens)
+    return [
+        {
+            key: (None if isinstance(value, str) and value in tokens else value)
+            for key, value in record.items()
+        }
+        for record in records
+    ]
+
+
 def _apply_derived(table: pl.DataFrame, rule: DerivedColumn) -> pl.DataFrame:
     """파생 규칙 하나를 적용한다 (#611)."""
     missing = [column for column in rule.columns if column not in table.columns]
@@ -251,8 +310,25 @@ def _apply_derived(table: pl.DataFrame, rule: DerivedColumn) -> pl.DataFrame:
         # 키 컬럼 중 하나라도 null이면 결과도 null이다(concat_str 기본 동작) —
         # 조인 키를 만들 수 없는 행을 빈 문자열로 붙여 만들어내지 않는다.
         composed_key = pl.concat_str(
-            [pl.col(column).cast(pl.Utf8) for column in rule.columns],
+            [_escape_join_key_part(column) for column in rule.columns],
             separator=JOIN_KEY_SEPARATOR,
         )
         return table.with_columns(composed_key.alias(rule.name))
     raise TabularError(f"unsupported derived column kind: {rule.kind!r}")
+
+
+def _escape_join_key_part(column: str) -> pl.Expr:
+    """join_key 구성 요소 하나를 구분자와 충돌하지 않게 이스케이프한다 (#611).
+
+    구분자를 그냥 이어 붙이면 인코딩이 단사(injective)가 아니다 — ``("a|b", "c")``와
+    ``("a", "b|c")``가 모두 ``a|b|c``가 되어 서로 다른 키 조합이 같은 조인 키로
+    합쳐진다. Gold 합성(``stages/gold/compose.py``)은 이 값을 단일 equi-join 키로
+    쓰므로, 무관한 행이 조인되고 중복 키 통계까지 오염된다. 먼저 이스케이프 문자를
+    두 배로 늘린 뒤 구분자를 이스케이프해 원 구성 요소를 복원할 수 있게 만든다.
+    """
+    return (
+        pl.col(column)
+        .cast(pl.Utf8)
+        .str.replace_all(JOIN_KEY_ESCAPE, JOIN_KEY_ESCAPE * 2, literal=True)
+        .str.replace_all(JOIN_KEY_SEPARATOR, JOIN_KEY_ESCAPE + JOIN_KEY_SEPARATOR, literal=True)
+    )

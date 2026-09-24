@@ -356,6 +356,30 @@ def test_validate_spec_rejects_repeated_coalesce_candidate() -> None:
         validate_spec(spec)
 
 
+def test_validate_spec_rejects_chained_coalesce_groups() -> None:
+    # #620 — 각 규칙은 수렴한 후보를 지우므로 {"a": ["x"], "b": ["a"]}의 결과는
+    # 선언 순서에 달린다. canonical_spec_mapping()은 키를 정렬해 스냅샷을 쓰기
+    # 때문에 같은 digest의 선언이 원래 빌드와 다르게 동작할 수 있다.
+    spec = _spec_with_schema(SchemaContract(coalesce={"a": ("x",), "b": ("a",)}))
+
+    with pytest.raises(ValidationError) as exc:
+        validate_spec(spec)
+
+    assert "overlapping" in str(exc.value).lower()
+
+
+def test_validate_spec_rejects_coalesce_candidate_claimed_twice() -> None:
+    spec = _spec_with_schema(SchemaContract(coalesce={"a": ("x", "y"), "b": ("y",)}))
+
+    with pytest.raises(ValidationError):
+        validate_spec(spec)
+
+
+def test_validate_spec_allows_a_coalesce_target_among_its_own_candidates() -> None:
+    # 세대가 섞인 스냅샷에서 canonical 이름이 후보 중 하나인 것은 정상이다.
+    validate_spec(_spec_with_schema(SchemaContract(coalesce={"a": ("a", "legacy_a")})))
+
+
 @pytest.mark.parametrize("width", [0, -1])
 def test_validate_spec_rejects_non_positive_zfill_width(width: int) -> None:
     spec = _spec_with_schema(SchemaContract(zfill={"station_no": width}))

@@ -412,7 +412,13 @@ def _strip_internal_fields(entries: list[_BuildListEntry]) -> list[_BuildListEnt
 #     metadata가 없는 dataset은 빈 배열. application은 API Key 발급과 Dataset별
 #     활용신청이 별개일 수 있는 경우의 안내({required, url})로, raw_metadata에
 #     없으면 null(신청 완료/승인 여부를 Builder/Studio가 추측하지 않는다).
-API_CONTRACT_VERSION = "1.22.0"
+# 1.22.0 -> 1.23.0: BuildSpec sources[].schema(SchemaContract)에 rename과
+# derived를 추가한다(#611, additive — 기존 필드/동작 불변). rename은 원 필드명 →
+# canonical 컬럼명 매핑으로 캐스팅보다 먼저 적용되고, derived는
+# date_parts/join_key typed 규칙으로 캐스팅 뒤에 새 컬럼을 만든다. 손으로 쓴
+# YAML만 지원하던 선언을 공개 계약에 올려 Studio와 타입 생성기가 발견/타이핑할
+# 수 있게 한다.
+API_CONTRACT_VERSION = "1.23.0"
 
 
 def _quality_result_to_json(r: QualityCheckResult) -> dict[str, JsonValue]:
