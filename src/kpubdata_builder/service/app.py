@@ -1748,7 +1748,9 @@ class BuilderService:
             # 취소는 errors를 남기지 않기 때문이다. run_status_blocker의
             # ``run_cancelled``는 이미 있었지만 이 경로에서는 닿지 않았고,
             # 그래서 중간에 끊긴 partial 산출물이 HF/Kaggle에 게시될 수 있었다.
-            status = _MANIFEST_TO_PUBLISH_STATUS[status_from_manifest(manifest)]
+            status = _MANIFEST_TO_PUBLISH_STATUS[
+                status_from_manifest(cast("dict[str, object]", manifest))
+            ]
             spec = datasets_service.read_snapshot_spec(self._output_root, run_id)
             return status, manifest, spec
         snapshot = self._async_builds.get(run_id)
