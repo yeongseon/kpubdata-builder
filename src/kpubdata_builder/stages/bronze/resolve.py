@@ -29,7 +29,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from ...ingestion import IngestionError, parse_tabular_bytes, safe_fetch_get
 from ...ingestion.url_fetch import default_max_fetch_bytes
-from ...spec import JsonValue, SourceRef
+from ...spec import JsonValue, SourceRef, expand_param_grid
 from ...spec.models import SOURCE_KINDS
 from ...uploads import UploadRepository
 from .build import SourceClient, build_bronze_artifact
@@ -115,11 +115,19 @@ def build_bronze_artifact_for_source(
         return _build_from_url(source, fetched_at=fetched_at)
     if source.kind == "public_api":
         provider, dataset = source_identity(source)
+        # param_grid 가 없으면 조합 목록을 넘기지 않는다 — 단일 호출 경로와
+        # provenance 모양이 예전 그대로 유지된다 (#613).
+        combinations = (
+            expand_param_grid(dict(source.params), dict(source.param_grid))
+            if source.param_grid
+            else None
+        )
         return build_bronze_artifact(
             client,
             source_key=f"{provider}.{dataset}",
             fetch_params=dict(source.params),
             fetched_at=fetched_at,
+            param_combinations=combinations,
         )
     # validate_spec이 loader를 거치지 않은 BuildSpec(직접 SourceRef 구성)도
     # 이미 거부하지만, resolver 스스로도 "그 외는 public_api"라는 implicit

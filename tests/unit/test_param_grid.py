@@ -218,3 +218,101 @@ class TestParamGridIsPartOfTheRecipe:
         )
 
         assert parse_spec(yaml.safe_load(serialize_spec(spec))) == spec
+
+
+class TestBronzeCollectionAcrossCombinations:
+    """조합마다 호출하고 하나의 Bronze 로 이어붙인다 (#613)."""
+
+    class _Dataset:
+        def __init__(self, calls: list[dict[str, object]]) -> None:
+            self._calls = calls
+
+        def list(self, **params: object) -> object:
+            self._calls.append(dict(params))
+            tag = params.get("LAWD_CD", "x")
+            return type("R", (), {"items": [{"id": f"{tag}-1"}, {"id": f"{tag}-2"}]})()
+
+    class _Client:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def dataset(self, source_key: str) -> object:
+            return TestBronzeCollectionAcrossCombinations._Dataset(self.calls)
+
+    def _build(self, source: SourceRef) -> tuple[object, list[dict[str, object]]]:
+        from kpubdata_builder.stages.bronze.resolve import build_bronze_artifact_for_source
+
+        client = self._Client()
+        artifact = build_bronze_artifact_for_source(source, client=client)  # type: ignore[arg-type]
+        return artifact, client.calls
+
+    def test_each_combination_is_called_once_in_expansion_order(self) -> None:
+        artifact, calls = self._build(
+            SourceRef(
+                provider="datago",
+                dataset="apt_trade",
+                params={"numOfRows": 100},
+                param_grid={"LAWD_CD": ("11110", "11140")},
+            )
+        )
+
+        assert [c["LAWD_CD"] for c in calls] == ["11110", "11140"]
+        assert all(c["numOfRows"] == 100 for c in calls)
+        assert [r["id"] for r in artifact.raw_records] == [  # type: ignore[attr-defined]
+            "11110-1",
+            "11110-2",
+            "11140-1",
+            "11140-2",
+        ]
+
+    def test_records_concatenate_in_combination_order(self) -> None:
+        # 순서가 바뀌면 raw_records.jsonl 의 바이트가 바뀌고 artifact_id 가 따라
+        # 바뀐다 — R1 의 재빌드 결정성이 그 위에 있다.
+        first, _ = self._build(
+            SourceRef(
+                provider="datago",
+                dataset="apt_trade",
+                param_grid={"LAWD_CD": ("11110", "11140")},
+            )
+        )
+        second, _ = self._build(
+            SourceRef(
+                provider="datago",
+                dataset="apt_trade",
+                param_grid={"LAWD_CD": ("11110", "11140")},
+            )
+        )
+
+        assert first.raw_records == second.raw_records  # type: ignore[attr-defined]
+
+    def test_the_expansion_is_recorded_in_provenance(self) -> None:
+        # 어떤 조합으로 만든 Bronze 인지가 남지 않으면 재현성 실험이 근거를 잃는다.
+        artifact, _ = self._build(
+            SourceRef(
+                provider="datago",
+                dataset="apt_trade",
+                param_grid={"LAWD_CD": ("11110", "11140")},
+            )
+        )
+
+        recorded = artifact.fetch_params["param_combinations"]  # type: ignore[attr-defined]
+        assert recorded == [{"LAWD_CD": "11110"}, {"LAWD_CD": "11140"}]
+
+    def test_a_source_without_a_grid_keeps_the_old_shape(self) -> None:
+        # 쓰지 않는 기능이 provenance 모양을 바꾸면 안 된다.
+        artifact, calls = self._build(
+            SourceRef(provider="datago", dataset="apt_trade", params={"numOfRows": 100})
+        )
+
+        assert calls == [{"numOfRows": 100}]
+        assert "param_combinations" not in artifact.fetch_params  # type: ignore[attr-defined]
+
+    def test_an_empty_expansion_is_refused(self) -> None:
+        from kpubdata_builder.stages.bronze.build import build_bronze_artifact
+
+        with pytest.raises(ValueError, match="must not be empty"):
+            build_bronze_artifact(
+                self._Client(),  # type: ignore[arg-type]
+                source_key="datago.apt_trade",
+                param_combinations=[],
+            )
