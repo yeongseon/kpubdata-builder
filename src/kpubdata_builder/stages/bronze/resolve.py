@@ -153,6 +153,15 @@ def _finalize(
     )
 
 
+def _declared_read_as(source: SourceRef) -> dict[str, str]:
+    """소스에 선언된 ``schema.read_as``를 꺼낸다 (#613).
+
+    CSV는 파싱이 곧 타입 추론이라 이 선언이 Silver까지 늦게 도착하면 늦다 —
+    ``00123``이 정수 ``123``으로 추론된 뒤에는 앞자리 0을 복구할 방법이 없다.
+    """
+    return dict(source.schema.read_as) if source.schema else {}
+
+
 def _build_from_upload(
     source: SourceRef,
     *,
@@ -178,7 +187,12 @@ def _build_from_upload(
     content = upload_repository.get_content(owner_id, source.upload_id)
     if content is None:
         raise IngestionError(f"upload not found: {source.upload_id}")
-    records = parse_tabular_bytes(content, format=source.format, encoding=source.encoding)
+    records = parse_tabular_bytes(
+        content,
+        format=source.format,
+        encoding=source.encoding,
+        read_as=_declared_read_as(source),
+    )
     provider, dataset = source_identity(source)
     fetch_params: dict[str, JsonValue] = {
         "upload_id": source.upload_id,
@@ -197,7 +211,12 @@ def _build_from_upload(
 def _build_from_url(source: SourceRef, *, fetched_at: datetime | None) -> BronzeArtifact:
     result = safe_fetch_get(source.endpoint, max_bytes=default_max_fetch_bytes())
     resolved_format = source.format or _infer_format(result.content_type) or "json"
-    records = parse_tabular_bytes(result.content, format=resolved_format, encoding="utf-8")
+    records = parse_tabular_bytes(
+        result.content,
+        format=resolved_format,
+        encoding="utf-8",
+        read_as=_declared_read_as(source),
+    )
     provider, dataset = source_identity(source)
     # fetch_params.endpoint는 사람이 읽는 (query 제거된) 원본 endpoint다 — path
     # 세그먼트로 쓰이는 `dataset`(slug+hash, source_identity 참고)과는 다른 값이다.
