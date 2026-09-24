@@ -55,7 +55,12 @@ def route(
         access_error = check_active_run_access(service, run_id, principal)
         if access_error is not None:
             return access_error
-        return service.publish_readiness(run_id, target, destination=destination)
+        # credential blocker 를 요청자 기준으로 판정하려면 owner_id 가 필요하다.
+        # 넘기지 않으면 readiness 는 서버 환경변수만 보고, 정작 POST 는 요청자
+        # 기준으로 막는다 — 두 답이 갈린다.
+        return service.publish_readiness(
+            run_id, target, destination=destination, owner_id=principal.owner_id
+        )
 
     if method == "GET" and rest.endswith(_RECEIPT_SUFFIX):
         run_id = rest[: -len(_RECEIPT_SUFFIX)]

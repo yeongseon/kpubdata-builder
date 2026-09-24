@@ -11,6 +11,10 @@ from pathlib import Path
 from ..errors import PublishError
 from .base import BasePublisher, PublishResult
 
+#: Kaggle SDK 가 자격을 읽는 환경변수. 서비스 경로에서 빈 자격을 받았을 때
+#: 이 키들을 비워서 SDK 가 서버 계정으로 인증하지 않게 한다.
+_KAGGLE_ENVIRONMENT_KEYS = frozenset({"KAGGLE_USERNAME", "KAGGLE_KEY"})
+
 
 @contextlib.contextmanager
 def _kaggle_environment(credentials: Mapping[str, str] | None) -> Iterator[None]:
@@ -22,12 +26,23 @@ def _kaggle_environment(credentials: Mapping[str, str] | None) -> Iterator[None]
     같은 프로세스에서 두 게시가 동시에 돌면 이 방식은 안전하지 않다. publish 는
     run 단위로 직렬화되어 있어 현재는 문제가 되지 않지만, 병렬 게시를 도입한다면
     SDK 를 감싸는 다른 방법이 필요하다.
+
+    ``None`` 은 "호출자가 정하지 않았다"(CLI 경로)라서 환경을 그대로 둔다.
+    **빈 mapping 은 "줄 것이 없다"** 이므로 SDK 가 서버 계정을 집어 들지 않게
+    관련 환경변수를 이 블록 동안 비운다 — 예전에는 둘을 구분하지 않아서, 요청자
+    credential 을 강제하는 설정을 켜도 서버 계정으로 게시가 나갔다 (#635).
     """
-    if not credentials:
+    if credentials is None:
         yield
         return
-    previous = {key: os.environ.get(key) for key in credentials}
-    os.environ.update(credentials)
+    managed = dict(credentials) if credentials else {}
+    keys = set(managed) | _KAGGLE_ENVIRONMENT_KEYS
+    previous = {key: os.environ.get(key) for key in keys}
+    for key in keys:
+        if key in managed:
+            os.environ[key] = managed[key]
+        else:
+            os.environ.pop(key, None)
     try:
         yield
     finally:

@@ -51,7 +51,7 @@ class TestResolution:
         monkeypatch.setenv("HF_TOKEN", "server-token")
         repo = _Repo({f"oidc:a|{_slot('huggingface', 'HF_TOKEN')}": "her-own-token"})
 
-        assert resolve_publish_credentials(repo, "oidc:a", "huggingface") == {
+        assert resolve_publish_credentials(repo, "oidc:a", "huggingface").values == {
             "HF_TOKEN": "her-own-token"
         }
 
@@ -59,7 +59,7 @@ class TestResolution:
         # 단일 사용자 배포에서는 전역 토큰 하나가 정상 구성이다 — 깨지 않는다.
         monkeypatch.setenv("HF_TOKEN", "server-token")
 
-        assert resolve_publish_credentials(_Repo({}), "oidc:a", "huggingface") == {
+        assert resolve_publish_credentials(_Repo({}), "oidc:a", "huggingface").values == {
             "HF_TOKEN": "server-token"
         }
 
@@ -68,14 +68,14 @@ class TestResolution:
     ) -> None:
         monkeypatch.delenv("HF_TOKEN", raising=False)
 
-        assert resolve_publish_credentials(_Repo({}), "oidc:a", "huggingface") == {}
+        assert resolve_publish_credentials(_Repo({}), "oidc:a", "huggingface").values == {}
 
     def test_an_anonymous_caller_falls_back_to_the_server(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("HF_TOKEN", "server-token")
 
-        assert resolve_publish_credentials(_Repo({}), None, "huggingface") == {
+        assert resolve_publish_credentials(_Repo({}), None, "huggingface").values == {
             "HF_TOKEN": "server-token"
         }
 
@@ -87,12 +87,12 @@ class TestResolution:
         monkeypatch.setenv("KAGGLE_KEY", "server-key")
         repo = _Repo({f"oidc:a|{_slot('kaggle', 'KAGGLE_USERNAME')}": "her-user"})
 
-        assert resolve_publish_credentials(repo, "oidc:a", "kaggle") == {
+        assert resolve_publish_credentials(repo, "oidc:a", "kaggle").values == {
             "KAGGLE_USERNAME": "her-user"
         }
 
     def test_local_publishing_needs_no_credential(self) -> None:
-        assert resolve_publish_credentials(_Repo({}), "oidc:a", "local") == {}
+        assert resolve_publish_credentials(_Repo({}), "oidc:a", "local").values == {}
 
     def test_a_publish_slot_does_not_collide_with_a_provider_slot(
         self, monkeypatch: pytest.MonkeyPatch
@@ -102,7 +102,7 @@ class TestResolution:
         monkeypatch.delenv("HF_TOKEN", raising=False)
         repo = _Repo({"oidc:a|huggingface": "provider-shaped-value"})
 
-        assert resolve_publish_credentials(repo, "oidc:a", "huggingface") == {}
+        assert resolve_publish_credentials(repo, "oidc:a", "huggingface").values == {}
 
 
 class TestPublisherPrefersPassedCredentials:
@@ -208,7 +208,7 @@ class TestAgainstTheRealStore:
         repository = self._repository(tmp_path)
         repository.put("oidc:a", _slot("huggingface", "HF_TOKEN"), "her-own-token")
 
-        assert resolve_publish_credentials(repository, "oidc:a", "huggingface") == {
+        assert resolve_publish_credentials(repository, "oidc:a", "huggingface").values == {
             "HF_TOKEN": "her-own-token"
         }
 
@@ -217,9 +217,9 @@ class TestAgainstTheRealStore:
     ) -> None:
         monkeypatch.setenv("HF_TOKEN", "server-token")
 
-        assert resolve_publish_credentials(self._repository(tmp_path), "oidc:b", "huggingface") == {
-            "HF_TOKEN": "server-token"
-        }
+        assert resolve_publish_credentials(
+            self._repository(tmp_path), "oidc:b", "huggingface"
+        ).values == {"HF_TOKEN": "server-token"}
 
     def test_a_publish_slot_never_collides_with_a_provider_slot(self, tmp_path: Path) -> None:
         # 같은 owner 가 datago provider key 와 HF 토큰을 둘 다 가질 수 있어야 한다.
@@ -239,7 +239,7 @@ class TestABrokenStoreDoesNotBreakPublishing:
         # 백엔드를 켠 순간 게시를 못 하게 된다.
         monkeypatch.setenv("HF_TOKEN", "server-token")
 
-        assert resolve_publish_credentials(_BrokenRepo(), "oidc:a", "huggingface") == {
+        assert resolve_publish_credentials(_BrokenRepo(), "oidc:a", "huggingface").values == {
             "HF_TOKEN": "server-token"
         }
 
@@ -319,7 +319,7 @@ class TestClosingTheServerFallback:
         monkeypatch.delenv("KPUBDATA_BUILDER_REQUIRE_OWN_PUBLISH_CREDENTIAL", raising=False)
         monkeypatch.setenv("HF_TOKEN", "server-token")
 
-        assert resolve_publish_credentials(_Repo({}), "oidc:b", "huggingface") == {
+        assert resolve_publish_credentials(_Repo({}), "oidc:b", "huggingface").values == {
             "HF_TOKEN": "server-token"
         }
 
@@ -329,7 +329,12 @@ class TestClosingTheServerFallback:
         monkeypatch.setenv("KPUBDATA_BUILDER_REQUIRE_OWN_PUBLISH_CREDENTIAL", "true")
         monkeypatch.setenv("HF_TOKEN", "server-token")
 
-        assert resolve_publish_credentials(_Repo({}), "oidc:b", "huggingface") == {}
+        resolution = resolve_publish_credentials(_Repo({}), "oidc:b", "huggingface")
+
+        assert resolution.values == {}
+        # 비어 있다는 것만으로는 부족하다 — 호출자가 "그럼 안 넘기면 되지" 로
+        # 처리하면 publisher 가 환경변수로 내려간다. 거절이라고 말해야 한다.
+        assert resolution.refused is True
 
     def test_closing_it_does_not_affect_a_principal_with_their_own(
         self, monkeypatch: pytest.MonkeyPatch
@@ -338,4 +343,140 @@ class TestClosingTheServerFallback:
         monkeypatch.setenv("HF_TOKEN", "server-token")
         repo = _Repo({f"oidc:a|{_slot('huggingface', 'HF_TOKEN')}": "hers"})
 
-        assert resolve_publish_credentials(repo, "oidc:a", "huggingface") == {"HF_TOKEN": "hers"}
+        assert resolve_publish_credentials(repo, "oidc:a", "huggingface").values == {
+            "HF_TOKEN": "hers"
+        }
+
+
+class TestTheSwitchActuallyBlocksPublishing:
+    """``REQUIRE_OWN_PUBLISH_CREDENTIAL=true`` 가 실제로 게시를 막는지.
+
+    resolver 는 처음부터 ``{}`` 를 돌려주고 있었고 그 단위 테스트도 통과했다.
+    그런데 ``publish_api`` 가 ``if credentials:`` 로 빈 결과면 kwarg 를 생략했고,
+    publisher 는 인자가 없으면 ``os.environ`` 을 읽었다. 그래서 스위치를 켜도
+    인증된 아무나 서버 계정으로 게시할 수 있었다 — 세 조각 모두 각자의 테스트를
+    통과하면서.
+    """
+
+    def _hf_api(self, monkeypatch: pytest.MonkeyPatch, captured: dict[str, object]) -> None:
+        import sys
+        import types
+
+        class _Api:
+            def __init__(self, token: str | None = None) -> None:
+                captured["token"] = token
+
+            def create_repo(self, **_kwargs: object) -> None: ...
+            def upload_file(self, **_kwargs: object) -> None: ...
+            def upload_folder(self, **_kwargs: object) -> None: ...
+
+        module = types.ModuleType("huggingface_hub")
+        module.HfApi = _Api  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "huggingface_hub", module)
+
+    def test_an_empty_mapping_does_not_fall_back_to_the_server_token(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """이게 우회의 마지막 관문이었다."""
+        captured: dict[str, object] = {}
+        self._hf_api(monkeypatch, captured)
+        monkeypatch.setenv("HF_TOKEN", "server-token")
+
+        from kpubdata_builder.publishers.huggingface import HuggingFacePublisher
+
+        with pytest.raises(RuntimeError, match="No Hugging Face API token"):
+            HuggingFacePublisher().publish((), destination="kpubdata/x", credentials={})
+
+        assert "token" not in captured, "서버 토큰으로 API 를 만들면 안 된다"
+
+    def test_omitting_the_argument_still_uses_the_server_token(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """CLI 경로는 그대로다 — 실행하는 사람과 서버 환경이 같은 경우다.
+
+        ``None`` 과 ``{}`` 의 구분이 이 fix 의 전부이므로 양쪽을 함께 고정한다.
+        """
+        captured: dict[str, object] = {}
+        self._hf_api(monkeypatch, captured)
+        monkeypatch.setenv("HF_TOKEN", "server-token")
+
+        from kpubdata_builder.publishers.huggingface import HuggingFacePublisher
+
+        HuggingFacePublisher().publish((), destination="kpubdata/x")
+
+        assert captured["token"] == "server-token"
+
+    def test_kaggle_with_an_empty_mapping_hides_the_server_account(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Kaggle SDK 는 환경변수만 읽는다. 비워 주지 않으면 서버 계정을 집어 든다."""
+        import os
+
+        from kpubdata_builder.publishers.kaggle import _kaggle_environment
+
+        monkeypatch.setenv("KAGGLE_USERNAME", "server-user")
+        monkeypatch.setenv("KAGGLE_KEY", "server-key")
+
+        with _kaggle_environment({}):
+            assert "KAGGLE_USERNAME" not in os.environ
+            assert "KAGGLE_KEY" not in os.environ
+
+        # 블록을 벗어나면 원래대로 돌아온다.
+        assert os.environ["KAGGLE_USERNAME"] == "server-user"
+        assert os.environ["KAGGLE_KEY"] == "server-key"
+
+    def test_kaggle_with_no_argument_leaves_the_environment_alone(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import os
+
+        from kpubdata_builder.publishers.kaggle import _kaggle_environment
+
+        monkeypatch.setenv("KAGGLE_USERNAME", "server-user")
+
+        with _kaggle_environment(None):
+            assert os.environ["KAGGLE_USERNAME"] == "server-user"
+
+
+class TestReadinessAgreesWithPublish:
+    """readiness 와 POST 가 같은 기준으로 판정해야 한다.
+
+    readiness 는 서버 환경변수만 봤다. 그래서 폴백을 닫아 둔 배포에서 readiness
+    는 ready 를 답하고 POST 는 거절하는, 서로 다른 두 답이 나왔다.
+    """
+
+    def test_a_refused_resolution_blocks_readiness(self) -> None:
+        from kpubdata_builder.service.publish import credential_blocker
+        from kpubdata_builder.service.publish_credentials import PublishCredentialResolution
+
+        issue = credential_blocker("huggingface", PublishCredentialResolution(refused=True))
+
+        assert issue is not None
+        assert issue.code == "credential_required"
+
+    def test_a_resolved_credential_clears_readiness(self) -> None:
+        from kpubdata_builder.service.publish import credential_blocker
+        from kpubdata_builder.service.publish_credentials import PublishCredentialResolution
+
+        resolution = PublishCredentialResolution(values={"HF_TOKEN": "hers"})
+
+        assert credential_blocker("huggingface", resolution) is None
+
+    def test_an_empty_resolution_blocks_readiness(self) -> None:
+        from kpubdata_builder.service.publish import credential_blocker
+        from kpubdata_builder.service.publish_credentials import PublishCredentialResolution
+
+        issue = credential_blocker("huggingface", PublishCredentialResolution())
+
+        assert issue is not None
+        assert issue.code == "credential_unavailable"
+
+    def test_callers_without_a_resolution_keep_the_old_server_check(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """CLI/기존 호출자는 동작이 바뀌지 않는다."""
+        from kpubdata_builder.service.publish import credential_blocker
+
+        monkeypatch.setenv("HF_TOKEN", "server-token")
+
+        assert credential_blocker("huggingface") is None

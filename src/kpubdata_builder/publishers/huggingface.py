@@ -55,9 +55,12 @@ class HuggingFacePublisher(BasePublisher):
                 "Install it with: pip install huggingface_hub"
             ) from exc
 
-        # 요청자별 credential 이 있으면 그것을 쓰고, 없으면 예전처럼 서버
-        # 환경변수로 내려간다 (#635).
-        token = (credentials or {}).get("HF_TOKEN") or os.environ.get("HF_TOKEN")
+        # ``credentials=None`` 만 "호출자가 정하지 않았다"는 뜻이다 — CLI 처럼
+        # 실행하는 사람과 서버 환경이 같은 경로다. mapping 을 받았으면 그 안의
+        # 값만 쓴다. 예전에는 빈 mapping 도 환경변수로 내려갔고, 서비스가 빈
+        # 결과일 때 kwarg 자체를 생략했기 때문에, 요청자 credential 을 강제하는
+        # 설정을 켜 두어도 서버 토큰으로 게시가 그대로 나갔다 (#635).
+        token = os.environ.get("HF_TOKEN") if credentials is None else credentials.get("HF_TOKEN")
         if not token:
             raise RuntimeError(
                 "No Hugging Face API token is available. Store one for this "
