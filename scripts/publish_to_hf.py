@@ -47,8 +47,20 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--target",
         choices=["hf", "kaggle", "all"],
-        default="all",
-        help="Upload target: hf (HuggingFace), kaggle, or all (default: all)",
+        default="hf",
+        help=(
+            "Upload target: hf (HuggingFace), kaggle, or all (default: hf). "
+            "'all' needs KAGGLE_USERNAME/KAGGLE_KEY; without them the HF upload "
+            "succeeds and the run then fails on Kaggle authentication."
+        ),
+    )
+    parser.add_argument(
+        "--public",
+        action="store_true",
+        help=(
+            "Create a new Kaggle dataset as public. Off by default, matching "
+            "`kpubdata-builder publish`; publishing openly is an explicit choice."
+        ),
     )
     parser.add_argument("--dry-run", action="store_true", help="Skip upload, generate locally")
     parser.add_argument("--local-only", action="store_true", help="Only generate local files")
@@ -105,7 +117,7 @@ def main(argv: list[str] | None = None) -> None:
     if target in ("hf", "all"):
         upload_to_hf(staging_dir, output_cfg["hf_repo"], dry_run=args.dry_run)
     if target in ("kaggle", "all") and output_cfg.get("kaggle_slug"):
-        upload_to_kaggle(staging_dir, config, dry_run=args.dry_run)
+        upload_to_kaggle(staging_dir, config, dry_run=args.dry_run, public=args.public)
 
     # Clean up checkpoint on successful completion
     if checkpoint_dir.exists():

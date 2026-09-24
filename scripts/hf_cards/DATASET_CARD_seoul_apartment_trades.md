@@ -42,6 +42,7 @@ print(df.head())
 ```python
 # With Polars
 import polars as pl
+
 ds = load_dataset("kpubdata/seoul-apartment-trades")
 df = pl.from_pandas(ds["train"].to_pandas())
 ```
