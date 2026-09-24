@@ -2624,3 +2624,96 @@ class TestBuildSpecSnapshot:
         response = dispatch(_service(tmp_path), "GET", "/builds/unknown/spec", None)
 
         assert response.status_code == 404
+
+
+class TestFileResponseStreaming:
+    """파일 응답은 통째로 메모리에 올리지 않는다 (#653 후속).
+
+    ``read_bytes()`` 로 한 번에 읽던 시절에는 응답 하나가 파일 크기만큼 메모리를
+    썼다. 서빙 대상이 build artifact(parquet/jsonl)라 크기에 상한이 없어서,
+    동시 다운로드 몇 개로 프로세스가 죽을 수 있었다.
+    """
+
+    def _put_artifact(self, tmp_path: Path, name: str, payload: bytes) -> None:
+        run_dir = tmp_path / "run-stream"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / name).write_bytes(payload)
+
+    def test_a_file_larger_than_one_chunk_arrives_byte_exact(
+        self, http_server: tuple[str, HTTPServer, threading.Thread], tmp_path: Path
+    ) -> None:
+        import os
+
+        from kpubdata_builder.service.http import _FILE_CHUNK_BYTES
+
+        payload = os.urandom(_FILE_CHUNK_BYTES * 3 + 977)
+        self._put_artifact(tmp_path, "big.parquet", payload)
+        base_url, _, _ = http_server
+
+        with urllib.request.urlopen(
+            f"{base_url}/artifacts/run-stream/big.parquet", timeout=10.0
+        ) as response:
+            body = response.read()
+            assert int(response.headers["Content-Length"]) == len(payload)
+
+        assert body == payload
+
+    def test_the_whole_file_is_never_read_into_memory(
+        self, http_server: tuple[str, HTTPServer, threading.Thread], tmp_path: Path
+    ) -> None:
+        """``read_bytes`` 를 막아도 다운로드가 되어야 조각으로 읽는다는 증거가 된다."""
+        import unittest.mock
+
+        payload = b"x" * 5000
+        self._put_artifact(tmp_path, "data.jsonl", payload)
+        base_url, _, _ = http_server
+
+        def _forbidden(self: Path) -> bytes:
+            raise AssertionError("파일 응답이 전체를 한 번에 읽었다")
+
+        with (
+            unittest.mock.patch.object(Path, "read_bytes", _forbidden),
+            urllib.request.urlopen(
+                f"{base_url}/artifacts/run-stream/data.jsonl", timeout=10.0
+            ) as response,
+        ):
+            assert response.read() == payload
+
+    def test_an_empty_file_is_served_as_empty(
+        self, http_server: tuple[str, HTTPServer, threading.Thread], tmp_path: Path
+    ) -> None:
+        """길이 0 이면 읽기 루프에 한 번도 들어가지 않는다 — 멈추지 않고 끝나야 한다."""
+        self._put_artifact(tmp_path, "empty.csv", b"")
+        base_url, _, _ = http_server
+
+        with urllib.request.urlopen(
+            f"{base_url}/artifacts/run-stream/empty.csv", timeout=10.0
+        ) as response:
+            assert response.read() == b""
+            assert response.headers["Content-Length"] == "0"
+
+
+class TestFileContentTypeCharset:
+    """바이너리에 문자 인코딩을 선언하지 않는다."""
+
+    def test_binary_types_get_no_charset(self) -> None:
+        from kpubdata_builder.service.http import _content_type_header
+
+        # 예전에는 모든 파일 응답에 붙여서 parquet 에도 charset 이 달렸다.
+        assert _content_type_header("application/vnd.apache.parquet") == (
+            "application/vnd.apache.parquet"
+        )
+        assert _content_type_header("application/octet-stream") == "application/octet-stream"
+
+    def test_textual_types_keep_charset(self) -> None:
+        from kpubdata_builder.service.http import _content_type_header
+
+        assert _content_type_header("text/csv") == "text/csv; charset=utf-8"
+        assert _content_type_header("application/json") == "application/json; charset=utf-8"
+        assert _content_type_header("application/x-ndjson") == (
+            "application/x-ndjson; charset=utf-8"
+        )
+        assert _content_type_header("application/geo+json") == (
+            "application/geo+json; charset=utf-8"
+        )
+        assert _content_type_header("text/yaml") == "text/yaml; charset=utf-8"
