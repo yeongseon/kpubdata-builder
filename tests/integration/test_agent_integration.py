@@ -109,8 +109,12 @@ class TestCrossRepoIntegration:
         assert any(p.name == "obsCode" for p in spec.params)
 
     def test_license_field_accessible(self) -> None:
+        # license는 kpubdata의 후행 추가분이다. floor 버전의 SpecDefinition에는
+        # 없으므로, 필드 자체의 존재를 이 테스트의 전제로 삼지 않는다.
         spec = find_spec("datago.apt_trade")
         assert spec is not None
-        if spec.license is not None:
-            assert hasattr(spec.license, "type")
-            assert hasattr(spec.license, "commercial_use")
+        license_spec = getattr(spec, "license", None)
+        if license_spec is None:
+            pytest.skip("this kpubdata version's SpecDefinition has no license field")
+        assert hasattr(license_spec, "type")
+        assert hasattr(license_spec, "commercial_use")
