@@ -21,6 +21,7 @@ from functools import lru_cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from socket import socket as _socket
+from threading import Lock
 from typing import Any, cast
 from urllib.parse import urlsplit
 
@@ -47,6 +48,32 @@ _SOCKET_TIMEOUT_SECONDS = 30.0
 # 스레드(스레드당 스택 ~8MB)를 무제한으로 만들기 때문에, 수백~수천 개의 동시 연결만으로
 # 메모리가 고갈될 수 있다 (#253). 고정 크기 스레드 풀로 상한을 둔다.
 _DEFAULT_MAX_WORKERS = 10
+
+# worker 가 모두 찼을 때 소켓을 열어 둔 채 순서를 기다릴 수 있는 연결 수.
+# ThreadPoolExecutor 의 작업 큐에는 상한이 없어서, 이 값이 없으면 접속하는 족족
+# 큐에 쌓인다 — 스레드 수는 제한돼 있어도 소켓(파일 디스크립터)과 큐 항목은
+# 무한히 늘어난다. 넘치는 연결은 기다리게 두지 않고 503 으로 즉시 돌려보낸다.
+_DEFAULT_MAX_PENDING_REQUESTS = 100
+
+
+def _overloaded_response() -> bytes:
+    """대기 한도를 넘긴 연결에 그대로 써 보내는 최소 HTTP 응답.
+
+    핸들러를 거치지 않고(그러려고 거절하는 것이다) 소켓에 직접 쓴다.
+    ``Connection: close`` 로 클라이언트가 이 연결을 재사용하지 않게 한다.
+    """
+    body = b'{"error": "server overloaded"}'
+    return (
+        b"HTTP/1.1 503 Service Unavailable\r\n"
+        b"Content-Type: application/json; charset=utf-8\r\n"
+        b"Content-Length: " + str(len(body)).encode("ascii") + b"\r\n"
+        b"Retry-After: 1\r\n"
+        b"Connection: close\r\n"
+        b"\r\n" + body
+    )
+
+
+_OVERLOADED_RESPONSE = _overloaded_response()
 
 # CORS 허용 Origin 목록 (#322). default-deny 정책: 환경변수 미설정 시 모든 크로스오리진
 # 요청을 거부한다. 콤마로 구분된 오리진 목록을 받는다 (예:
@@ -324,6 +351,16 @@ class BoundedThreadingHTTPServer(ThreadingHTTPServer):
     비정상적인 클라이언트가 다수의 동시 연결을 열면 스레드/메모리 고갈로 서비스가
     중단될 수 있다. 요청 처리를 고정 크기 ThreadPoolExecutor에 위임해 동시
     처리량에 상한을 둔다.
+
+    스레드 수만 제한하는 것으로는 부족하다. ``ThreadPoolExecutor`` 의 작업 큐는
+    무한이라, 풀이 가득 찬 뒤에 들어오는 연결은 소켓을 열어 둔 채 큐에 그대로
+    쌓였다 — 스레드는 열 개여도 열린 파일 디스크립터와 큐 항목은 접속하는 만큼
+    늘어난다. slowloris 처럼 연결만 잔뜩 여는 쪽에는 이게 실제 한도였다.
+
+    그래서 "처리 중 + 대기 중" 연결 수에 상한(``max_workers`` +
+    ``max_pending_requests``)을 두고, 넘어온 연결은 기다리게 두지 않고 503 을
+    쓴 뒤 바로 닫는다. 대기열에 넣어 놓고 30초 뒤 타임아웃시키는 것보다
+    즉시 거절이 정직하고, 클라이언트도 재시도 판단을 바로 할 수 있다.
     """
 
     daemon_threads = True
@@ -332,19 +369,59 @@ class BoundedThreadingHTTPServer(ThreadingHTTPServer):
         self,
         *args: Any,
         max_workers: int = _DEFAULT_MAX_WORKERS,
+        max_pending_requests: int = _DEFAULT_MAX_PENDING_REQUESTS,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
         self._executor = ThreadPoolExecutor(
             max_workers=max_workers, thread_name_prefix="kpubdata-http"
         )
+        self._admission_lock = Lock()
+        self._inflight = 0
+        self._max_inflight = max_workers + max(0, max_pending_requests)
 
     def process_request(
         self, request: _socket | tuple[bytes, _socket], client_address: Any
     ) -> None:
         # 새 스레드를 직접 만드는 대신 고정 크기 풀에 위임한다. 풀이 가득 차면
-        # 초과 요청은 스레드를 점유하지 않고 풀 큐에서 대기한다.
-        self._executor.submit(self.process_request_thread, request, client_address)
+        # 초과 요청은 스레드를 점유하지 않고 풀 큐에서 대기하되, 그 대기열
+        # 자체에도 상한이 있다.
+        with self._admission_lock:
+            admitted = self._inflight < self._max_inflight
+            if admitted:
+                self._inflight += 1
+        if not admitted:
+            self._reject(request, client_address)
+            return
+        try:
+            future = self._executor.submit(self.process_request_thread, request, client_address)
+        except RuntimeError:
+            # server_close() 이후의 연결. 큐잉되지 않았으니 카운터를 되돌린다 —
+            # done callback 이 붙지 않아 아무도 대신 줄여 주지 않는다.
+            with self._admission_lock:
+                self._inflight -= 1
+            self.shutdown_request(request)
+            return
+        future.add_done_callback(self._release)
+
+    def _release(self, _future: object) -> None:
+        with self._admission_lock:
+            self._inflight -= 1
+
+    def _reject(self, request: _socket | tuple[bytes, _socket], client_address: Any) -> None:
+        """대기 한도를 넘긴 연결을 503 으로 즉시 돌려보낸다."""
+        _logger.warning(
+            "rejecting connection from %s: %d requests already in flight",
+            client_address,
+            self._max_inflight,
+        )
+        try:
+            cast(_socket, request).sendall(_OVERLOADED_RESPONSE)
+        except OSError:
+            # 상대가 이미 끊었다. 닫기만 하면 된다.
+            pass
+        finally:
+            self.shutdown_request(request)
 
     def server_close(self) -> None:
         super().server_close()
