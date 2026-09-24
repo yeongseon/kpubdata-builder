@@ -132,3 +132,80 @@ class TestPipelineCLI:
         assert args.command == "pipeline"
         assert args.dataset == "datago.apt_trade"
         assert args.skip_pr is True
+
+
+class TestPipelineDoesNotInterpolateIntoSource:
+    """dataset_id 를 `python -c` 소스 문자열에 끼워 넣지 않는다.
+
+    따옴표 하나만 들어와도 임의 코드가 되고, 이 값은 CLI 인자와 HTTP 경로에서
+    온다.
+    """
+
+    def test_the_dataset_id_is_passed_as_an_argument(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from kpubdata_builder.agent import pipeline as pipeline_module
+
+        seen: list[list[str]] = []
+
+        def _fake_run(cmd: list[str], **_kwargs: object) -> object:
+            seen.append(list(cmd))
+            return type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})()
+
+        monkeypatch.setattr(pipeline_module, "_run", _fake_run)
+        pipeline_module.run_pipeline(
+            "datago.'; import os; os.system('id'); '", kpubdata_root=Path("/tmp/x")
+        )
+
+        source = seen[0][2]
+        assert "os.system" not in source
+        assert "sys.argv[1]" in source
+        assert seen[0][3] == "datago.'; import os; os.system('id'); '"
+
+
+class TestPipelineCommitsOnlyWhatItMade:
+    """`git add -A` 는 남의 변경과 도구 로그까지 함께 올린다.
+
+    kpubdata 저장소에 `.omx/` 가 커밋된 것이 그 결과로 보인다.
+    """
+
+    @staticmethod
+    def _runner(monkeypatch: pytest.MonkeyPatch, status: str) -> list[list[str]]:
+        """spec 은 있고 첫 verify 는 실패해, record 이후 커밋 단계까지 흘러가게 한다."""
+        from kpubdata_builder.agent import pipeline as pipeline_module
+
+        seen: list[list[str]] = []
+        verifies = {"n": 0}
+
+        def _fake_run(cmd: list[str], **_kwargs: object) -> object:
+            seen.append(list(cmd))
+            if cmd[:3] == ["git", "status", "--porcelain"]:
+                return type("R", (), {"returncode": 0, "stdout": status, "stderr": ""})()
+            if cmd[:2] == ["make", "verify"]:
+                verifies["n"] += 1
+                # 첫 verify 는 실패시켜 record 경로로 보내고, 재검증은 통과시킨다.
+                code = 1 if verifies["n"] == 1 else 0
+                return type("R", (), {"returncode": code, "stdout": "", "stderr": ""})()
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        monkeypatch.setattr(pipeline_module, "_run", _fake_run)
+        return seen
+
+    def test_an_unrelated_dirty_file_stops_the_commit(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from kpubdata_builder.agent import pipeline as pipeline_module
+
+        seen = self._runner(monkeypatch, "?? .omx/session.json\n")
+
+        result = pipeline_module.run_pipeline("datago.bakery", kpubdata_root=Path("/tmp/x"))
+
+        assert result.success is False
+        assert result.step_reached == "commit"
+        assert not any(cmd[:2] == ["git", "commit"] for cmd in seen)
+
+    def test_it_never_runs_git_add_all(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from kpubdata_builder.agent import pipeline as pipeline_module
+
+        seen = self._runner(monkeypatch, "")
+        pipeline_module.run_pipeline("datago.bakery", kpubdata_root=Path("/tmp/x"))
+
+        assert not any(cmd[:3] == ["git", "add", "-A"] for cmd in seen)
