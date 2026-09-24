@@ -62,12 +62,12 @@ from . import datasets as datasets_service
 from . import monitoring as monitoring_service
 from . import ownership as ownership_module
 from . import publish as publish_service
-from . import stages as stages_service
 from .auth import AuthError, Principal, authenticate
 from .auth_throttle import AuthFailureThrottle
 from .builds_api import BuildArtifactsApiService
 from .datasets_api import DatasetsApiService
 from .jobs import AsyncBuildExecutor, generate_run_id
+from .monitoring_api import MonitoringApiService
 from .providers import (
     CredentialResolver,
     ProviderCredentialConflictError,
@@ -84,6 +84,7 @@ from .responses import FileResponse, ServiceResponse
 from .routes import ROUTE_ADAPTERS
 from .routes import uploads as uploads_route
 from .routes.core import MAX_PREVIEW_LIMIT
+from .stages_api import StagesApiService
 from .uploads_service import UploadsService
 
 logger = logging.getLogger(__name__)
@@ -516,6 +517,7 @@ class BuilderService:
         self._datasets_api = DatasetsApiService(
             output_root=self._output_root, build_index=self._build_index, store=self._store
         )
+        self._stages_api = StagesApiService(output_root=self._output_root, store=self._store)
         self._builds_api = BuildArtifactsApiService(
             output_root=self._output_root,
             store=self._store,
@@ -534,6 +536,13 @@ class BuilderService:
             # 쪽에서만 남겨, queued 취소와 running 취소가 똑같이 run_cancelled
             # 하나로 끝나고 한 run에 종결 event가 둘 생기지 않는다.
             on_cancelled=self._record_run_cancelled,
+        )
+        # monitoring 은 async job registry 의 큐 상태를 읽으므로 그 뒤에 만든다.
+        self._monitoring_api = MonitoringApiService(
+            output_root=self._output_root,
+            build_index=self._build_index,
+            async_builds=self._async_builds,
+            latency_recorder=self._latency_recorder,
         )
         # publish 도메인 (#637). async job registry 가 만들어진 뒤여야 한다 —
         # terminal 이 아닌 run 의 publish 를 막는 판정이 그 레지스트리를 읽는다.
@@ -1325,194 +1334,33 @@ class BuilderService:
         """최근 window 안 접근 가능한 run의 structured quality 집계 (#486 후속)."""
         return self._quality_api.quality_summary(window=window, principal=principal)
 
-    def monitoring_summary(self) -> ServiceResponse:
-        """Builder API/Queue/Worker/Artifact Store 시스템 상태 요약 (#516).
-
-        시스템 aggregate만 담으며 개별 run의 dataset/owner/credential 정보는
-        포함하지 않는다 — ownership 필터링이 필요 없다. Provider status(#492)는
-        요청마다 실제 네트워크 프로브를 유발하므로 이번 PR에서는 포함하지 않는다.
-        """
-        api = monitoring_service.api_status(self._latency_recorder)
-        queue = monitoring_service.queue_status(self._async_builds)
-        workers = monitoring_service.worker_status(self._async_builds)
-        artifact_store = monitoring_service.artifact_store_status(
-            self._output_root, self._build_index
-        )
-        status = monitoring_service.aggregate_status(
-            api=api, queue=queue, workers=workers, artifact_store=artifact_store
-        )
-        generated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        return ServiceResponse(
-            200,
-            {
-                "generated_at": generated_at,
-                "status": status,
-                "api": {
-                    "availability": api.availability,
-                    "sample_count": api.sample_count,
-                    "p95_latency_ms": api.p95_latency_ms,
-                },
-                "queue": {
-                    "availability": queue.availability,
-                    "waiting": queue.waiting,
-                    "running": queue.running,
-                    "total": queue.total,
-                },
-                "workers": {
-                    "availability": workers.availability,
-                    "active": workers.active,
-                    "capacity": workers.capacity,
-                    "utilization": workers.utilization,
-                },
-                "artifact_store": {
-                    "availability": artifact_store.availability,
-                    "last_write_at": artifact_store.last_write_at,
-                },
-            },
-        )
-
-    def monitoring_builds(
-        self, *, window: str, bucket: str, principal: Principal | None = None
-    ) -> ServiceResponse:
-        """window/bucket별 build 통계와 recent runs를 반환한다 (#516).
-
-        ENFORCE_OWNERSHIP+oidc principal일 때는 본인이 접근 가능한 run만
-        집계·노출한다(#505) — 다른 principal의 run metadata가 새는 side
-        channel이 되지 않는다.
-        """
-        validated_window = monitoring_service.validate_window(window)
-        if validated_window is None:
-            return ServiceResponse(400, {"error": f"unsupported window: {window!r} (only '24h')"})
-        validated_bucket = monitoring_service.validate_bucket(bucket)
-        if validated_bucket is None:
-            return ServiceResponse(400, {"error": f"unsupported bucket: {bucket!r} (only 'hour')"})
-
-        stats = monitoring_service.build_statistics(
-            self._build_index,
-            window=validated_window,
-            bucket=validated_bucket,
-            principal=principal,
-            enforce_ownership=_enforce_ownership(),
-        )
-        buckets: list[JsonValue] = [
-            {
-                "bucket_start": b.bucket_start,
-                "bucket_end": b.bucket_end,
-                "total": b.total,
-                # wire 계약은 success/failed/cancelled다(#527) — 내부 BuildIndex
-                # status 값 "ok"는 그대로 두고 외부 필드 이름만 매핑한다.
-                "success": b.success,
-                "failed": b.failed,
-                "cancelled": b.cancelled,
-            }
-            for b in stats.buckets
-        ]
-        recent_runs: list[JsonValue] = [
-            {
-                "run_id": r.run_id,
-                "status": r.status,
-                "started_at": r.started_at,
-                "finished_at": r.finished_at,
-            }
-            for r in stats.recent_runs
-        ]
-        return ServiceResponse(
-            200,
-            {
-                "window": stats.window,
-                "bucket": stats.bucket,
-                "availability": stats.availability,
-                "excluded_count": stats.excluded_count,
-                "buckets": buckets,
-                "recent_runs": recent_runs,
-            },
-        )
+    # --- stage 조회 / observability (#637) ----------------------------------
+    #
+    # 단계별 산출물은 StagesApiService, /monitoring 은 MonitoringApiService 가
+    # 들고 있다. 둘을 나눠 둔 이유는 #606 이 세운 경계와 같다 — 데이터가 어떤가와
+    # 시스템이 어떤가는 한 응답에 섞지 않는다.
 
     def list_run_stages(self, run_id: str) -> ServiceResponse:
-        """run에 알려진 모든 source의 Bronze/Silver/Gold 상태를 반환한다 (#488).
-
-        호출 전에 run_id 검증·존재 확인·ownership 게이팅이 끝나 있어야 한다
-        (dispatch가 다른 /builds/{run_id}/* 라우트와 동일한 순서로 처리한다).
-        """
-        manifest = self._store.get_manifest(run_id)
-        if manifest is None:
-            return ServiceResponse(404, {"error": f"manifest not found: {run_id}"})
-        summaries = stages_service.list_run_stages(self._output_root, run_id, manifest)
-        sources: list[JsonValue] = [
-            {
-                "source_key": s.source_key,
-                "bronze": {"status": s.bronze, "available": s.bronze == "completed"},
-                "silver": {"status": s.silver, "available": s.silver == "completed"},
-                "gold": {"status": s.gold, "available": s.gold == "completed"},
-            }
-            for s in summaries
-        ]
-        return ServiceResponse(200, {"run_id": run_id, "sources": sources})
+        """run의 단계별 산출물 목록을 조회한다 (#488)."""
+        return self._stages_api.list_run_stages(run_id)
 
     def get_run_stage_detail(
         self, run_id: str, stage: str, source_key: str, *, limit: int
     ) -> ServiceResponse:
-        """단일 source의 단일 stage에 대한 안전한 summary/preview를 반환한다 (#488).
+        """run의 특정 단계 상세를 조회한다 (#488)."""
+        return self._stages_api.get_run_stage_detail(run_id, stage, source_key, limit=limit)
 
-        순서: stage 이름 검증(구조) → manifest에서 known source 확인 → 각 stage
-        reader가 sidecar만 읽어 응답을 구성한다. raw fetch_params/export
-        options/credential/absolute path는 어디에도 담지 않는다.
-        """
-        if stage not in stages_service.STAGE_NAMES:
-            return ServiceResponse(
-                400, {"error": f"invalid stage: {stage!r}; must be one of bronze/silver/gold"}
-            )
-        manifest = self._store.get_manifest(run_id)
-        if manifest is None:
-            return ServiceResponse(404, {"error": f"manifest not found: {run_id}"})
-        summary = stages_service.stage_status_for_source(
-            self._output_root, run_id, manifest, source_key
+    def monitoring_summary(self) -> ServiceResponse:
+        """큐/build/지연 요약을 조회한다 (#516)."""
+        return self._monitoring_api.monitoring_summary()
+
+    def monitoring_builds(
+        self, *, window: str, bucket: str, principal: Principal | None = None
+    ) -> ServiceResponse:
+        """window 안의 build 추이를 조회한다 (#516)."""
+        return self._monitoring_api.monitoring_builds(
+            window=window, bucket=bucket, principal=principal
         )
-        if summary is None:
-            return ServiceResponse(404, {"error": f"unknown source: {source_key}"})
-
-        status = stages_service.stage_status_of(summary, stage)
-        body: dict[str, JsonValue] = {
-            "run_id": run_id,
-            "stage": stage,
-            "source_key": source_key,
-            "status": status,
-            "available": status == "completed",
-        }
-
-        if stage == "bronze":
-            bronze = stages_service.bronze_detail(self._output_root, run_id, source_key)
-            spec = datasets_service.read_snapshot_spec(self._output_root, run_id)
-            matched = stages_service.match_source_ref(spec, source_key) if spec else None
-            body["provider"] = matched.provider if matched is not None else None
-            body["dataset"] = matched.dataset if matched is not None else None
-            body["fetched_at"] = bronze.fetched_at if bronze is not None else None
-            body["record_count"] = bronze.record_count if bronze is not None else None
-        elif stage == "silver":
-            silver = stages_service.silver_detail(
-                self._output_root, run_id, source_key, limit=limit
-            )
-            body["row_count"] = silver.row_count if silver is not None else None
-            body["schema"] = silver.schema if silver is not None else []
-            body["statistics"] = silver.statistics if silver is not None else None
-            body["validation"] = silver.validation if silver is not None else None
-            body["sample"] = silver.sample if silver is not None else []
-        else:  # gold
-            gold = stages_service.gold_detail(self._output_root, run_id, source_key)
-            body["row_count"] = gold.row_count if gold is not None else None
-            body["columns"] = cast(JsonValue, gold.columns) if gold is not None else []
-            body["splits"] = cast(JsonValue, gold.splits) if gold is not None else None
-            body["exports"] = (
-                cast(JsonValue, [{"kind": kind} for kind in gold.export_kinds])
-                if gold is not None
-                else []
-            )
-            # Gold sample sidecar가 아직 없으므로 만들어내지 않는다 — Silver sample을
-            # 가장하지 않고 명시적으로 unavailable을 표현한다.
-            body["sample"] = None
-            body["sample_available"] = False
-
-        return ServiceResponse(200, body)
 
     # --- publish 도메인 (#637) ---------------------------------------------
     #
