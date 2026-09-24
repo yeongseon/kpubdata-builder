@@ -13,6 +13,7 @@ from kpubdata_builder.events import BuildEvent
 from kpubdata_builder.pipeline import CancellationProbe
 from kpubdata_builder.service import BuilderService, ServiceResponse, dispatch
 from kpubdata_builder.service.auth import Principal
+from kpubdata_builder.service.jobs import AsyncBuildJobRegistry
 from kpubdata_builder.service.ownership import _OWNERSHIP_ENV
 from kpubdata_builder.spec import JsonValue
 
@@ -717,8 +718,6 @@ class TestConcurrentSubmitOfTheSameRunId:
     """
 
     def test_only_one_of_two_concurrent_creates_wins(self) -> None:
-        from kpubdata_builder.service.jobs import AsyncBuildJobRegistry
-
         registry = AsyncBuildJobRegistry()
         outcomes: list[str] = []
         start = threading.Barrier(2)
@@ -739,8 +738,6 @@ class TestConcurrentSubmitOfTheSameRunId:
         assert sorted(outcomes) == ["created", "existing"]
 
     def test_the_queue_cap_is_not_exceeded_under_concurrency(self) -> None:
-        from kpubdata_builder.service.jobs import AsyncBuildJobRegistry
-
         registry = AsyncBuildJobRegistry()
         created: list[str] = []
         start = threading.Barrier(4)
@@ -788,3 +785,74 @@ class TestAcceptHookFailureLeavesNoGhostJob:
 
         assert service._async_builds.get("run-ghost") is None
         assert service._async_builds.registry.queued_count() == 0
+
+
+class TestTerminalJobsDoNotAccumulateForever:
+    """terminal job 을 하나도 지우지 않으면 프로세스가 살아 있는 동안 계속 쌓인다.
+
+    snapshot 에는 성공 응답 본문까지 들어 있어서 작지도 않았고, 줄이는 방법은
+    재시작뿐이었다.
+    """
+
+    def _finish(self, registry: AsyncBuildJobRegistry, run_id: str) -> None:
+        registry.create(run_id=run_id, created_by="a")
+        registry.begin_run(run_id)
+        registry.finish(run_id, response={"ok": True}, failed=False)
+
+    def test_terminal_jobs_are_evicted_oldest_first(self) -> None:
+        registry = AsyncBuildJobRegistry(max_terminal_jobs=2)
+
+        for index in range(4):
+            self._finish(registry, f"run{index}")
+
+        assert registry.get("run0") is None
+        assert registry.get("run1") is None
+        assert registry.get("run2") is not None
+        assert registry.get("run3") is not None
+
+    def test_eviction_follows_completion_order_not_submission_order(self) -> None:
+        """먼저 제출됐다고 먼저 버리면, 오래 걸린 run 이 끝나자마자 사라진다."""
+        registry = AsyncBuildJobRegistry(max_terminal_jobs=1)
+        registry.create(run_id="slow", created_by="a")
+        registry.create(run_id="fast", created_by="a")
+        registry.begin_run("slow")
+        registry.begin_run("fast")
+
+        registry.finish("fast", response={}, failed=False)
+        registry.finish("slow", response={}, failed=False)
+
+        assert registry.get("fast") is None
+        assert registry.get("slow") is not None
+
+    def test_active_jobs_are_never_evicted(self) -> None:
+        """한도를 넘겼다는 이유로 실행 중인 job 을 지우면 취소도 조회도 불가능해진다."""
+        registry = AsyncBuildJobRegistry(max_terminal_jobs=1)
+        registry.create(run_id="running", created_by="a")
+        registry.begin_run("running")
+
+        for index in range(5):
+            self._finish(registry, f"done{index}")
+
+        snapshot = registry.get("running")
+        assert snapshot is not None
+        assert snapshot.status == "running"
+        assert registry.cancellation("running") is not None
+
+    def test_cancelled_and_failed_jobs_are_evicted_too(self) -> None:
+        registry = AsyncBuildJobRegistry(max_terminal_jobs=1)
+        registry.create(run_id="cancelled", created_by="a")
+        registry.request_cancel("cancelled")
+        registry.create(run_id="failed", created_by="a")
+        registry.mark_failed("failed", error="nope")
+
+        assert registry.get("cancelled") is None
+        assert registry.get("failed") is not None
+
+    def test_eviction_releases_the_cancellation_state(self) -> None:
+        """snapshot 만 지우고 ``_cancellations`` 를 남기면 누수 지점이 그대로 남는다."""
+        registry = AsyncBuildJobRegistry(max_terminal_jobs=1)
+        self._finish(registry, "old")
+        self._finish(registry, "new")
+
+        assert registry.cancellation("old") is None
+        assert registry.cancellation("new") is not None
