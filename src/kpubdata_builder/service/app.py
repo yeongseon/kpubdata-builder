@@ -451,6 +451,16 @@ def _quality_result_to_json(r: QualityCheckResult) -> dict[str, JsonValue]:
     }
 
 
+#: manifest 상태 어휘(ok/failed/cancelled) → publish 상태 어휘 (#481, #491).
+#: 두 어휘를 잇는 자리를 하나로 두어, publish 경로가 상태를 따로 파생시키다
+#: 정본과 어긋나는 일을 막는다.
+_MANIFEST_TO_PUBLISH_STATUS: dict[str, publish_service.RunStatus] = {
+    "ok": "succeeded",
+    "failed": "failed",
+    "cancelled": "cancelled",
+}
+
+
 def _parse_spec_text(spec_yaml: str) -> BuildSpec:
     """YAML 텍스트를 BuildSpec으로 파싱한다.
 
@@ -1742,7 +1752,14 @@ class BuilderService:
             "dict[str, JsonValue] | None", datasets_service.read_manifest(self._output_root, run_id)
         )
         if manifest is not None:
-            status: publish_service.RunStatus = "failed" if manifest.get("errors") else "succeeded"
+            # 상태 판정은 manifest 패키지의 정본 규칙에 맡긴다 (#481). 여기서
+            # errors 유무만 보던 시절에는 취소된 run이 succeeded로 읽혔다 —
+            # 취소는 errors를 남기지 않기 때문이다. run_status_blocker의
+            # ``run_cancelled``는 이미 있었지만 이 경로에서는 닿지 않았고,
+            # 그래서 중간에 끊긴 partial 산출물이 HF/Kaggle에 게시될 수 있었다.
+            status = _MANIFEST_TO_PUBLISH_STATUS[
+                status_from_manifest(cast("dict[str, object]", manifest))
+            ]
             spec = datasets_service.read_snapshot_spec(self._output_root, run_id)
             return status, manifest, spec
         snapshot = self._async_builds.get(run_id)
