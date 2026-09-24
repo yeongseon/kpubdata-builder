@@ -7,6 +7,7 @@ import pytest
 from kpubdata_builder.errors import SpecLoadError
 from kpubdata_builder.spec import (
     BuildSpec,
+    ColumnNullTokens,
     ExportTarget,
     SourceRef,
     load_spec,
@@ -329,3 +330,48 @@ def test_coalesce_candidate_order_is_part_of_the_recipe() -> None:
     assert compute_spec_digest(serialize_spec_bytes(forward)) != compute_spec_digest(
         serialize_spec_bytes(reversed_)
     )
+
+
+def test_column_null_tokens_round_trip_and_move_the_digest() -> None:
+    """#623 — 컬럼별 결측 선언이 recipe identity에 들어간다."""
+    base = _spec_with_schema({"null_tokens": ["TOKEN"]})
+    scoped = _spec_with_schema(
+        {"null_tokens": ["TOKEN"], "column_null_tokens": {"gender": ["", "TOKEN"]}}
+    )
+
+    schema = scoped.sources[0].schema
+    assert schema is not None
+    rule = schema.column_null_tokens["gender"]
+    assert rule.tokens == ("", "TOKEN")
+    assert rule.on_absent == "error"
+    assert compute_spec_digest(serialize_spec_bytes(base)) != compute_spec_digest(
+        serialize_spec_bytes(scoped)
+    )
+
+
+def test_column_null_tokens_accepts_the_expanded_form() -> None:
+    """#623 — 목록 shorthand와 on_absent를 붙인 확장형을 모두 받는다."""
+    spec = _spec_with_schema(
+        {"column_null_tokens": {"gender": {"tokens": [""], "on_absent": "ignore"}}}
+    )
+
+    schema = spec.sources[0].schema
+    assert schema is not None
+    assert schema.column_null_tokens["gender"] == ColumnNullTokens(tokens=("",), on_absent="ignore")
+
+
+def test_on_absent_is_part_of_the_recipe() -> None:
+    """어느 컬럼이 optional인지가 바뀌면 같은 원천에서 다른 결과가 나올 수 있다."""
+    strict = _spec_with_schema({"column_null_tokens": {"gender": [""]}})
+    lenient = _spec_with_schema(
+        {"column_null_tokens": {"gender": {"tokens": [""], "on_absent": "ignore"}}}
+    )
+
+    assert compute_spec_digest(serialize_spec_bytes(strict)) != compute_spec_digest(
+        serialize_spec_bytes(lenient)
+    )
+
+
+def test_unknown_key_in_column_null_tokens_is_rejected() -> None:
+    with pytest.raises(SpecLoadError):
+        _spec_with_schema({"column_null_tokens": {"gender": {"token": [""]}}})

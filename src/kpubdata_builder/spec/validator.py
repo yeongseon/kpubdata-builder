@@ -23,6 +23,7 @@ from ..exporters import EXPORTER_REGISTRY
 from ..tabular.polars_helpers import _FORMATTED_CASTS, _NAMED_DTYPES, TEXT_CASTS
 from .models import (
     DERIVED_KINDS,
+    ON_ABSENT_POLICIES,
     READ_AS_TYPES,
     SOURCE_FILE_FORMATS,
     SOURCE_KINDS,
@@ -30,6 +31,7 @@ from .models import (
     SOURCE_URL_METHODS,
     UPLOAD_ID_PATTERN,
     BuildSpec,
+    ColumnNullTokens,
     DerivedColumn,
     SourceRef,
 )
@@ -272,9 +274,57 @@ def _schema_problems(spec: BuildSpec) -> list[ValidationProblem]:
                         hint=f"Use one of: {', '.join(READ_AS_TYPES)}",
                     )
                 )
+        problems.extend(
+            _column_null_token_problems(source.schema.column_null_tokens, prefix=f"sources[{i}]")
+        )
         problems.extend(_coalesce_problems(source.schema.coalesce, prefix=f"sources[{i}]"))
         problems.extend(_zfill_problems(source.schema.zfill, prefix=f"sources[{i}]"))
-        problems.extend(_derived_problems(source.schema.derived, prefix=f"sources[{i}]"))
+        problems.extend(_rename_problems(source.schema.rename, prefix=f"sources[{i}]"))
+        problems.extend(
+            _derived_problems(
+                source.schema.derived,
+                prefix=f"sources[{i}]",
+                # derived 앞에 도는 선언들이 이름 지은 컬럼만 모은다. dtypes 는
+                # 컬럼을 만들지 않고 기대 타입을 선언할 뿐이므로 뺀다 — 파생 컬럼의
+                # dtype 을 선언하는 것은 정상적인 사용이다.
+                reserved_names=set(source.schema.rename.values())
+                | set(source.schema.casts)
+                | set(source.schema.zfill)
+                | set(source.schema.coalesce),
+            )
+        )
+    return problems
+
+
+def _column_null_token_problems(
+    column_null_tokens: dict[str, ColumnNullTokens], *, prefix: str
+) -> list[ValidationProblem]:
+    """schema.column_null_tokens 선언 자체의 유효성을 검증한다 (#623).
+
+    토큰이 비면 그 컬럼에 아무 일도 일어나지 않는다. 선언을 써 두고 동작하지 않는
+    상태가 가장 나쁘다 — 결측이 값으로 남은 채 품질 지표가 그것을 세지 않는다.
+    """
+    problems: list[ValidationProblem] = []
+    for column, rule in column_null_tokens.items():
+        field = f"{prefix}.schema.column_null_tokens.{column}"
+        if not rule.tokens:
+            problems.append(
+                _p(
+                    "empty_column_null_tokens",
+                    field,
+                    f"column_null_tokens for column {column!r} declares no tokens",
+                    hint="List the source spellings that mean 'missing' in this column",
+                )
+            )
+        if rule.on_absent not in ON_ABSENT_POLICIES:
+            problems.append(
+                _p(
+                    "unknown_on_absent_policy",
+                    f"{field}.on_absent",
+                    f"unknown on_absent policy {rule.on_absent!r} for column {column!r}",
+                    hint=f"Use one of: {', '.join(ON_ABSENT_POLICIES)}",
+                )
+            )
     return problems
 
 
@@ -364,17 +414,60 @@ def _zfill_problems(zfill: dict[str, int], *, prefix: str) -> list[ValidationPro
 _DERIVED_ARITY: dict[str, int | None] = {"date_parts": 3, "join_key": None}
 
 
+def _rename_problems(rename: dict[str, str], *, prefix: str) -> list[ValidationProblem]:
+    """schema.rename 의 대상 이름이 서로 겹치지 않는지 검증한다 (#611 후속).
+
+    두 원 필드가 같은 canonical 이름으로 모이면 normalize_table 에서 Polars
+    DuplicateError 로 터진다 — 선언 시점에 spec 용어로 막는다. (대상 이름이 rename
+    되지 않는 *기존* 컬럼과 겹치는 경우는 원천을 봐야 알 수 있어 런타임 가드가 맡는다.)
+    """
+    problems: list[ValidationProblem] = []
+    seen: dict[str, str] = {}
+    for source_name, target in rename.items():
+        if target in seen:
+            problems.append(
+                _p(
+                    "duplicate_rename_target",
+                    f"{prefix}.schema.rename.{source_name}",
+                    f"rename target {target!r} is also the target of {seen[target]!r}",
+                )
+            )
+        else:
+            seen[target] = source_name
+    return problems
+
+
 def _derived_problems(
-    derived: tuple[DerivedColumn, ...], *, prefix: str
+    derived: tuple[DerivedColumn, ...],
+    *,
+    prefix: str,
+    reserved_names: set[str] | None = None,
 ) -> list[ValidationProblem]:
-    """schema.derived 규칙의 kind 어휘와 컬럼 개수를 검증한다 (#611).
+    """schema.derived 규칙의 kind 어휘, 컬럼 개수, 이름 충돌을 검증한다 (#611).
 
     normalize_table 은 date_parts 를 (year, month, day) 로 unpack 하므로, 개수가
     맞지 않으면 런타임에 ValueError 로 터진다. 선언 시점에 막는다.
+
+    ``reserved_names`` 는 derived 앞 단계가 이미 이름 지은 컬럼명(rename 대상, casts/
+    zfill/coalesce 키)이다. 파생 컬럼이 그 이름을 쓰면 with_columns 가 기존 컬럼을 소리 없이
+    덮어쓴다 — 선언끼리 겹치는 것은 여기서, 원천 컬럼과 겹치는 것은 런타임 가드가 막는다.
     """
     problems: list[ValidationProblem] = []
+    reserved = set(reserved_names or ())
+    seen_names: set[str] = set()
     for index, rule in enumerate(derived):
         field = f"{prefix}.schema.derived[{index}]"
+        if rule.name in reserved or rule.name in seen_names:
+            problems.append(
+                _p(
+                    "derived_name_collision",
+                    f"{field}.name",
+                    f"derived column {rule.name!r} collides with a column already declared "
+                    "in this schema (rename target, casts/zfill/coalesce key, or another "
+                    "derived rule)",
+                )
+            )
+        seen_names.add(rule.name)
         if rule.kind not in DERIVED_KINDS:
             problems.append(
                 _p(

@@ -20,6 +20,7 @@ from ..errors import SpecLoadError
 from .models import (
     SOURCE_KINDS,
     BuildSpec,
+    ColumnNullTokens,
     CompareColumnsRule,
     CompositionSpec,
     DerivedColumn,
@@ -394,6 +395,9 @@ def _parse_schema(value: object, *, prefix: str) -> SchemaContract:
     null_tokens = _parse_string_list(
         mapping.get("null_tokens", []), field_name=f"{prefix}.schema.null_tokens"
     )
+    column_null_tokens = _parse_column_null_tokens(
+        mapping.get("column_null_tokens", {}), prefix=f"{prefix}.schema.column_null_tokens"
+    )
     coalesce = _parse_coalesce(mapping.get("coalesce", {}), prefix=f"{prefix}.schema.coalesce")
     zfill = _parse_zfill(mapping.get("zfill", {}), prefix=f"{prefix}.schema.zfill")
     return SchemaContract(
@@ -404,13 +408,48 @@ def _parse_schema(value: object, *, prefix: str) -> SchemaContract:
         derived=derived,
         read_as=read_as,
         null_tokens=null_tokens,
+        column_null_tokens=column_null_tokens,
         coalesce=coalesce,
         zfill=zfill,
     )
 
 
+def _parse_column_null_tokens(value: object, *, prefix: str) -> dict[str, ColumnNullTokens]:
+    """schema.column_null_tokens 를 파싱한다 (#623).
+
+    두 표기를 받는다. 목록만 쓰면 ``on_absent`` 는 기본값 ``"error"`` 다.
+
+        column_null_tokens:
+          foo: ["", "NA"]
+          bar:
+            tokens: [""]
+            on_absent: ignore
+
+    ``on_absent`` 어휘의 검증은 validator.py 가 한다 — 로더는 구조만 본다.
+    """
+    mapping = _ensure_mapping(value, field_name=prefix)
+    parsed: dict[str, ColumnNullTokens] = {}
+    for column, declaration in mapping.items():
+        field = f"{prefix}.{column}"
+        if isinstance(declaration, dict):
+            unknown = set(declaration) - {"tokens", "on_absent"}
+            if unknown:
+                raise TypeError(f"{field} has unknown keys: {sorted(unknown)}")
+            tokens = _parse_string_list(declaration.get("tokens", []), field_name=f"{field}.tokens")
+            on_absent = declaration.get("on_absent", "error")
+            if not isinstance(on_absent, str):
+                raise TypeError(f"{field}.on_absent must be a string")
+        else:
+            tokens = _parse_string_list(declaration, field_name=field)
+            on_absent = "error"
+        parsed[column] = ColumnNullTokens(tokens=tokens, on_absent=on_absent)
+    return parsed
+
+
 def _parse_coalesce(value: object, *, prefix: str) -> dict[str, tuple[str, ...]]:
-    """schema.coalesce 를 ``{canonical: (후보, ...)}`` 로 변환한다 (#620).
+    """``{이름: (문자열, ...)}`` 형태의 선언을 파싱한다 (#620, #623).
+
+    schema.coalesce 와 schema.column_null_tokens 가 같은 모양이라 함께 쓴다.
 
     구조만 검사한다 — 후보가 비었는지 같은 의미 검증은 validator.py 가 한다.
     """

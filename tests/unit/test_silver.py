@@ -12,6 +12,7 @@ import polars as pl
 import pytest
 
 from kpubdata_builder.errors import TabularError
+from kpubdata_builder.spec import ColumnNullTokens as CNT
 from kpubdata_builder.spec import JsonValue
 from kpubdata_builder.stages.bronze.models import BronzeArtifact, utc_now
 from kpubdata_builder.stages.silver import (
@@ -393,6 +394,102 @@ class TestDerivedColumns:
 
         assert table["deal_date"].to_list() == [date(2026, 9, 8)]
 
+    @pytest.mark.parametrize(
+        ("month", "day"),
+        [("13", "1"), ("2", "30"), ("0", "5")],
+    )
+    def test_date_parts_that_form_no_date_fail_instead_of_turning_null(
+        self, month: str, day: str
+    ) -> None:
+        # 세 조각이 모두 있는데 날짜가 되지 않으면 값이 사라진 것이다. cast가 같은
+        # 손실을 내면 #188이 빌드를 세우는데, 파생 규칙에서만 조용히 null이 되면
+        # 월/일이 뒤바뀐 원천이 required 날짜의 절반을 잃고도 통과한다.
+        from kpubdata_builder.spec import DerivedColumn
+
+        bronze = _bronze(({"dealYear": "2026", "dealMonth": month, "dealDay": day},))
+
+        with pytest.raises(TabularError, match="data loss"):
+            normalize_table(
+                bronze,
+                derived=(
+                    DerivedColumn(
+                        name="deal_date",
+                        kind="date_parts",
+                        columns=("dealYear", "dealMonth", "dealDay"),
+                    ),
+                ),
+            )
+
+    def test_date_parts_with_a_missing_part_stay_null_without_failing(self) -> None:
+        # 조각이 이미 없던 행은 규칙이 잃은 것이 아니다 — cast audit과 같은 기준
+        # (null 증가만 손실로 센다).
+        from kpubdata_builder.spec import DerivedColumn
+
+        bronze = _bronze(
+            (
+                {"dealYear": "2026", "dealMonth": "9", "dealDay": "8"},
+                {"dealYear": "2026", "dealMonth": None, "dealDay": "8"},
+            )
+        )
+
+        table = normalize_table(
+            bronze,
+            derived=(
+                DerivedColumn(
+                    name="deal_date",
+                    kind="date_parts",
+                    columns=("dealYear", "dealMonth", "dealDay"),
+                ),
+            ),
+        )
+
+        assert table["deal_date"].to_list() == [date(2026, 9, 8), None]
+
+    def test_date_parts_output_named_after_an_input_is_rejected(self) -> None:
+        # name이 입력 컬럼 중 하나이면 with_columns가 그 원천 컬럼을 소리 없이
+        # 덮어쓴다. 게다가 덮어쓴 뒤에는 잘못된 날짜인 행에서 조각 자체가 null로
+        # 보여, 손실 감사가 잡으려던 것을 놓친다. 선언 오류로 거부한다.
+        from kpubdata_builder.spec import DerivedColumn
+
+        bronze = _bronze(({"dealYear": "2026", "dealMonth": "30", "dealDay": "2"},))
+
+        with pytest.raises(TabularError, match="overwrite"):
+            normalize_table(
+                bronze,
+                derived=(
+                    DerivedColumn(
+                        name="dealMonth",
+                        kind="date_parts",
+                        columns=("dealYear", "dealMonth", "dealDay"),
+                    ),
+                ),
+            )
+
+    def test_derived_name_must_not_overwrite_an_unrelated_column(self) -> None:
+        from kpubdata_builder.spec import DerivedColumn
+
+        bronze = _bronze(({"a": "x", "b": "y", "k": "ORIGINAL"},))
+
+        with pytest.raises(TabularError, match="overwrite"):
+            normalize_table(
+                bronze, derived=(DerivedColumn(name="k", kind="join_key", columns=("a", "b")),)
+            )
+
+    def test_rename_target_must_not_collide_with_an_untouched_column(self) -> None:
+        # Polars DuplicateError가 아니라 spec 용어의 TabularError로 실패한다.
+        bronze = _bronze(({"sggCd": "11110", "district_code": "already"},))
+
+        with pytest.raises(TabularError, match="collide"):
+            normalize_table(bronze, rename={"sggCd": "district_code"})
+
+    def test_rename_swap_is_allowed(self) -> None:
+        # 서로 바꾸는 rename은 충돌이 아니다 — 두 원 컬럼 모두 rename 대상이다.
+        bronze = _bronze(({"a": 1, "b": 2},))
+
+        table = normalize_table(bronze, rename={"a": "b", "b": "a"})
+
+        assert table.columns == ["b", "a"]
+
     def test_join_key_concatenates_columns_into_one(self) -> None:
         # T3(매매×전월세)는 4개 키로 조인해야 하는데 composition의 equi-join은
         # 단일 컬럼만 받는다. Silver에서 복합키를 만들어 두면 compose.py를
@@ -571,6 +668,110 @@ class TestNullTokenNormalization:
         table = normalize_table(bronze, casts={"area": "float"}, null_tokens=("",))
 
         assert table["area"].to_list() == [84.5, None]
+
+
+class TestColumnNullTokens:
+    """같은 의미의 결측이 컬럼마다 다르게 표기되는 원천 (#623).
+
+    전역 선언만으로는 **다른 컬럼의 의미를 바꾸지 않고** 그것을 표현할 수 없다.
+    """
+
+    def test_column_tokens_add_to_the_global_ones(self) -> None:
+        bronze = _bronze(({"gender": "", "station": ""}, {"gender": "TOKEN", "station": "x"}))
+
+        table = normalize_table(
+            bronze, null_tokens=("TOKEN",), column_null_tokens={"gender": CNT(tokens=("",))}
+        )
+
+        # gender는 둘 다 결측, station의 빈 문자열은 값으로 남는다.
+        assert table["gender"].to_list() == [None, None]
+        assert table["station"].to_list() == ["", "x"]
+
+    def test_column_tokens_do_not_replace_the_global_ones(self) -> None:
+        """덮어쓰게 하면 토큰 하나를 더하려다 전역 토큰을 잃는 사고가 조용히 난다."""
+        bronze = _bronze(({"gender": "TOKEN"}, {"gender": ""}, {"gender": "F"}))
+
+        table = normalize_table(
+            bronze, null_tokens=("TOKEN",), column_null_tokens={"gender": CNT(tokens=("",))}
+        )
+
+        assert table["gender"].to_list() == [None, None, "F"]
+
+    def test_works_without_any_global_tokens(self) -> None:
+        bronze = _bronze(({"gender": ""}, {"station": ""}))
+
+        table = normalize_table(bronze, column_null_tokens={"gender": CNT(tokens=("",))})
+
+        assert table["gender"].to_list() == [None, None]
+        assert table["station"].to_list() == [None, ""]
+
+    def test_absent_column_fails(self) -> None:
+        """오타가 조용한 무동작이 되면 결측이 값으로 남은 채 지표가 세지 않는다."""
+        bronze = _bronze(({"gender": ""},))
+
+        with pytest.raises(TabularError, match="absent from the source"):
+            normalize_table(bronze, column_null_tokens={"gendr": CNT(tokens=("",))})
+
+    def test_absent_column_is_ignored_when_declared_optional(self) -> None:
+        """결측 표기를 적어 둔 것이 그 컬럼이 반드시 있어야 한다는 주장은 아니다.
+
+        원천이 진화해 컬럼이 사라질 수 있고, 그 부재 자체는 계약을 깨지 않는다.
+        """
+        bronze = _bronze(({"other": "x"},))
+
+        table = normalize_table(
+            bronze, column_null_tokens={"gender": CNT(tokens=("",), on_absent="ignore")}
+        )
+
+        assert table.columns == ["other"]
+
+    def test_optional_column_still_gets_its_tokens_when_present(self) -> None:
+        bronze = _bronze(({"gender": ""}, {"gender": "F"}))
+
+        table = normalize_table(
+            bronze, column_null_tokens={"gender": CNT(tokens=("",), on_absent="ignore")}
+        )
+
+        assert table["gender"].to_list() == [None, "F"]
+
+    def test_shorthand_default_is_error(self) -> None:
+        bronze = _bronze(({"other": "x"},))
+
+        with pytest.raises(TabularError, match="on_absent: ignore"):
+            normalize_table(bronze, column_null_tokens={"gender": CNT(tokens=("",))})
+
+    def test_non_string_column_fails(self) -> None:
+        bronze = _bronze(({"use_count": 1},))
+
+        with pytest.raises(TabularError, match="non-string"):
+            normalize_table(bronze, column_null_tokens={"use_count": CNT(tokens=("0",))})
+
+    def test_all_null_column_is_allowed(self) -> None:
+        """세대가 섞인 스냅샷에서 '컬럼은 있는데 값이 전부 없음'은 정상이다."""
+        bronze = _bronze(({"gender": None}, {"gender": None}))
+
+        table = normalize_table(bronze, column_null_tokens={"gender": CNT(tokens=("",))})
+
+        assert table["gender"].to_list() == [None, None]
+
+    def test_runs_before_coalesce(self) -> None:
+        """결측이 값으로 남아 있으면 coalesce가 그것을 충돌로 본다."""
+        bronze = _bronze(({"a": "", "b": "3"},))
+
+        table = normalize_table(
+            bronze, column_null_tokens={"a": CNT(tokens=("",))}, coalesce={"merged": ("a", "b")}
+        )
+
+        assert table["merged"].to_list() == ["3"]
+
+    def test_keys_are_pre_rename_names(self) -> None:
+        bronze = _bronze(({"성별": ""},))
+
+        table = normalize_table(
+            bronze, column_null_tokens={"성별": CNT(tokens=("",))}, rename={"성별": "gender"}
+        )
+
+        assert table["gender"].to_list() == [None]
 
 
 class TestCoalesce:

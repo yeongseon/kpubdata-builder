@@ -427,7 +427,12 @@ def _strip_internal_fields(entries: list[_BuildListEntry]) -> list[_BuildListEnt
 # 모으고(겹치는 그룹은 결과가 선언 순서에 달리므로 거부한다), zfill은 canonical
 # 식별자를 선언된 폭으로 왼쪽 0 padding 한다. casts의 dtype 어휘에 year_month가
 # 더해진다.
-API_CONTRACT_VERSION = "1.25.0"
+# 1.25.0 -> 1.26.0: SchemaContract에 column_null_tokens를 추가한다(#623,
+# additive — 기존 필드/동작 불변). 같은 의미의 결측이 컬럼마다 다르게 표기되는
+# 원천을 다른 컬럼의 의미를 바꾸지 않고 선언한다. 한 컬럼에서 인정하는 결측
+# 표현은 전역 null_tokens + 그 컬럼의 선언이며, 컬럼별 선언이 전역을 덮어쓰지
+# 않는다.
+API_CONTRACT_VERSION = "1.26.0"
 
 
 def _quality_result_to_json(r: QualityCheckResult) -> dict[str, JsonValue]:
