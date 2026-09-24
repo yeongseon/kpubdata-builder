@@ -323,3 +323,93 @@ def test_credential_params_are_still_redacted_alongside_column_names() -> None:
 
     assert "plain-secret" not in text
     assert serializer.REDACTED_VALUE in text
+
+
+class TestDigestStabilityForUnusedFields:
+    """쓰지 않는 기능 때문에 recipe identity가 바뀌지 않는다 (#611 후속).
+
+    spec_digest는 manifest·BuildIndex·``GET /datasets``에 노출되는 recipe
+    identity다. Silver 변환 선언이 추가될 때마다 빈 키가 canonical mapping에
+    실리면, 그 기능을 쓰지 않는 기존 spec의 digest까지 전부 바뀐다 — 업그레이드
+    시점에 "같은 recipe인가" 비교가 끊긴다.
+    """
+
+    OPTIONAL_KEYS = (
+        "rename",
+        "read_as",
+        "null_tokens",
+        "column_null_tokens",
+        "coalesce",
+        "zfill",
+        "derived",
+    )
+
+    @staticmethod
+    def _schema_mapping(spec: BuildSpec) -> dict[str, object]:
+        from kpubdata_builder.spec.serializer import canonical_spec_mapping
+
+        sources = cast(list[dict[str, object]], canonical_spec_mapping(spec)["sources"])
+        return cast(dict[str, object], sources[0]["schema"])
+
+    def test_an_unused_transform_field_is_not_emitted(self) -> None:
+        spec = replace(
+            _complete_spec(),
+            sources=(
+                replace(
+                    _complete_spec().sources[0],
+                    schema=SchemaContract(required=("id",), casts={"value": "float64"}),
+                ),
+            ),
+        )
+
+        emitted = self._schema_mapping(spec)
+
+        for key in self.OPTIONAL_KEYS:
+            assert key not in emitted, f"unused {key!r} would move the digest of every old spec"
+        assert set(emitted) == {"required", "dtypes", "casts"}
+
+    def test_a_declared_transform_field_is_emitted(self) -> None:
+        # 선언된 값은 반드시 recipe에 남아야 한다 — 그러지 않으면 변환 규칙을
+        # 바꿔도 digest가 그대로다.
+        spec = replace(
+            _complete_spec(),
+            sources=(
+                replace(
+                    _complete_spec().sources[0],
+                    schema=SchemaContract(rename={"sggCd": "district"}),
+                ),
+            ),
+        )
+
+        assert self._schema_mapping(spec)["rename"] == {"sggCd": "district"}
+
+    def test_changing_a_declared_transform_moves_the_digest(self) -> None:
+        def _spec(rename: dict[str, str]) -> BuildSpec:
+            base = _complete_spec()
+            return replace(
+                base,
+                sources=(replace(base.sources[0], schema=SchemaContract(rename=rename)),),
+            )
+
+        assert compute_spec_digest(serialize_spec_bytes(_spec({"a": "x"}))) != compute_spec_digest(
+            serialize_spec_bytes(_spec({"a": "y"}))
+        )
+
+    def test_an_empty_declaration_matches_no_declaration(self) -> None:
+        base = _complete_spec()
+        without = replace(
+            base, sources=(replace(base.sources[0], schema=SchemaContract(required=("id",))),)
+        )
+        with_empty = replace(
+            base,
+            sources=(
+                replace(
+                    base.sources[0],
+                    schema=SchemaContract(required=("id",), rename={}, zfill={}, derived=()),
+                ),
+            ),
+        )
+
+        assert compute_spec_digest(serialize_spec_bytes(without)) == compute_spec_digest(
+            serialize_spec_bytes(with_empty)
+        )
