@@ -23,6 +23,7 @@ from ..exporters import EXPORTER_REGISTRY
 from ..tabular.polars_helpers import _FORMATTED_CASTS, _NAMED_DTYPES, TEXT_CASTS
 from .models import (
     DERIVED_KINDS,
+    ON_ABSENT_POLICIES,
     READ_AS_TYPES,
     SOURCE_FILE_FORMATS,
     SOURCE_KINDS,
@@ -30,6 +31,7 @@ from .models import (
     SOURCE_URL_METHODS,
     UPLOAD_ID_PATTERN,
     BuildSpec,
+    ColumnNullTokens,
     DerivedColumn,
     SourceRef,
 )
@@ -272,9 +274,44 @@ def _schema_problems(spec: BuildSpec) -> list[ValidationProblem]:
                         hint=f"Use one of: {', '.join(READ_AS_TYPES)}",
                     )
                 )
+        problems.extend(
+            _column_null_token_problems(source.schema.column_null_tokens, prefix=f"sources[{i}]")
+        )
         problems.extend(_coalesce_problems(source.schema.coalesce, prefix=f"sources[{i}]"))
         problems.extend(_zfill_problems(source.schema.zfill, prefix=f"sources[{i}]"))
         problems.extend(_derived_problems(source.schema.derived, prefix=f"sources[{i}]"))
+    return problems
+
+
+def _column_null_token_problems(
+    column_null_tokens: dict[str, ColumnNullTokens], *, prefix: str
+) -> list[ValidationProblem]:
+    """schema.column_null_tokens 선언 자체의 유효성을 검증한다 (#623).
+
+    토큰이 비면 그 컬럼에 아무 일도 일어나지 않는다. 선언을 써 두고 동작하지 않는
+    상태가 가장 나쁘다 — 결측이 값으로 남은 채 품질 지표가 그것을 세지 않는다.
+    """
+    problems: list[ValidationProblem] = []
+    for column, rule in column_null_tokens.items():
+        field = f"{prefix}.schema.column_null_tokens.{column}"
+        if not rule.tokens:
+            problems.append(
+                _p(
+                    "empty_column_null_tokens",
+                    field,
+                    f"column_null_tokens for column {column!r} declares no tokens",
+                    hint="List the source spellings that mean 'missing' in this column",
+                )
+            )
+        if rule.on_absent not in ON_ABSENT_POLICIES:
+            problems.append(
+                _p(
+                    "unknown_on_absent_policy",
+                    f"{field}.on_absent",
+                    f"unknown on_absent policy {rule.on_absent!r} for column {column!r}",
+                    hint=f"Use one of: {', '.join(ON_ABSENT_POLICIES)}",
+                )
+            )
     return problems
 
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 from .loader import load_spec, parse_spec
 from .models import (
     BuildSpec,
+    ColumnNullTokens,
     CompositionSpec,
     DerivedColumn,
     ExportTarget,
@@ -43,6 +44,7 @@ __all__ = [
     "JoinSpec",
     "JsonPrimitive",
     "JsonValue",
+    "ColumnNullTokens",
     "SchemaContract",
     "SourceRef",
     "SplitSpec",

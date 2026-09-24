@@ -15,7 +15,7 @@ from collections.abc import Mapping, Sequence
 import polars as pl
 
 from ...errors import TabularError
-from ...spec import DerivedColumn, JsonValue
+from ...spec import ColumnNullTokens, DerivedColumn, JsonValue
 from ...tabular.convert import records_to_dataframe
 from ...tabular.polars_helpers import (
     YEAR_MONTH_COMPACT,
@@ -40,6 +40,7 @@ def normalize_table(
     derived: Sequence[DerivedColumn] = (),
     read_as: Mapping[str, str] | None = None,
     null_tokens: Sequence[str] = (),
+    column_null_tokens: Mapping[str, ColumnNullTokens] | None = None,
     coalesce: Mapping[str, Sequence[str]] | None = None,
     zfill: Mapping[str, int] | None = None,
 ) -> pl.DataFrame:
@@ -64,6 +65,9 @@ def normalize_table(
             모은다. 결측을 지우는 것이 아니라 표기를 하나로 맞추는 것이며, 선언되지
             않은 값은 건드리지 않는다 — 무엇을 결측으로 볼지는 데이터셋마다 다르고,
             builder가 임의로 정하면 품질 측정 대상이 오염된다.
+        column_null_tokens: 특정 컬럼에서만 인정하는 결측 표기 (#623). 전역
+            ``null_tokens`` 에 **더해서** 적용된다 — 덮어쓰지 않는다. 키는 rename
+            *이전* 의 원 필드명이고, 선언한 컬럼이 없으면 실패한다.
         coalesce: 세대별 alias 컬럼을 하나로 모으는 규칙 (#620). 키는 rename *이전*
             의 원 필드명이다. 후보 컬럼은 결과에서 사라진다.
         zfill: canonical 식별자를 선언된 폭으로 왼쪽 0 padding 한다 (#620). 키는
@@ -83,8 +87,8 @@ def normalize_table(
     # null_tokens는 테이블이 만들어지기 *전* 에 적용한다. records_to_dataframe은
     # 이질 타입 컬럼을 거부하는데(#187), 공공 API가 결측을 ""로 주면 같은 컬럼에
     # 숫자 84.5와 문자열 ""이 섞여 선언이 닿기도 전에 빌드가 멈춘다 — 선언된
-    # 표기를 먼저 null로 모아야 그 선언이 실제로 효력을 갖는다.
-    records = _replace_null_tokens(bronze.raw_records, null_tokens)
+    # 표기를 먼저 null로 모아야 그 선언이 실제로 효력을 갖는다 (#613).
+    records = _apply_null_tokens(bronze.raw_records, null_tokens, column_null_tokens or {})
     table = records_to_dataframe(records, read_as=read_as)
     if coalesce:
         for target, candidates in _coalesce_order(coalesce):
@@ -113,6 +117,79 @@ def normalize_table(
     for rule in derived:
         table = _apply_derived(table, rule)
     return table
+
+
+def _apply_null_tokens(
+    records: Sequence[dict[str, JsonValue]],
+    null_tokens: Sequence[str],
+    column_null_tokens: Mapping[str, ColumnNullTokens],
+) -> Sequence[dict[str, JsonValue]]:
+    """결측 표기를 null로 모은다. 전역 선언 + 컬럼별 선언 (#620, #623).
+
+    한 컬럼에서 인정하는 결측 표현은 **전역 + 그 컬럼의 선언**이다. 컬럼별 선언이
+    전역을 덮어쓰지 않는다 — 덮어쓰게 하면 한 컬럼에 토큰 하나를 더하려다 전역 토큰을
+    잃는 사고가 조용히 난다.
+
+    같은 의미의 결측이 컬럼마다 다르게 표기되는 원천이 있다. 전역 선언만으로는 그것을
+    **다른 컬럼의 의미를 바꾸지 않고** 표현할 수 없다 — 성별의 빈 문자열을 결측으로
+    선언하려다 대여소명의 빈 문자열까지 null로 만들게 된다.
+
+    선언한 컬럼이 테이블에 없으면 실패한다. 오타가 조용한 무동작이 되면 결측이 값으로
+    남은 채 품질 지표가 그것을 세지 않는다.
+
+    테이블이 만들어지기 *전* 인 원시 레코드에서 돈다 (#613). records_to_dataframe은
+    이질 타입 컬럼을 거부하는데(#187), 공공 API가 결측을 ``""`` 로 주면 같은 컬럼에
+    숫자 ``84.5`` 와 문자열 ``""`` 이 섞여 선언이 닿기도 전에 빌드가 멈춘다.
+    """
+    if not null_tokens and not column_null_tokens:
+        return records
+
+    # 원천 컬럼 집합은 레코드 키의 합집합이다 — 레코드마다 키가 빠질 수 있다.
+    columns: dict[str, None] = {}
+    for record in records:
+        for key in record:
+            columns.setdefault(key, None)
+
+    # "이 컬럼에서 무엇이 결측인가"와 "이 컬럼이 반드시 있어야 하는가"는 별개의
+    # 계약이다. 후자는 on_absent로 따로 선언한다 — 그러지 않으면 결측 표기를 적어
+    # 두었다는 이유만으로 모든 세대에 그 컬럼이 있어야 한다고 주장하게 된다.
+    missing = [
+        name
+        for name, rule in column_null_tokens.items()
+        if name not in columns and rule.on_absent == "error"
+    ]
+    if missing:
+        raise TabularError(
+            f"declared column_null_tokens refers to columns absent from the source: {missing}. "
+            "Declare on_absent: ignore if the column is optional in this source."
+        )
+    present = [name for name in column_null_tokens if name in columns]
+
+    # 문자열 값이 하나도 없는 컬럼에서는 토큰이 맞을 수 없다. 조용히 아무것도 하지
+    # 않으면 선언이 틀렸다는 것을 아무도 모른다. 전부 null인 컬럼은 예외다 — 맞출
+    # 값 자체가 없을 뿐 선언이 틀린 것은 아니다.
+    wrong_type: dict[str, str] = {}
+    for name in present:
+        values = [record[name] for record in records if record.get(name) is not None]
+        if values and not any(isinstance(value, str) for value in values):
+            wrong_type[name] = type(values[0]).__name__
+    if wrong_type:
+        raise TabularError(
+            f"column_null_tokens declared on non-string columns: {wrong_type}. "
+            "Declare read_as so the source values are read as text."
+        )
+
+    shared = frozenset(null_tokens)
+    per_column = {name: shared | frozenset(column_null_tokens[name].tokens) for name in present}
+    return [
+        {
+            key: (
+                None if isinstance(value, str) and value in per_column.get(key, shared) else value
+            )
+            for key, value in record.items()
+        }
+        for record in records
+    ]
 
 
 def _coalesce_order(
@@ -267,26 +344,6 @@ def _check_year_month(table: pl.DataFrame, casts: Mapping[str, DtypeSpec]) -> No
                 f"year_month cast on {column!r} rejected {bad.height} value(s); "
                 f"expected YYYY-MM or YYYYMM, got: {examples}"
             )
-
-
-def _replace_null_tokens(
-    records: Sequence[dict[str, JsonValue]], null_tokens: Sequence[str]
-) -> Sequence[dict[str, JsonValue]]:
-    """선언된 결측 표기를 원시 레코드 단계에서 null로 모은다 (#613).
-
-    문자열 값만 본다 — 결측을 지우는 것이 아니라 표기를 하나로 맞추는 것이고,
-    선언되지 않은 값은 건드리지 않는다.
-    """
-    if not null_tokens:
-        return records
-    tokens = frozenset(null_tokens)
-    return [
-        {
-            key: (None if isinstance(value, str) and value in tokens else value)
-            for key, value in record.items()
-        }
-        for record in records
-    ]
 
 
 def _apply_derived(table: pl.DataFrame, rule: DerivedColumn) -> pl.DataFrame:

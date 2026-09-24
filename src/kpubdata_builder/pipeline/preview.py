@@ -270,6 +270,7 @@ def _preview_source(
         derived = source.schema.derived if source.schema else ()
         read_as = source.schema.read_as if source.schema else None
         null_tokens = source.schema.null_tokens if source.schema else ()
+        column_null_tokens = source.schema.column_null_tokens if source.schema else None
         coalesce = source.schema.coalesce if source.schema else None
         zfill = source.schema.zfill if source.schema else None
         # kind(public_api/file/url)에 맞는 resolver로 원시 레코드를 가져온다
@@ -290,6 +291,7 @@ def _preview_source(
             derived=derived,
             read_as=read_as,
             null_tokens=null_tokens,
+            column_null_tokens=column_null_tokens,
             coalesce=coalesce,
             zfill=zfill,
             column_dtypes=column_dtypes,
