@@ -445,6 +445,45 @@ class TestDerivedColumns:
 
         assert table["deal_date"].to_list() == [date(2026, 9, 8), None]
 
+    def test_date_parts_output_named_after_an_input_still_reports_the_loss(self) -> None:
+        # validator는 name이 입력 컬럼 중 하나인 선언을 허용한다. 그 경우
+        # with_columns가 그 입력을 먼저 덮어써서, 잘못된 날짜인 행에서는 조각 자체가
+        # null로 보인다 — 조각 존재 여부를 결과 프레임에서 판정하면 잡으려던 손실이
+        # 그대로 빠져나간다.
+        from kpubdata_builder.spec import DerivedColumn
+
+        bronze = _bronze(({"dealYear": "2026", "dealMonth": "30", "dealDay": "2"},))
+
+        with pytest.raises(TabularError, match="data loss"):
+            normalize_table(
+                bronze,
+                derived=(
+                    DerivedColumn(
+                        name="dealMonth",
+                        kind="date_parts",
+                        columns=("dealYear", "dealMonth", "dealDay"),
+                    ),
+                ),
+            )
+
+    def test_date_parts_output_named_after_an_input_succeeds_on_valid_dates(self) -> None:
+        from kpubdata_builder.spec import DerivedColumn
+
+        bronze = _bronze(({"dealYear": "2026", "dealMonth": "9", "dealDay": "8"},))
+
+        table = normalize_table(
+            bronze,
+            derived=(
+                DerivedColumn(
+                    name="dealMonth",
+                    kind="date_parts",
+                    columns=("dealYear", "dealMonth", "dealDay"),
+                ),
+            ),
+        )
+
+        assert table["dealMonth"].to_list() == [date(2026, 9, 8)]
+
     def test_join_key_concatenates_columns_into_one(self) -> None:
         # T3(매매×전월세)는 4개 키로 조인해야 하는데 composition의 equi-join은
         # 단일 컬럼만 받는다. Silver에서 복합키를 만들어 두면 compose.py를

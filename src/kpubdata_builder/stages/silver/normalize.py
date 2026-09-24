@@ -367,10 +367,16 @@ def _apply_derived(table: pl.DataFrame, rule: DerivedColumn) -> pl.DataFrame:
         # #188과 같은 기준: 조각이 모두 있었는데 날짜가 되지 못한 행은 규칙이 잃은
         # 값이다. cast였다면 빌드가 섰을 손실이 파생 규칙에서만 조용히 null이 되면
         # 안 된다. 조각이 이미 없던 행은 손실이 아니다.
-        lost = result.filter(
+        #
+        # 조각의 존재 여부는 반드시 *원본* table에서 판정한다. rule.name이 입력
+        # 컬럼 중 하나와 같으면(예: name=dealMonth, columns=[dealYear, dealMonth,
+        # dealDay] — validator가 허용하는 선언이다) with_columns가 그 입력 컬럼을
+        # 이미 덮어써서, 잘못된 날짜인 행에서는 조각 자체가 null로 보인다. 그러면
+        # "조각이 모두 있었다"가 거짓이 되어 잡으려던 손실이 그대로 빠져나간다.
+        parts_present = table.select(
             pl.all_horizontal(pl.col(c).is_not_null() for c in rule.columns)
-            & pl.col(rule.name).is_null()
-        )
+        ).to_series()
+        lost = table.filter(parts_present & result.get_column(rule.name).is_null())
         if lost.height:
             examples = lost.select(rule.columns).unique().head(3).to_dicts()
             raise TabularError(
