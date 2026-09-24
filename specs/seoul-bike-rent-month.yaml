@@ -1,0 +1,77 @@
+# 서울 공공자전거 월별 이용정보 — 세대가 다섯 번 바뀌는 원천을 계약 한 벌로 받는다.
+#
+# 앞의 두 spec 과 달리 kind="file" 이다. 이 데이터셋은 공공 API 가 아니라 배포
+# 파일로 오므로 param_grid 가 아니라 업로드된 스냅샷 하나를 가리킨다.
+#
+# upload_id 는 실행 시점에 `POST /uploads` 가 발급하는 값이라 여기 고정할 수
+# 없다. 아래 값은 자리표시자이며, 실제 빌드는 발급받은 id 로 바꿔 쓴다.
+#
+# 계약이 흡수하는 것과 남기는 것의 근거는
+# Launa-0/kpubdata-paper 의 experiments/scripts/bike_spec.py 와
+# docs/bike-source-generations.md 에 있다. 여기서는 그 선언을 BuildSpec YAML 로
+# 옮긴 것이고, 규칙 자체는 바꾸지 않았다.
+dataset_id: kpubdata/seoul-bike-rent-month
+title: 서울 공공자전거 월별 이용정보
+description: 서울 열린데이터광장 공공자전거 월별 이용정보. G1+G2+I1+G3 통합 스냅샷, 2020-01~2023-12.
+license: cc-by-4.0
+sources:
+- kind: file
+  alias: bike
+  upload_id: upl_00000000000000000000000000000000
+  format: jsonl
+  encoding: utf-8
+  schema:
+    # 결측을 빈 값이 아니라 문자열 \N 으로 적는다. 캐스팅 전에 null 로 모으지
+    # 않으면 수치 컬럼에서 #188 의 data-loss 가드가 빌드를 세운다.
+    null_tokens:
+    - '\N'
+    # 성별만 결측 표기가 둘이다. 전역 null_tokens 에 "" 를 넣으면 모든 문자열
+    # 컬럼의 빈 문자열이 결측이 된다 — 성별 하나 때문에 계약 전체의 결측 정의를
+    # 바꾸지 않는다.
+    column_null_tokens:
+      성별:
+        tokens:
+        - ''
+        on_absent: ignore
+    # 세대마다 다른 이름이 붙은 같은 양. 후보 순서가 우선순위다.
+    coalesce:
+      ym_raw:
+      - 대여일자
+      - 대여년월
+      distance_m:
+      - 이동거리
+      - 이동거리(M)
+      - 이용거리(M)
+      duration_min:
+      - 이용시간
+      - 이용시간(분)
+      - 이용시간(본)
+    rename:
+      대여소번호: station_code
+      대여소명: station_name
+      대여구분코드: pass_type
+      성별: gender
+      연령대코드: age_band
+      이용건수: use_count
+      운동량: exercise_kcal
+      탄소량: carbon_kg
+    # 같은 대여소가 3 과 00003 으로 오면 집계에서 둘로 갈린다.
+    zfill:
+      station_code: 5
+    casts:
+      ym_raw: year_month
+      use_count: int
+      distance_m: float
+      duration_min: float
+      exercise_kcal: float
+      carbon_kg: float
+    # 식별자 + 시점 + 주된 사실. 성별·연령대는 넣지 않는다 — 그 표현 변화를
+    # 일부러 계약 밖에 남겼으므로, required 에 넣으면 품질 지표가 계약이
+    # 보장하지 않는 것을 세게 된다.
+    required:
+    - station_code
+    - ym_raw
+    - use_count
+exports:
+- kind: parquet
+  output_path: data/seoul-bike-rent-month.parquet
