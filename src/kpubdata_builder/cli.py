@@ -152,6 +152,39 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run workspace root directory (default: build).",
     )
 
+    verify_cmd = subparsers.add_parser(
+        "verify",
+        help="Verify dataset specs against live APIs.",
+    )
+    verify_cmd.add_argument(
+        "dataset",
+        nargs="?",
+        default=None,
+        help="Dataset ID to verify (e.g. datago.apt_trade). Omit for --all.",
+    )
+    verify_cmd.add_argument(
+        "--all",
+        action="store_true",
+        dest="verify_all",
+        help="Verify all discovered spec datasets.",
+    )
+    verify_cmd.add_argument(
+        "--output",
+        default=None,
+        help="Write machine-readable YAML results to this file.",
+    )
+    verify_cmd.add_argument(
+        "--page-size",
+        type=_positive_int,
+        default=10,
+        help="Number of records to request per test (default: 10).",
+    )
+    verify_cmd.add_argument(
+        "--hashes",
+        default=None,
+        help="Path to previous schema hashes YAML for drift detection.",
+    )
+
     prune_cmd = subparsers.add_parser(
         "prune-cancelled",
         help="List (and optionally delete) cancelled partial-run artifacts past a TTL (#549).",
@@ -498,6 +531,120 @@ def _run_prune_cancelled(*, output_dir: str, ttl_hours: float | None, apply: boo
     return 0
 
 
+def _positive_int(value: str) -> int:
+    """argparse type for options that must be a positive count."""
+    try:
+        parsed = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected an integer, got {value!r}") from None
+    if parsed < 1:
+        raise argparse.ArgumentTypeError(f"expected a positive integer, got {parsed}")
+    return parsed
+
+
+def _load_previous_hashes(hashes_file: Path) -> dict[str, str]:
+    """Read a schema-hash baseline, accepting both file shapes.
+
+    ``--output`` writes ``{"results": [...], "hashes": {...}}``, so feeding that
+    file straight back to ``--hashes`` used to stringify the two top-level values
+    and silently skip drift detection in the workflow the CLI advertises. Read
+    the nested ``hashes`` mapping when it is there, and keep supporting a flat
+    ``{dataset_id: hash}`` file.
+    """
+    import yaml
+
+    with open(hashes_file, encoding="utf-8") as handle:
+        raw = yaml.safe_load(handle) or {}
+    if not isinstance(raw, dict):
+        return {}
+    nested = raw.get("hashes")
+    source = nested if isinstance(nested, dict) else raw
+    return {str(key): str(value) for key, value in source.items() if isinstance(value, str)}
+
+
+def _run_verify(
+    *,
+    dataset: str | None,
+    verify_all: bool,
+    output: str | None,
+    page_size: int,
+    hashes_path: str | None,
+) -> int:
+    """Verify dataset spec(s) against live APIs.
+
+    Parameters:
+        dataset: Single dataset ID to verify. None requires --all.
+        verify_all: If True, verify all discovered specs.
+        output: Optional path to write YAML results.
+        page_size: Records per test request.
+        hashes_path: Optional path to previous schema hashes YAML.
+    """
+    from kpubdata.core.spec import discover_specs, find_spec
+
+    from .verify import runner as _verify_runner
+
+    # Load previous schema hashes if provided
+    previous_hashes: dict[str, str] = {}
+    if hashes_path:
+        hashes_file = Path(hashes_path)
+        if not hashes_file.is_file():
+            # Silently proceeding with an empty baseline turns a typo or a
+            # missing CI artifact into "schema drift detection is off", while
+            # the command still reports HEALTHY.
+            print(f"error: hashes file not found: {hashes_file}", file=sys.stderr)
+            return 1
+        previous_hashes = _load_previous_hashes(hashes_file)
+
+    if dataset:
+        spec = find_spec(dataset)
+        if spec is None:
+            print(f"error: spec not found: {dataset}", file=sys.stderr)
+            return 1
+        result = _verify_runner.verify_dataset(
+            spec,
+            previous_hash=previous_hashes.get(dataset),
+            page_size=page_size,
+        )
+        print(result.format_report())
+        results = [result]
+    elif verify_all:
+        specs = discover_specs()
+        if not specs:
+            print("error: no specs discovered", file=sys.stderr)
+            return 1
+        results = _verify_runner.verify_datasets(
+            specs,
+            previous_hashes=previous_hashes,
+            page_size=page_size,
+        )
+        # Print summary
+        healthy = sum(1 for r in results if r.passed)
+        print(f"\nVerification Summary: {healthy}/{len(results)} healthy\n")
+        for r in results:
+            icon = "pass" if r.passed else "FAIL"
+            print(f"  [{icon}] {r.dataset_id:40s} {r.status.value}")
+        print()
+    else:
+        print("error: specify a dataset ID or use --all", file=sys.stderr)
+        return 2
+
+    # Write machine-readable output
+    if output:
+        import yaml
+
+        out_path = Path(output)
+        data = {
+            "results": [r.to_dict() for r in results],
+            "hashes": {r.dataset_id: r.schema_hash for r in results if r.schema_hash},
+        }
+        with open(out_path, "w", encoding="utf-8") as f:
+            yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        print(f"Results written to {out_path}")
+
+    failed = any(not r.passed for r in results)
+    return 1 if failed else 0
+
+
 def dispatch(args: argparse.Namespace) -> int:
     """파싱된 argparse 결과를 실제 명령 실행 함수로 전달한다.
 
@@ -533,6 +680,14 @@ def dispatch(args: argparse.Namespace) -> int:
             host=args.host,
             port=args.port,
             max_workers=args.max_workers,
+        )
+    if command == "verify":
+        return _run_verify(
+            dataset=args.dataset,
+            verify_all=args.verify_all,
+            output=args.output,
+            page_size=args.page_size,
+            hashes_path=args.hashes,
         )
     if command == "rebuild-index":
         return _run_rebuild_index(output_dir=args.output_dir)
