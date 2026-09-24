@@ -9,7 +9,6 @@ Prerequisite: verify module must be available (feat/verify-command branch or mer
 from __future__ import annotations
 
 import pytest
-
 from kpubdata.core.spec import SpecDefinition, discover_specs, find_spec
 
 try:

@@ -10,16 +10,19 @@ from collections.abc import Sequence
 def _extract_structure(items: Sequence[dict[str, object]]) -> dict[str, str]:
     """Extract a canonical field→type mapping from response items.
 
-    Merges keys across all items and infers types from the first non-None
-    value seen for each key.
+    Merges keys across all items and infers each key's type from the first
+    non-None value seen for it. ``null`` is provisional: APIs routinely return
+    null for optional fields, so fixing a field's type on the first null would
+    make the baseline depend on row order and hide a real type change later in
+    the page.
     """
     field_types: dict[str, str] = {}
     for item in items:
         for key, value in item.items():
-            if key in field_types:
+            if field_types.get(key, "null") != "null":
                 continue
             if value is None:
-                field_types[key] = "null"
+                field_types.setdefault(key, "null")
             elif isinstance(value, bool):
                 field_types[key] = "boolean"
             elif isinstance(value, int):

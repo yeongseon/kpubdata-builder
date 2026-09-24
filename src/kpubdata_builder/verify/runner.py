@@ -12,8 +12,25 @@ if TYPE_CHECKING:
     from kpubdata.core.spec import SpecDefinition
 
 
+#: HEAD responses that prove the endpoint is live even though the probe failed.
+#: 400/405 mean the method or request shape was rejected; 401/403 mean the route
+#: exists but requires credentials the probe deliberately does not send.
+_ENDPOINT_LIVE_STATUSES = frozenset({400, 401, 403, 405})
+
+#: Statuses that mean authentication itself did not succeed.
+_AUTH_FAILURE_STATUSES = frozenset(
+    {
+        DatasetStatus.NEEDS_APPLICATION,
+        DatasetStatus.WAITING_APPROVAL,
+        DatasetStatus.INVALID_KEY,
+        DatasetStatus.RATE_LIMITED,
+    }
+)
+
+
 def _check_endpoint(spec: SpecDefinition) -> CheckResult:
     """Check that the endpoint URL is well-formed and reachable."""
+    import urllib.error
     import urllib.request
 
     url = spec.endpoint.base_url
@@ -23,20 +40,33 @@ def _check_endpoint(spec: SpecDefinition) -> CheckResult:
         with urllib.request.urlopen(req, timeout=10):  # noqa: S310
             latency = (time.monotonic() - t0) * 1000
         return CheckResult(CheckName.ENDPOINT, passed=True, latency_ms=latency)
-    except Exception as exc:
-        # Many public APIs reject HEAD but accept GET — a connection
-        # error is what we actually want to detect here.
-        err_str = str(exc)
-        if any(code in err_str for code in ("400", "403", "404", "405", "500", "502", "503")):
+    except urllib.error.HTTPError as exc:
+        # Many public APIs reject HEAD but accept GET, and an auth-protected
+        # endpoint answers an unauthenticated probe with 401/403. Those replies
+        # still prove the endpoint is live, so let the authenticated fetch below
+        # decide the real status.
+        #
+        # 404 is deliberately NOT in this set: "route not found" is exactly the
+        # symptom of a removed or mistyped base URL, and treating it as reachable
+        # would print "Endpoint pass" for a dead endpoint and mislabel the
+        # failure. 5xx is excluded for the same reason — a server that cannot
+        # answer is not a verified endpoint.
+        if exc.code in _ENDPOINT_LIVE_STATUSES:
             return CheckResult(
                 CheckName.ENDPOINT,
                 passed=True,
-                detail="endpoint reachable (non-GET method rejected)",
+                detail=f"endpoint reachable (HEAD rejected with {exc.code})",
             )
         return CheckResult(
             CheckName.ENDPOINT,
             passed=False,
-            detail=f"unreachable: {err_str[:120]}",
+            detail=f"unreachable: HTTP {exc.code}",
+        )
+    except Exception as exc:
+        return CheckResult(
+            CheckName.ENDPOINT,
+            passed=False,
+            detail=f"unreachable: {str(exc)[:120]}",
         )
 
 
@@ -48,10 +78,19 @@ def _classify_auth_error(exc: Exception) -> DatasetStatus:
         return DatasetStatus.RATE_LIMITED
     if isinstance(exc, AuthError):
         msg = str(exc).lower()
+        # Message text first: it is the only thing that distinguishes "key is
+        # valid but this dataset needs a separate application" from "key is
+        # rejected", and both arrive as 403.
         if "활용신청" in msg or "not activated" in msg or "application" in msg:
             return DatasetStatus.NEEDS_APPLICATION
         if "승인" in msg or "approval" in msg or "waiting" in msg:
             return DatasetStatus.WAITING_APPROVAL
+        # Then the structured status the exception carries. Relying on free-form
+        # text alone classified every plain AuthError(403) as INVALID_KEY, which
+        # defeated the documented 403 -> NEEDS_APPLICATION status whenever the
+        # provider's wording did not match one of the phrases above.
+        if getattr(exc, "status_code", None) == 403:
+            return DatasetStatus.NEEDS_APPLICATION
         return DatasetStatus.INVALID_KEY
     return DatasetStatus.BROKEN_ENDPOINT
 
@@ -121,10 +160,13 @@ def verify_dataset(
         page_size=page_size,
     )
 
-    executor = SpecExecutor(HttpTransport(), config)
-
+    # HttpTransport owns a persistent HTTP client. Left to the garbage
+    # collector, `--all` and repeated library calls pile up sockets and
+    # connection-pool entries, so close it on every path out of the fetch.
+    transport = HttpTransport()
     try:
         t0 = time.monotonic()
+        executor = SpecExecutor(transport, config)
         _params, payload = executor.fetch(spec, query, format_hint=getattr(example, "format", None))
         fetch_latency = (time.monotonic() - t0) * 1000
     except (AuthError, RateLimitError) as exc:
@@ -180,6 +222,9 @@ def verify_dataset(
         _fill_skipped(result, after=CheckName.RESPONSE)
         return result
 
+    finally:
+        _close_transport(transport)
+
     # Auth passed (we got a response)
     result.checks.append(
         CheckResult(
@@ -202,6 +247,12 @@ def verify_dataset(
         )
         auth_status = _classify_auth_error(exc)
         result.status = auth_status
+        # A successful HTTP response can still carry an authentication failure in
+        # its envelope. The AUTH check was recorded as passed above, so without
+        # this the report would read "Auth pass" next to NEEDS_APPLICATION —
+        # contradicting its own six-step result.
+        if auth_status in _AUTH_FAILURE_STATUSES:
+            _mark_failed(result, CheckName.AUTH, detail=str(exc)[:120])
         result.error = str(exc)[:200]
         result.total_latency_ms = (time.monotonic() - total_t0) * 1000
         _fill_skipped(result, after=CheckName.RESPONSE)
@@ -246,6 +297,13 @@ def verify_dataset(
         if total_count < 0:
             pagination_ok = False
             pagination_detail = f"invalid total_count={total_count}"
+        elif total_count < len(items):
+            # A page that returned more items than the advertised total is an
+            # inconsistent response, not a healthy one.
+            pagination_ok = False
+            pagination_detail = (
+                f"total_count={total_count} is below the {len(items)} items returned"
+            )
     elif items:
         pagination_detail = f"no total_count, got {len(items)} items"
     else:
@@ -258,6 +316,11 @@ def verify_dataset(
             detail=pagination_detail,
         )
     )
+    if not pagination_ok:
+        # `passed` and the CLI exit code read only `status`, so leaving it
+        # HEALTHY reported a malformed response as healthy and exited 0.
+        result.status = DatasetStatus.BROKEN_ENDPOINT
+        result.error = pagination_detail
 
     # 6. Schema — hash field structure and compare
     if items:
@@ -296,8 +359,30 @@ def verify_dataset(
     return result
 
 
+def _close_transport(transport: object) -> None:
+    """Release the transport's HTTP client if it owns one."""
+    close = getattr(transport, "close", None)
+    if callable(close):
+        close()
+
+
+def _mark_failed(result: VerifyResult, name: CheckName, *, detail: str) -> None:
+    """Turn an already-recorded check into a failure."""
+    for check in result.checks:
+        if check.name == name:
+            check.passed = False
+            check.skipped = False
+            check.detail = detail
+            return
+
+
 def _fill_skipped(result: VerifyResult, *, after: CheckName) -> None:
-    """Fill remaining checks as skipped after a failure."""
+    """Mark the checks that never ran after a failure as skipped.
+
+    Skipped is not failed: collapsing the two made one auth failure look like
+    every later stage was broken, and left machine consumers unable to tell
+    "this stage failed" from "this stage never ran".
+    """
     all_checks = list(CheckName)
     seen = {c.name for c in result.checks}
     started = False
@@ -306,7 +391,7 @@ def _fill_skipped(result: VerifyResult, *, after: CheckName) -> None:
             started = True
             continue
         if started and name not in seen:
-            result.checks.append(CheckResult(name, passed=False, detail="skipped"))
+            result.checks.append(CheckResult(name, passed=False, skipped=True, detail="skipped"))
 
 
 def verify_datasets(

@@ -8,14 +8,14 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from kpubdata.core.spec import find_spec
 
 try:
     from kpubdata_builder.agent.discover import DiscoveryResult, ParamInfo
     from kpubdata_builder.agent.monitor import MonitorState, check_approval
     from kpubdata_builder.agent.pipeline import run_pipeline
-    from kpubdata_builder.cli import build_parser, main
+
+    from kpubdata_builder.cli import main
 
     _HAS_AGENT = True
 except ImportError:

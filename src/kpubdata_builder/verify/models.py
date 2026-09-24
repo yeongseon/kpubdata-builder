@@ -33,12 +33,25 @@ class CheckName(str, enum.Enum):
 
 @dataclass(slots=True)
 class CheckResult:
-    """Result of a single verification check."""
+    """Result of a single verification check.
+
+    ``skipped`` is distinct from a failure. When an early stage fails, the later
+    stages never run — reporting those as ``failed`` makes one auth problem look
+    like six broken stages, and machine consumers cannot tell the two apart.
+    """
 
     name: CheckName
     passed: bool
     detail: str = ""
     latency_ms: float | None = None
+    skipped: bool = False
+
+    @property
+    def state(self) -> str:
+        """The check's outcome as it appears in serialized output."""
+        if self.skipped:
+            return "skipped"
+        return "passed" if self.passed else "failed"
 
 
 @dataclass(slots=True)
@@ -65,7 +78,7 @@ class VerifyResult:
         for c in self.checks:
             entry: dict[str, object] = {
                 "name": c.name.value,
-                "status": "passed" if c.passed else "failed",
+                "status": c.state,
             }
             if c.detail:
                 entry["detail"] = c.detail
@@ -99,7 +112,7 @@ class VerifyResult:
         ]
         for check in self.checks:
             label = check.name.value.capitalize().ljust(14)
-            icon = "pass" if check.passed else "FAIL"
+            icon = "skip" if check.skipped else ("pass" if check.passed else "FAIL")
             line = f"  {label} {icon}"
             if check.detail:
                 line += f"  {check.detail}"

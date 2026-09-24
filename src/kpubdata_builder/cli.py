@@ -175,7 +175,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     verify_cmd.add_argument(
         "--page-size",
-        type=int,
+        type=_positive_int,
         default=10,
         help="Number of records to request per test (default: 10).",
     )
@@ -531,6 +531,37 @@ def _run_prune_cancelled(*, output_dir: str, ttl_hours: float | None, apply: boo
     return 0
 
 
+def _positive_int(value: str) -> int:
+    """argparse type for options that must be a positive count."""
+    try:
+        parsed = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected an integer, got {value!r}") from None
+    if parsed < 1:
+        raise argparse.ArgumentTypeError(f"expected a positive integer, got {parsed}")
+    return parsed
+
+
+def _load_previous_hashes(hashes_file: Path) -> dict[str, str]:
+    """Read a schema-hash baseline, accepting both file shapes.
+
+    ``--output`` writes ``{"results": [...], "hashes": {...}}``, so feeding that
+    file straight back to ``--hashes`` used to stringify the two top-level values
+    and silently skip drift detection in the workflow the CLI advertises. Read
+    the nested ``hashes`` mapping when it is there, and keep supporting a flat
+    ``{dataset_id: hash}`` file.
+    """
+    import yaml
+
+    with open(hashes_file, encoding="utf-8") as handle:
+        raw = yaml.safe_load(handle) or {}
+    if not isinstance(raw, dict):
+        return {}
+    nested = raw.get("hashes")
+    source = nested if isinstance(nested, dict) else raw
+    return {str(key): str(value) for key, value in source.items() if isinstance(value, str)}
+
+
 def _run_verify(
     *,
     dataset: str | None,
@@ -555,13 +586,14 @@ def _run_verify(
     # Load previous schema hashes if provided
     previous_hashes: dict[str, str] = {}
     if hashes_path:
-        import yaml
-
         hashes_file = Path(hashes_path)
-        if hashes_file.is_file():
-            with open(hashes_file, encoding="utf-8") as f:
-                raw = yaml.safe_load(f) or {}
-            previous_hashes = {k: str(v) for k, v in raw.items()}
+        if not hashes_file.is_file():
+            # Silently proceeding with an empty baseline turns a typo or a
+            # missing CI artifact into "schema drift detection is off", while
+            # the command still reports HEALTHY.
+            print(f"error: hashes file not found: {hashes_file}", file=sys.stderr)
+            return 1
+        previous_hashes = _load_previous_hashes(hashes_file)
 
     if dataset:
         spec = find_spec(dataset)
