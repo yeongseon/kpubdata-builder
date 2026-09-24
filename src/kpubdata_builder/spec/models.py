@@ -169,6 +169,12 @@ class SourceRef:
         provider: provider 식별자. ``kind="public_api"`` 에서만 사용.
         dataset: dataset 식별자. ``kind="public_api"`` 에서만 사용.
         params: list 호출에 전달할 원시 파라미터. ``kind="public_api"`` 에서만 사용.
+            ``param_grid`` 와 함께 쓰면 **모든 조합에 공통으로 붙는** 값이 된다
+            (예: ``numOfRows``).
+        param_grid: 여러 파라미터 조합에 걸쳐 반복 호출하기 위한 선언 (#613).
+            값마다 리스트를 주면 데카르트 곱으로 전개된다. ``kind="public_api"``
+            에서만 사용. 전개 순서는 고정이다 — 순서가 바뀌면 Bronze 바이트가
+            바뀌어 재빌드 결정성이 깨진다.
         alias: 조립 단계에서 사용할 사용자 정의 소스 이름 (모든 kind 공통).
         schema: 소스 스키마 계약. None 이면 Silver 검증을 생략한다 (모든 kind 공통,
             하위 호환, #437).
@@ -186,6 +192,7 @@ class SourceRef:
     provider: str = ""
     dataset: str = ""
     params: dict[str, JsonValue] = field(default_factory=dict)
+    param_grid: dict[str, tuple[JsonValue, ...]] = field(default_factory=dict)
     alias: str = ""
     schema: SchemaContract | None = None
     kind: str = "public_api"

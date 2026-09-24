@@ -432,7 +432,12 @@ def _strip_internal_fields(entries: list[_BuildListEntry]) -> list[_BuildListEnt
 # 원천을 다른 컬럼의 의미를 바꾸지 않고 선언한다. 한 컬럼에서 인정하는 결측
 # 표현은 전역 null_tokens + 그 컬럼의 선언이며, 컬럼별 선언이 전역을 덮어쓰지
 # 않는다.
-API_CONTRACT_VERSION = "1.26.0"
+# 1.26.0 -> 1.27.0: SourceRef 에 param_grid 를 추가한다(#613, additive — 기존
+# 필드/동작 불변). 한 source 가 여러 파라미터 조합을 반복 호출하고 결과를 하나의
+# dataset 으로 이어붙인다. 전개 순서는 계약이다(키 이름순, 마지막 키가 가장 빨리
+# 변함, 축 안에서는 선언 순서 유지) — 순서가 바뀌면 Bronze 바이트가 바뀌어
+# 재빌드 결정성이 깨진다.
+API_CONTRACT_VERSION = "1.27.0"
 
 
 def _quality_result_to_json(r: QualityCheckResult) -> dict[str, JsonValue]:

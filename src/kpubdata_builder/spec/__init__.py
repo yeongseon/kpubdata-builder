@@ -25,6 +25,7 @@ from .models import (
     SourceRef,
     SplitSpec,
 )
+from .param_grid import expand_param_grid
 from .serializer import (
     BUILDSPEC_SNAPSHOT_FILENAME,
     canonical_spec_mapping,
@@ -40,6 +41,7 @@ __all__ = [
     "BUILDSPEC_SNAPSHOT_FILENAME",
     "CompositionSpec",
     "DerivedColumn",
+    "expand_param_grid",
     "ExportTarget",
     "JoinSpec",
     "JsonPrimitive",
