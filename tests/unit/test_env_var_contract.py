@@ -14,14 +14,12 @@ import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
+# src/ 전체를 훑는다. 예전에는 파일 목록을 손으로 유지했는데, 그 목록 자체가
+# 드리프트했다 — uploads/store.py 와 ingestion/url_fetch.py 의 env var 가
+# 스캔되지 않아 README 와의 대조가 양방향 모두 거짓 통과했다. 이 테스트가 막으려던
+# 것이 정확히 그것이므로, 대상은 손으로 고르지 않는다.
 _CODE_ENV_SOURCES = [
-    _REPO_ROOT / "src" / "kpubdata_builder" / "service" / "app.py",
-    _REPO_ROOT / "src" / "kpubdata_builder" / "service" / "http.py",
-    _REPO_ROOT / "src" / "kpubdata_builder" / "service" / "auth.py",
-    _REPO_ROOT / "src" / "kpubdata_builder" / "service" / "auth_throttle.py",
-    _REPO_ROOT / "src" / "kpubdata_builder" / "cli.py",
-    # 상태 백엔드 env var(STORAGE_BACKEND/CUBRID_URL)의 정의처 (ADR 0016).
-    _REPO_ROOT / "src" / "kpubdata_builder" / "store" / "backend.py",
+    *sorted((_REPO_ROOT / "src" / "kpubdata_builder").rglob("*.py")),
     _REPO_ROOT / "docker-entrypoint.sh",
     _REPO_ROOT / "Dockerfile",
 ]
@@ -65,28 +63,3 @@ class TestEnvVarContract:
         stale = readme_vars - code_vars
         if stale:
             pytest.fail(f"README에 있지만 코드에 없는 환경변수 (잘못된 안내): {sorted(stale)}")
-
-
-def test_readme_documents_every_env_var_the_code_reads() -> None:
-    """README 환경변수 표가 코드와 갈라지지 않게 잠근다.
-
-    MAX_UPLOAD_BYTES / URL_FETCH_MAX_BYTES / OIDC_JWKS_URL / OIDC_JWKS_TTL 이
-    표에서 빠져 있었다 — 이 파일이 이미 있는데도 README 는 그 대상이 아니었다.
-    """
-    import re
-    from pathlib import Path
-
-    root = Path(__file__).parents[2]
-    readme = (root / "README.md").read_text(encoding="utf-8")
-
-    referenced: set[str] = set()
-    for path in (root / "src").rglob("*.py"):
-        text = path.read_text(encoding="utf-8")
-        referenced.update(re.findall(r'"(KPUBDATA_BUILDER_[A-Z0-9_]+)"', text))
-        referenced.update(re.findall(r'"(OIDC_[A-Z0-9_]+)"', text))
-
-    # 값이 아니라 이름이 쓰이는 상수들은 제외한다(예: *_ENV 상수 자체).
-    documented = set(re.findall(r"`(KPUBDATA_BUILDER_[A-Z0-9_]+|OIDC_[A-Z0-9_]+)`", readme))
-    missing = sorted(referenced - documented)
-
-    assert not missing, f"README 환경변수 표에 없는 변수: {missing}"
