@@ -89,4 +89,7 @@ jobs:
           # 해석하므로, 위 sync 에서 무시한 [tool.uv.sources] 의 editable
           # ../kpubdata 오버라이드가 이 줄에서 되살아난다. 러너에는 형제
           # 디렉터리가 없어 Distribution not found 로 죽는다.
-          uv run --no-sources python scripts/publish_to_hf.py "${CONFIG}" ${MODE}
+          # --target hf 를 명시한다. 이 워크플로에는 KAGGLE_* secret 이 없어서,
+          # 기본값이 all 이던 시절에는 HF 업로드가 성공한 뒤 Kaggle 인증에서
+          # 실패해 "게시는 됐는데 빨간 run" 이 남았다.
+          uv run --no-sources python scripts/publish_to_hf.py "${CONFIG}" --target hf ${MODE}

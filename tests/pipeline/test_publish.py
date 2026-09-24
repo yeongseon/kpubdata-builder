@@ -114,10 +114,17 @@ def test_upload_to_hf_live_calls_create_and_upload(tmp_path: Path) -> None:
 
     upload_to_hf(staging, "kpubdata/test-live", dry_run=False)
 
+    # private 를 명시한다 — 생략하면 설치된 huggingface_hub 의 기본값에 공개
+    # 여부를 맡기게 되고, 그 값은 릴리스에 따라 달라질 수 있다.
     mock_api_instance.create_repo.assert_called_once_with(
-        repo_id="kpubdata/test-live", repo_type="dataset", exist_ok=True
+        repo_id="kpubdata/test-live", repo_type="dataset", exist_ok=True, private=False
     )
     mock_api_instance.upload_folder.assert_called_once()
+    # 이전 리비전에만 있던 파일을 지운다. 없으면 이름이 바뀐 옛 파일이 영원히 남는다.
+    assert mock_api_instance.upload_folder.call_args.kwargs["delete_patterns"] == [
+        "data/*",
+        "README.md",
+    ]
 
 
 def test_upload_to_hf_copies_readme_and_data(tmp_path: Path) -> None:
@@ -249,3 +256,48 @@ def test_upload_to_kaggle_no_slug_skips_gracefully(
 )
 def test_map_kaggle_license(hf_license: str, expected: str) -> None:
     assert _map_kaggle_license(hf_license) == expected
+
+
+def test_kaggle_create_is_private_unless_public_is_requested(tmp_path: Path) -> None:
+    """공개 게시는 명시적 선택이다.
+
+    CLI publish 는 --public opt-in 인데 이 경로만 public=True 가 하드코딩돼
+    있었다. 같은 데이터셋이 어느 경로로 올라갔느냐에 따라 공개 정책이 달랐다.
+    """
+    staging = _staging_dir(tmp_path)
+    api = MagicMock()
+    api.dataset_list.return_value = []
+    _kaggle_api_extended_stub.KaggleApi.return_value = api
+
+    upload_to_kaggle(staging, _kaggle_config(), dry_run=False)
+
+    assert api.dataset_create_new.call_args.kwargs["public"] is False
+
+
+def test_kaggle_create_can_be_made_public_explicitly(tmp_path: Path) -> None:
+    staging = _staging_dir(tmp_path)
+    api = MagicMock()
+    api.dataset_list.return_value = []
+    _kaggle_api_extended_stub.KaggleApi.return_value = api
+
+    upload_to_kaggle(staging, _kaggle_config(), dry_run=False, public=True)
+
+    assert api.dataset_create_new.call_args.kwargs["public"] is True
+
+
+def test_a_failed_kaggle_lookup_does_not_become_create(tmp_path: Path) -> None:
+    """조회 실패는 "없다" 가 아니라 "모른다" 다.
+
+    False 로 떨어뜨리면 이미 있는 데이터셋에 create_new 를 시도하거나, 최악의
+    경우 의도 밖의 새 데이터셋을 만든다.
+    """
+    staging = _staging_dir(tmp_path)
+    api = MagicMock()
+    api.dataset_list.side_effect = RuntimeError("kaggle api unavailable")
+    _kaggle_api_extended_stub.KaggleApi.return_value = api
+
+    with pytest.raises(RuntimeError):
+        upload_to_kaggle(staging, _kaggle_config(), dry_run=False)
+
+    api.dataset_create_new.assert_not_called()
+    api.dataset_create_version.assert_not_called()

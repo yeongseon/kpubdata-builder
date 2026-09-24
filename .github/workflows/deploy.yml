@@ -7,7 +7,11 @@
 #
 #   1. Builder 이미지를 GHCR에 빌드/푸시 (linux/amd64, sha 태그).
 #   2. SSH app-01: git pull, .env 렌더, GHCR 로그인, 이미지 pull, 컨테이너 rollout.
-#   3. http://APP_HOST:8000/healthz(무인증)로 헬스 체크.
+#      secret 은 커맨드라인이 아니라 stdin 으로만 전달한다 — 인자에 실으면 원격
+#      호스트의 모든 사용자가 `ps` 로 읽는다. rollout 본문은
+#      ops/deploy/app-01-rollout.sh 에 있다.
+#   3. 헬스 체크는 VM 안에서 한다. 러너가 공개 포트를 찌르면 그 프로브가 곧
+#      "8000 을 열어 두어야 한다"는 요구가 되고, TLS 없이 API 키가 오간다.
 #
 # 필요한 secret (Settings → Secrets and variables → Actions):
 #
@@ -18,7 +22,10 @@
 #   KPUBDATA_BUILDER_ALLOWED_ORIGINS  Studio 오리진 콤마 목록 (CORS default-deny).
 #   KPUBDATA_BUILDER_CREDENTIAL_MASTER_KEY  Provider credential master key (ADR 0012).
 #                                           재기동 사이 동일 값 유지 필수.
-#   APP_DOMAIN            (선택) Caddy 공개 도메인. 미설정 시 IP-only 배포.
+#   APP_DOMAIN            (선택) Caddy 공개 도메인. 설정하면 rollout 이 --profile
+#                         caddy 로 TLS 진입까지 함께 띄운다. 미설정 시 IP-only.
+#   OCI_SSH_KNOWN_HOSTS   (권장) app-01 의 고정 host key. 미설정 시 ssh-keyscan
+#                         으로 폴백하는데, 그것은 trust-on-first-use 다.
 #
 # Triggers:
 #   - push to main: 배포 관련 파일 변경 시 자동 배포.
@@ -98,14 +105,37 @@ jobs:
   deploy-app:
     runs-on: ubuntu-latest
     needs: build
+    # 이 job 은 저장소 내용을 읽기만 하면 된다. GITHUB_TOKEN 은 원격에서 GHCR
+    # pull 과 git fetch 에 쓰이므로 packages: read 까지만 준다.
+    permissions:
+      contents: read
+      packages: read
+    # 프로덕션 배포에 승인 게이트와 환경별 secret 을 걸 수 있는 자리다.
+    environment: production
     steps:
+      - uses: actions/checkout@v7
+
       - name: Set up SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.OCI_SSH_KNOWN_HOSTS }}
+          APP_HOST: ${{ secrets.OCI_APP_HOST }}
         run: |
+          set -euo pipefail
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
-          printf '%s\n' "${{ secrets.OCI_SSH_PRIVATE_KEY }}" > ~/.ssh/id_oci
+          printf '%s\n' "${SSH_PRIVATE_KEY}" > ~/.ssh/id_oci
           chmod 600 ~/.ssh/id_oci
-          ssh-keyscan -H ${{ secrets.OCI_APP_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+          if [ -n "${SSH_KNOWN_HOSTS}" ]; then
+            printf '%s\n' "${SSH_KNOWN_HOSTS}" > ~/.ssh/known_hosts
+          else
+            # ssh-keyscan 은 trust-on-first-use 다 — 첫 접속을 가로채는 상대의 키를
+            # 그대로 신뢰한다. OCI_SSH_KNOWN_HOSTS secret 에 고정해 두는 것이 옳고,
+            # 없을 때만 경고와 함께 폴백한다.
+            echo "::warning title=Unpinned host key::OCI_SSH_KNOWN_HOSTS is not set; falling back to ssh-keyscan (trust-on-first-use)"
+            ssh-keyscan -H "${APP_HOST}" >> ~/.ssh/known_hosts 2>/dev/null
+          fi
+          chmod 600 ~/.ssh/known_hosts
 
       - name: Deploy app-01 stack
         env:
@@ -114,57 +144,32 @@ jobs:
           KPUBDATA_BUILDER_ALLOWED_ORIGINS: ${{ secrets.KPUBDATA_BUILDER_ALLOWED_ORIGINS }}
           KPUBDATA_BUILDER_CREDENTIAL_MASTER_KEY: ${{ secrets.KPUBDATA_BUILDER_CREDENTIAL_MASTER_KEY }}
           APP_DOMAIN: ${{ secrets.APP_DOMAIN }}
+          SSH_USER: ${{ secrets.OCI_SSH_USER }}
+          APP_HOST: ${{ secrets.OCI_APP_HOST }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          REPO_OWNER: ${{ github.repository_owner }}
         run: |
-          echo "[deploy-app] === START $(date -u +%FT%TZ) host=${{ secrets.OCI_APP_HOST }} sha=${BUILDER_TAG} ==="
-          ssh -i ~/.ssh/id_oci ${{ secrets.OCI_SSH_USER }}@${{ secrets.OCI_APP_HOST }} \
-            "BUILDER_TAG='${BUILDER_TAG}' \
-             KPUBDATA_BUILDER_API_KEY='${KPUBDATA_BUILDER_API_KEY}' \
-             KPUBDATA_BUILDER_ALLOWED_ORIGINS='${KPUBDATA_BUILDER_ALLOWED_ORIGINS}' \
-             KPUBDATA_BUILDER_CREDENTIAL_MASTER_KEY='${KPUBDATA_BUILDER_CREDENTIAL_MASTER_KEY}' \
-             APP_DOMAIN='${APP_DOMAIN}' \
-             GHCR_USER='${{ github.actor }}' GHCR_TOKEN='${{ secrets.GITHUB_TOKEN }}' \
-             GH_REPO='${{ github.repository }}' GH_TOKEN='${{ secrets.GITHUB_TOKEN }}' \
-             REPO_OWNER='${{ github.repository_owner }}' \
-             bash -s" <<'ENDSSH'
           set -euo pipefail
-          echo "[app-01] connected at $(date -u +%FT%TZ); host=$(hostname); deploying sha=${BUILDER_TAG}"
-          cd ~/kpubdata-builder
-          git fetch "https://x-access-token:${GH_TOKEN}@github.com/${GH_REPO}.git" main
-          git reset --hard FETCH_HEAD
-
-          # VM-local .env 렌더 (chmod 600). committed compose는 ${VAR} 참조만 사용.
-          umask 077
-          cat > .env <<EOF
-          BUILDER_IMAGE=ghcr.io/${REPO_OWNER}/kpubdata-builder:${BUILDER_TAG}
-          KPUBDATA_BUILDER_API_KEY=${KPUBDATA_BUILDER_API_KEY}
-          KPUBDATA_BUILDER_ALLOWED_ORIGINS=${KPUBDATA_BUILDER_ALLOWED_ORIGINS}
-          KPUBDATA_BUILDER_CREDENTIAL_MASTER_KEY=${KPUBDATA_BUILDER_CREDENTIAL_MASTER_KEY}
-          APP_DOMAIN=${APP_DOMAIN}
-          EOF
-
-          echo "[app-01] logging in to GHCR as ${GHCR_USER}"
-          echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_USER}" --password-stdin
-          echo "[app-01] pulling builder image (BUILDER_TAG=${BUILDER_TAG})"
-          docker compose -f docker-compose.prod.app.yml pull builder </dev/null
-
-          echo "[app-01] starting builder container"
-          docker compose -f docker-compose.prod.app.yml up -d builder </dev/null
-          docker compose -f docker-compose.prod.app.yml ps builder </dev/null || true
-          echo "[app-01] === END $(date -u +%FT%TZ) ==="
-          ENDSSH
-
-      - name: Health check
-        run: |
-          url="http://${{ secrets.OCI_APP_HOST }}:8000/healthz"
-          echo "[health] probing ${url} (max 30 attempts × 5s = 150s)"
-          for i in $(seq 1 30); do
-            body=$(curl -fsS --max-time 5 "${url}" 2>&1) && {
-              echo "[health] builder /healthz: OK (attempt ${i}) body=${body}"
-              echo "::notice title=Deploy complete::builder healthy at sha=${{ needs.build.outputs.sha }}"
-              exit 0
-            }
-            echo "[health] attempt ${i}/30 failed; retrying in 5s"
-            sleep 5
-          done
-          echo "::error title=Deploy failed::builder did not become healthy after 30 attempts" >&2
-          exit 1
+          echo "[deploy-app] === START $(date -u +%FT%TZ) sha=${BUILDER_TAG} ==="
+          # secret 을 원격 커맨드라인에 실으면 app-01 의 모든 사용자가 `ps` 로
+          # 읽는다. 환경 대입문과 스크립트를 하나의 stdin 으로 흘려보내
+          # `bash -s` 가 읽게 하면 값이 인자에 남지 않는다.
+          {
+            printf 'export BUILDER_TAG=%q\n' "${BUILDER_TAG}"
+            printf 'export KPUBDATA_BUILDER_API_KEY=%q\n' "${KPUBDATA_BUILDER_API_KEY}"
+            printf 'export KPUBDATA_BUILDER_ALLOWED_ORIGINS=%q\n' "${KPUBDATA_BUILDER_ALLOWED_ORIGINS}"
+            printf 'export KPUBDATA_BUILDER_CREDENTIAL_MASTER_KEY=%q\n' "${KPUBDATA_BUILDER_CREDENTIAL_MASTER_KEY}"
+            printf 'export APP_DOMAIN=%q\n' "${APP_DOMAIN}"
+            printf 'export GHCR_USER=%q\n' "${GHCR_USER}"
+            printf 'export GHCR_TOKEN=%q\n' "${GHCR_TOKEN}"
+            printf 'export GH_TOKEN=%q\n' "${GHCR_TOKEN}"
+            printf 'export GH_REPO=%q\n' "${GH_REPO}"
+            printf 'export REPO_OWNER=%q\n' "${REPO_OWNER}"
+            cat ops/deploy/app-01-rollout.sh
+          } | ssh -i ~/.ssh/id_oci \
+                -o StrictHostKeyChecking=yes \
+                -o PasswordAuthentication=no \
+                "${SSH_USER}@${APP_HOST}" 'bash -s'
+          echo "[deploy-app] === END $(date -u +%FT%TZ) ==="

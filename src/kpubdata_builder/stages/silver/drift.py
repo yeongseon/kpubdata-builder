@@ -17,9 +17,11 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import yaml
 
+from ...manifest import status_from_manifest
 from ...spec.serializer import BUILDSPEC_SNAPSHOT_FILENAME
 from ...tabular import SchemaInfo, TableStatistics
 from ...tabular.types import ColumnInfo
@@ -112,15 +114,21 @@ def _run_dataset_id(run_dir: Path) -> str | None:
 def _run_succeeded(run_dir: Path) -> tuple[bool, str]:
     """(성공 여부, finished_at 정렬키)를 manifest.json에서 읽는다.
 
-    manifest가 없거나 손상되었거나 errors가 있으면 실패로 취급한다 — 실패/부분
-    실패 run의 silver는 drift 비교 대상에서 제외한다(#486).
+    manifest가 없거나 손상되었거나 성공으로 끝나지 않았으면 실패로 취급한다 —
+    실패/부분 실패 run의 silver는 drift 비교 대상에서 제외한다(#486).
+
+    상태 판정은 manifest 패키지의 정본 규칙에 맡긴다. errors 유무만 보던 시절에는
+    **취소된 run이 기준 run이 됐다** — 취소는 errors를 남기지 않기 때문이다.
+    중간에 끊긴 partial silver를 기준으로 삼으면 실제로는 없는 drift가 보고된다.
     """
     manifest_path = run_dir / "manifest.json"
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return False, ""
-    if not isinstance(manifest, dict) or manifest.get("errors"):
+    if not isinstance(manifest, dict):
+        return False, ""
+    if status_from_manifest(cast("dict[str, object]", manifest)) != "ok":
         return False, ""
     finished_at = manifest.get("finished_at")
     return True, finished_at if isinstance(finished_at, str) else ""

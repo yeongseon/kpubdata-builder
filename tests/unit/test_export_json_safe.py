@@ -1,0 +1,83 @@
+"""Export 공용 JSON 안전 변환 (#629 후속).
+
+``casts: {deal_date: date}``를 선언하면 Gold 레코드에 ``datetime.date``가 담기고,
+``json.dumps``는 그것을 직렬화하지 못한다. 그 ``TypeError``는 서비스 경계에서
+마스킹되므로 사용자는 원인을 알 수 없는 빌드 실패를 본다.
+"""
+
+from __future__ import annotations
+
+import csv as csv_module
+import datetime
+import json
+from decimal import Decimal
+from pathlib import Path
+
+import pytest
+
+from kpubdata_builder.artifact import ArtifactDataset
+from kpubdata_builder.exporters._json_safe import json_safe
+from kpubdata_builder.exporters.csv import CsvExporter
+from kpubdata_builder.exporters.jsonl import JsonlExporter
+from kpubdata_builder.spec import ExportTarget
+
+
+class TestJsonSafe:
+    def test_dates_become_iso_8601(self) -> None:
+        assert json_safe(datetime.date(2026, 9, 24)) == "2026-09-24"
+        assert json_safe(datetime.datetime(2026, 9, 24, 1, 2, 3)) == "2026-09-24T01:02:03"
+        assert json_safe(datetime.time(1, 2, 3)) == "01:02:03"
+
+    def test_decimal_keeps_its_scale(self) -> None:
+        # float으로 바꾸면 소수 자릿수가 조용히 달라진다 — 금액 컬럼에서 그것은
+        # 데이터 변경이다.
+        assert json_safe(Decimal("1.50")) == "1.50"
+
+    def test_nested_structures_are_converted(self) -> None:
+        value = {"rows": [{"d": datetime.date(2026, 1, 1)}], "n": (Decimal("2.0"),)}
+
+        assert json_safe(value) == {"rows": [{"d": "2026-01-01"}], "n": ["2.0"]}
+
+    def test_an_unserializable_value_is_left_for_json_dumps_to_reject(self) -> None:
+        # set을 리스트로 펴 주면 데이터가 조용히 바뀐다. 어떤 표현을 고를지는
+        # 계약이므로 이 계층이 말없이 정하지 않는다 — 그대로 TypeError가 나야 한다.
+        assert json_safe({"bad": {1, 2}}) == {"bad": {1, 2}}
+        with pytest.raises(TypeError):
+            json.dumps(json_safe({"bad": {1, 2}}))
+
+    def test_plain_json_values_pass_through_unchanged(self) -> None:
+        value = {"a": 1, "b": "x", "c": None, "d": True, "e": 1.5, "f": [1, 2]}
+
+        assert json_safe(value) == value
+
+    def test_binary_is_left_for_json_dumps_to_reject(self) -> None:
+        # 임의 인코딩을 고르는 것도 계약이다 — 여기서 조용히 정하지 않는다.
+        with pytest.raises(TypeError):
+            json.dumps(json_safe(b"\x00\x01"))
+
+
+class TestExportersHandleDeclaredDateCasts:
+    RECORDS = ({"id": 1, "deal_date": datetime.date(2026, 9, 24), "amount": Decimal("1200.50")},)
+
+    def _artifact(self) -> ArtifactDataset:
+        return ArtifactDataset(records=self.RECORDS, statistics={"row_count": 1})
+
+    def test_jsonl_export_serializes_a_date_column(self, tmp_path: Path) -> None:
+        result = JsonlExporter().export(
+            self._artifact(), ExportTarget(kind="jsonl", output_path="data.jsonl"), tmp_path
+        )
+
+        row = json.loads(result.output_path.read_text(encoding="utf-8").strip())
+        assert row["deal_date"] == "2026-09-24"
+        assert row["amount"] == "1200.50"
+
+    def test_csv_export_serializes_a_date_column(self, tmp_path: Path) -> None:
+        result = CsvExporter().export(
+            self._artifact(), ExportTarget(kind="csv", output_path="data.csv"), tmp_path
+        )
+
+        rows = list(
+            csv_module.DictReader(result.output_path.read_text(encoding="utf-8").splitlines())
+        )
+        assert rows[0]["deal_date"] == "2026-09-24"
+        assert rows[0]["amount"] == "1200.50"
