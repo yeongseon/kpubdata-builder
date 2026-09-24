@@ -31,7 +31,7 @@ from kpubdata_builder.publishers import PUBLISHER_REGISTRY
 from kpubdata_builder.service import datasets as datasets_service
 from kpubdata_builder.service import publish as publish_service
 from kpubdata_builder.service.auth import Principal
-from kpubdata_builder.service.jobs import BuildJobManager
+from kpubdata_builder.service.jobs import AsyncBuildExecutor
 from kpubdata_builder.service.responses import ServiceResponse
 from kpubdata_builder.spec import BuildSpec, JsonValue
 
@@ -84,7 +84,7 @@ class PublishApiService:
         *,
         output_root: Path,
         publish_receipts: publish_service.PublishReceiptStore,
-        async_builds: BuildJobManager,
+        async_builds: AsyncBuildExecutor,
     ) -> None:
         self._output_root = output_root
         self._publish_receipts = publish_receipts
