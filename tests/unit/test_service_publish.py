@@ -1499,3 +1499,86 @@ class TestOpenApiConformance:
         resp = _publish(service, "conform-publish-502")
         assert resp.status_code == 502
         _assert_conforms(resp, "/builds/{run_id}/publish", "POST")
+
+
+class TestCancelledRunIsNotPublishable:
+    """취소된 run의 partial 산출물은 게시되지 않는다 (#481, #491).
+
+    publish 경로는 manifest의 ``errors`` 유무만으로 상태를 파생시켰다. 취소는
+    errors를 남기지 않으므로 취소된 run이 ``succeeded``로 읽혔고,
+    ``run_status_blocker``의 ``run_cancelled``는 이미 존재했는데도 이 경로에서는
+    닿지 않았다 — 중간에 끊긴 부분 산출물이 HF/Kaggle에 그대로 올라갈 수 있었다.
+    """
+
+    @staticmethod
+    def _cancel_manifest(tmp_path: Path, run_id: str) -> None:
+        """성공한 run의 manifest를 취소된 run의 모양으로 바꾼다."""
+        manifest_path = tmp_path / run_id / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["status"] = "cancelled"
+        # 취소는 errors를 남기지 않는다 — 이것이 바로 놓치던 지점이다.
+        manifest.pop("errors", None)
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    def test_readiness_reports_the_cancelled_blocker(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _with_credentials(monkeypatch, "huggingface")
+        service = _service(tmp_path)
+        _build(service, "run-cancelled", LICENSED_SPEC_YAML)
+        self._cancel_manifest(tmp_path, "run-cancelled")
+
+        resp = _readiness(service, "run-cancelled")
+
+        assert resp.status_code == 200
+        assert resp.body["ready"] is False
+        assert "run_cancelled" in _blocker_codes(resp)
+
+    def test_publish_refuses_a_cancelled_run(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _with_credentials(monkeypatch, "huggingface")
+        service = _service(tmp_path)
+        _build(service, "run-cancelled", LICENSED_SPEC_YAML)
+        self._cancel_manifest(tmp_path, "run-cancelled")
+
+        resp = _publish(service, "run-cancelled")
+
+        assert resp.status_code >= 400
+
+    def test_the_publisher_is_never_invoked_for_a_cancelled_run(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # blocker를 보고하면서도 원격을 건드리면 아무것도 막은 것이 아니다.
+        _with_credentials(monkeypatch, "huggingface")
+        service = _service(tmp_path)
+        _build(service, "run-cancelled", LICENSED_SPEC_YAML)
+        self._cancel_manifest(tmp_path, "run-cancelled")
+
+        calls: list[object] = []
+
+        def _record(*args: object, **kwargs: object) -> object:
+            calls.append((args, kwargs))
+            raise AssertionError("publisher must not run for a cancelled run")
+
+        monkeypatch.setattr(
+            "kpubdata_builder.publishers.huggingface.HuggingFacePublisher.publish",
+            _record,
+            raising=False,
+        )
+
+        _publish(service, "run-cancelled")
+
+        assert calls == []
+
+    def test_a_successful_run_is_unaffected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _with_credentials(monkeypatch, "huggingface")
+        service = _service(tmp_path)
+        _build(service, "run-ok", LICENSED_SPEC_YAML)
+
+        resp = _readiness(service, "run-ok")
+
+        assert "run_cancelled" not in _blocker_codes(resp)
+        assert "run_failed" not in _blocker_codes(resp)
