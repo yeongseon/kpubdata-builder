@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from kpubdata_builder import ValidationError
+from kpubdata_builder.errors import SpecLoadError
 from kpubdata_builder.spec import (
     BuildSpec,
     ExportTarget,
@@ -107,7 +108,8 @@ class TestParamGridParsing:
 
     def test_a_scalar_axis_is_rejected_at_parse_time(self) -> None:
         # 값 하나짜리 축과 공통 파라미터는 의미가 다르다 — 후자는 params 가 표현한다.
-        with pytest.raises(TypeError, match="must be a list"):
+        # parse_spec 은 구조 오류를 SpecLoadError 로 감싼다.
+        with pytest.raises(SpecLoadError, match="must be a list"):
             parse_spec(
                 {
                     "dataset_id": "dataset.sample",
