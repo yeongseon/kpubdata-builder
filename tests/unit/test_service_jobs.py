@@ -553,7 +553,18 @@ class TestWorkerAlwaysReachesATerminalState:
         status = _await_terminal(service, "run1")
         assert status == "failed"
 
-    def test_the_error_message_names_the_exception_type(self, tmp_path: Path) -> None:
+    def test_the_error_message_names_the_exception_type(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """타입 이름은 남기고 예외 메시지는 남기지 않는다.
+
+        이 error 는 ``GET /builds/{run_id}`` 응답에 그대로 실린다. 여기 걸리는
+        것은 "예상하지 못한" 예외라 메시지에 무엇이 들어 있을지 보장할 수 없다 —
+        경로든 SQL 이든 자격증명이든. 어느 계층에서 터졌는지는 타입 이름으로
+        충분히 알 수 있고, 나머지는 로그에 traceback 째로 남는다.
+        """
+        import logging
+
         completed = threading.Event()
         service = self._RaisingBuildService(
             output_root=tmp_path,
@@ -563,13 +574,16 @@ class TestWorkerAlwaysReachesATerminalState:
         )
         type(service).exception = ValueError("spec exploded")
 
-        assert service.submit_build(VALID_SPEC_YAML, run_id="run1").status_code == 202
-        assert completed.wait(timeout=5)
-        _await_terminal(service, "run1")
+        with caplog.at_level(logging.ERROR):
+            assert service.submit_build(VALID_SPEC_YAML, run_id="run1").status_code == 202
+            assert completed.wait(timeout=5)
+            _await_terminal(service, "run1")
 
         error = service.build_status("run1").body.get("error")
         assert isinstance(error, str)
-        assert "ValueError" in error and "spec exploded" in error
+        assert error == "internal error: ValueError"
+        assert "spec exploded" not in error
+        assert "spec exploded" in caplog.text
 
     def test_the_worker_slot_is_released_for_the_next_job(self, tmp_path: Path) -> None:
         # 종결하지 못한 job은 단일 worker를 영구 점유해 이후 모든 build를 막는다.
