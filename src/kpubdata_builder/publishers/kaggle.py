@@ -2,12 +2,40 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
-from collections.abc import Mapping
+import os
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 
 from ..errors import PublishError
 from .base import BasePublisher, PublishResult
+
+
+@contextlib.contextmanager
+def _kaggle_environment(credentials: Mapping[str, str] | None) -> Iterator[None]:
+    """전달받은 Kaggle 자격을 이 블록 동안만 환경에 둔다.
+
+    Kaggle SDK 에 자격을 인자로 넘길 방법이 없어서 환경을 거친다. 블록을 벗어나면
+    원래 값으로 되돌리므로, 한 요청의 자격이 다음 요청에 남지 않는다.
+
+    같은 프로세스에서 두 게시가 동시에 돌면 이 방식은 안전하지 않다. publish 는
+    run 단위로 직렬화되어 있어 현재는 문제가 되지 않지만, 병렬 게시를 도입한다면
+    SDK 를 감싸는 다른 방법이 필요하다.
+    """
+    if not credentials:
+        yield
+        return
+    previous = {key: os.environ.get(key) for key in credentials}
+    os.environ.update(credentials)
+    try:
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 class KagglePublisher(BasePublisher):
@@ -47,11 +75,15 @@ class KagglePublisher(BasePublisher):
             ) from exc
 
         api = KaggleApi()
-        # 인증 실패 예외를 PublishError로 변환해 CLI raw traceback 노출을 막는다 (#178).
-        try:
-            api.authenticate()
-        except Exception as exc:
-            raise PublishError(f"Kaggle authentication failed: {exc}") from exc
+        # Kaggle SDK 는 환경변수에서만 자격을 읽는다. 요청자별 credential 을
+        # 전달받았으면 이 호출 동안만 환경에 올려 두고 원래 값으로 되돌린다 —
+        # 인자를 받기만 하고 쓰지 않으면 모든 게시가 서버 계정으로 나간다 (#635).
+        with _kaggle_environment(credentials):
+            # 인증 실패 예외를 PublishError로 변환해 CLI raw traceback 노출을 막는다 (#178).
+            try:
+                api.authenticate()
+            except Exception as exc:
+                raise PublishError(f"Kaggle authentication failed: {exc}") from exc
 
         count = 0
         for path in artifact_paths:
