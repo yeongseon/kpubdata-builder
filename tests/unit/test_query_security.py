@@ -81,7 +81,7 @@ def test_allows_set_operations_over_dataset(sql: str) -> None:
     선언된 버전 범위(>=30.17,<31)는 양쪽을 모두 허용한다. 질의 허용 여부를 정하는
     가드 안에서 나는 예외라 조용히 지나갈 수 없다.
     """
-    assert validate_read_only_sql(sql).sql
+    assert validate_read_only_sql(sql).canonical_sql
 
 
 def test_set_operation_branches_are_counted_not_skipped() -> None:
@@ -89,7 +89,7 @@ def test_set_operation_branches_are_counted_not_skipped() -> None:
     # 오직 분기 안에서만 dataset을 참조한다.
     assert validate_read_only_sql(
         "SELECT * FROM (SELECT city FROM dataset UNION SELECT city FROM dataset) AS u"
-    ).sql
+    ).canonical_sql
 
 
 def test_set_operation_over_a_non_dataset_table_is_still_rejected() -> None:
