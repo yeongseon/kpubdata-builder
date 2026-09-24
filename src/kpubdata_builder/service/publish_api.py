@@ -26,12 +26,14 @@ from contextlib import suppress
 from pathlib import Path
 from typing import cast
 
+from kpubdata_builder.credentials.store import CredentialRepository
 from kpubdata_builder.manifest import status_from_manifest
 from kpubdata_builder.publishers import PUBLISHER_REGISTRY
 from kpubdata_builder.service import datasets as datasets_service
 from kpubdata_builder.service import publish as publish_service
 from kpubdata_builder.service.auth import Principal
 from kpubdata_builder.service.jobs import AsyncBuildExecutor
+from kpubdata_builder.service.publish_credentials import resolve_publish_credentials
 from kpubdata_builder.service.responses import ServiceResponse
 from kpubdata_builder.spec import BuildSpec, JsonValue
 
@@ -85,10 +87,12 @@ class PublishApiService:
         output_root: Path,
         publish_receipts: publish_service.PublishReceiptStore,
         async_builds: AsyncBuildExecutor,
+        credential_repository: CredentialRepository | None = None,
     ) -> None:
         self._output_root = output_root
         self._publish_receipts = publish_receipts
         self._async_builds = async_builds
+        self._credential_repository = credential_repository
 
     def _publish_context(
         self, run_id: str
@@ -294,6 +298,13 @@ class PublishApiService:
                 )
             effective_destination = str(resolved_local[1])
         publish_kwargs: dict[str, object] = {"destination": effective_destination, **options}
+        # 요청자에게 저장된 publish credential 이 있으면 그것으로 게시한다 (#635).
+        # 없으면 resolve 가 서버 환경변수로 내려가므로 기존 배포는 그대로다.
+        credentials = resolve_publish_credentials(
+            self._credential_repository, principal.owner_id, resolved_target
+        )
+        if credentials:
+            publish_kwargs["credentials"] = credentials
         try:
             result = publisher.publish(readiness.artifacts.paths, **publish_kwargs)  # type: ignore[arg-type]
         except Exception as exc:
