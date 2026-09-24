@@ -100,6 +100,15 @@ def normalize_table(
             raise TabularError(
                 f"declared rename refers to columns absent from the source: {missing}"
             )
+        # 두 원 컬럼이 같은 이름으로 모이거나, 대상 이름이 rename 되지 않는 기존
+        # 컬럼과 겹치면 Polars가 DuplicateError를 던진다 — 내부 예외가 아니라
+        # spec 용어로 실패시킨다. (값 중복은 validator가 선언 시점에 먼저 잡는다.)
+        untouched = set(table.columns) - set(rename)
+        collisions = sorted({target for target in rename.values() if target in untouched})
+        if collisions:
+            raise TabularError(
+                f"declared rename targets collide with existing columns: {collisions}"
+            )
         table = table.rename(dict(rename))
     if zfill:
         for column, width in zfill.items():
@@ -353,6 +362,14 @@ def _apply_derived(table: pl.DataFrame, rule: DerivedColumn) -> pl.DataFrame:
     if missing:
         raise TabularError(
             f"derived column {rule.name!r} refers to columns absent from the table: {missing}"
+        )
+    if rule.name in table.columns:
+        # with_columns 는 같은 이름의 기존 컬럼을 소리 없이 덮어쓴다 — 원천 값이
+        # 사라진 채 다운스트림이 빌드되므로 선언 오류로 표면화한다. 파생 규칙이
+        # 자기 입력 컬럼을 결과 이름으로 쓰는 경우(name=dealMonth,
+        # columns=[dealYear, dealMonth, dealDay])도 여기서 걸린다.
+        raise TabularError(
+            f"derived column {rule.name!r} would overwrite an existing column of the same name"
         )
     if rule.kind == "date_parts":
         year, month, day = rule.columns

@@ -445,16 +445,15 @@ class TestDerivedColumns:
 
         assert table["deal_date"].to_list() == [date(2026, 9, 8), None]
 
-    def test_date_parts_output_named_after_an_input_still_reports_the_loss(self) -> None:
-        # validator는 name이 입력 컬럼 중 하나인 선언을 허용한다. 그 경우
-        # with_columns가 그 입력을 먼저 덮어써서, 잘못된 날짜인 행에서는 조각 자체가
-        # null로 보인다 — 조각 존재 여부를 결과 프레임에서 판정하면 잡으려던 손실이
-        # 그대로 빠져나간다.
+    def test_date_parts_output_named_after_an_input_is_rejected(self) -> None:
+        # name이 입력 컬럼 중 하나이면 with_columns가 그 원천 컬럼을 소리 없이
+        # 덮어쓴다. 게다가 덮어쓴 뒤에는 잘못된 날짜인 행에서 조각 자체가 null로
+        # 보여, 손실 감사가 잡으려던 것을 놓친다. 선언 오류로 거부한다.
         from kpubdata_builder.spec import DerivedColumn
 
         bronze = _bronze(({"dealYear": "2026", "dealMonth": "30", "dealDay": "2"},))
 
-        with pytest.raises(TabularError, match="data loss"):
+        with pytest.raises(TabularError, match="overwrite"):
             normalize_table(
                 bronze,
                 derived=(
@@ -466,23 +465,30 @@ class TestDerivedColumns:
                 ),
             )
 
-    def test_date_parts_output_named_after_an_input_succeeds_on_valid_dates(self) -> None:
+    def test_derived_name_must_not_overwrite_an_unrelated_column(self) -> None:
         from kpubdata_builder.spec import DerivedColumn
 
-        bronze = _bronze(({"dealYear": "2026", "dealMonth": "9", "dealDay": "8"},))
+        bronze = _bronze(({"a": "x", "b": "y", "k": "ORIGINAL"},))
 
-        table = normalize_table(
-            bronze,
-            derived=(
-                DerivedColumn(
-                    name="dealMonth",
-                    kind="date_parts",
-                    columns=("dealYear", "dealMonth", "dealDay"),
-                ),
-            ),
-        )
+        with pytest.raises(TabularError, match="overwrite"):
+            normalize_table(
+                bronze, derived=(DerivedColumn(name="k", kind="join_key", columns=("a", "b")),)
+            )
 
-        assert table["dealMonth"].to_list() == [date(2026, 9, 8)]
+    def test_rename_target_must_not_collide_with_an_untouched_column(self) -> None:
+        # Polars DuplicateError가 아니라 spec 용어의 TabularError로 실패한다.
+        bronze = _bronze(({"sggCd": "11110", "district_code": "already"},))
+
+        with pytest.raises(TabularError, match="collide"):
+            normalize_table(bronze, rename={"sggCd": "district_code"})
+
+    def test_rename_swap_is_allowed(self) -> None:
+        # 서로 바꾸는 rename은 충돌이 아니다 — 두 원 컬럼 모두 rename 대상이다.
+        bronze = _bronze(({"a": 1, "b": 2},))
+
+        table = normalize_table(bronze, rename={"a": "b", "b": "a"})
+
+        assert table.columns == ["b", "a"]
 
     def test_join_key_concatenates_columns_into_one(self) -> None:
         # T3(매매×전월세)는 4개 키로 조인해야 하는데 composition의 equi-join은
