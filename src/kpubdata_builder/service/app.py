@@ -418,7 +418,11 @@ def _strip_internal_fields(entries: list[_BuildListEntry]) -> list[_BuildListEnt
 # date_parts/join_key typed 규칙으로 캐스팅 뒤에 새 컬럼을 만든다. 손으로 쓴
 # YAML만 지원하던 선언을 공개 계약에 올려 Studio와 타입 생성기가 발견/타이핑할
 # 수 있게 한다.
-API_CONTRACT_VERSION = "1.23.0"
+# 1.23.0 -> 1.24.0: SchemaContract에 read_as와 null_tokens를 추가한다(#613,
+# additive — 기존 필드/동작 불변). read_as는 레코드마다 타입이 다른 원천 컬럼을
+# 선언으로 읽고(CSV는 파싱 단계에서 적용되어 앞자리 0이 보존된다), null_tokens는
+# 결측을 나타내는 원천 표기를 캐스팅 전에 null로 모은다.
+API_CONTRACT_VERSION = "1.24.0"
 
 
 def _quality_result_to_json(r: QualityCheckResult) -> dict[str, JsonValue]:
