@@ -46,6 +46,7 @@
 - `stages/_path_safety.ensure_within`이 Windows에서 여러 source를 병렬(ThreadPoolExecutor)로 빌드할 때 간헐적으로 traversal 오탐하던 버그 수정 — `root`/`target` 중 한쪽만 `Path.resolve()`의 `\\?\` 확장 프리픽스를 얻는 비대칭이 원인 (#506 조사 중 발견, composition과 무관한 기존 버그)
 
 ### 제거됨
+- **루트에 커밋돼 있던 coverage 데이터와 개인 에이전트 설정 (#627)**: `.coverage.devbox.pid2864159.*`(coverage.py 병렬 모드가 남긴 80 KiB SQLite, #600 에서 유입)와 `.claude/settings.local.json`(다른 기여자의 절대경로 포함)을 추적 해제했다. `.gitignore` 에는 `.coverage` 만 있어 병렬 모드가 붙이는 `.<host>.<pid>.<rand>` 접미사를 잡지 못했으므로 `.coverage.*` 를 추가했다. `.claude/` 전체가 아니라 `settings.local.json` 만 무시한다 — 공유 설정과 스킬은 계속 추적할 수 있어야 한다
 - .omc/state/sessions 추적 해제 (#380)
 - PLAN.md를 .github/로 이동 (#425)
 
