@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import io
 import json
+from collections.abc import Mapping
 from typing import cast
 
 import polars as pl
@@ -26,8 +27,9 @@ _TEXT_FORMATS = frozenset({"csv", "json", "jsonl"})
 def parse_tabular_bytes(
     raw: bytes,
     *,
-    format: str,
-    encoding: str = "utf-8",  # noqa: A002 - 계약 필드명과 맞춘다
+    format: str,  # noqa: A002 - 계약 필드명과 맞춘다
+    encoding: str = "utf-8",
+    read_as: Mapping[str, str] | None = None,
 ) -> tuple[dict[str, JsonValue], ...]:
     """원시 bytes를 ``format`` 규칙으로 파싱해 레코드 튜플로 반환한다.
 
@@ -36,6 +38,10 @@ def parse_tabular_bytes(
         format: ``"csv"`` | ``"json"`` | ``"jsonl"`` | ``"parquet"``.
         encoding: 텍스트 포맷(csv/json/jsonl) 디코딩에 쓸 인코딩. parquet은
             바이너리 포맷이라 무시된다.
+        read_as: ``sources[].schema.read_as`` 선언. CSV는 lexeme(원문 문자열)이
+            파싱 단계에서만 남아 있다 — ``pl.read_csv``가 ``00123``을 정수
+            ``123``으로 추론한 뒤에는 Silver에서 문자열로 되돌려도 앞자리 0을
+            복구할 수 없다. 그래서 선언된 컬럼은 여기서부터 문자열로 읽는다.
 
     반환값:
         레코드 튜플. Bronze pipeline이 소비하는 것과 동일한
@@ -52,7 +58,7 @@ def parse_tabular_bytes(
     if format in _TEXT_FORMATS:
         text = _decode(raw, encoding)
         if format == "csv":
-            return _parse_csv(text)
+            return _parse_csv(text, read_as=read_as)
         if format == "json":
             return _parse_json(text)
         return _parse_jsonl(text)
@@ -74,9 +80,18 @@ def _parse_parquet(raw: bytes) -> tuple[dict[str, JsonValue], ...]:
     return tuple(dataframe_to_records(frame))
 
 
-def _parse_csv(text: str) -> tuple[dict[str, JsonValue], ...]:
+def _parse_csv(
+    text: str, *, read_as: Mapping[str, str] | None = None
+) -> tuple[dict[str, JsonValue], ...]:
+    # 선언된 컬럼만 Utf8로 고정한다. 선언되지 않은 컬럼의 추론은 그대로 두어,
+    # read_as를 쓰지 않는 spec의 결과가 바뀌지 않게 한다.
+    overrides = {column: pl.Utf8 for column, dtype in (read_as or {}).items() if dtype == "str"}
     try:
-        frame = pl.read_csv(io.StringIO(text), infer_schema_length=None)
+        frame = pl.read_csv(
+            io.StringIO(text),
+            infer_schema_length=None,
+            schema_overrides=overrides or None,
+        )
     except Exception as exc:
         raise IngestionError(f"failed to parse csv content: {exc}") from exc
     return tuple(dataframe_to_records(frame))

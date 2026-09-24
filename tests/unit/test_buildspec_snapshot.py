@@ -242,3 +242,84 @@ def test_spec_digest_changes_when_transform_rules_change() -> None:
     assert compute_spec_digest(serialize_spec_bytes(derived)) != compute_spec_digest(
         serialize_spec_bytes(renamed)
     )
+
+
+def _spec_with_secret_named_columns() -> BuildSpec:
+    """컬럼 이름이 credential 키와 겹치는 spec (#623).
+
+    공공 데이터에는 ``token``/``password`` 같은 이름의 컬럼이 실제로 있다.
+    """
+    from kpubdata_builder.spec.models import ColumnNullTokens
+
+    spec = _complete_spec()
+    source = spec.sources[0]
+    return replace(
+        spec,
+        sources=(
+            replace(
+                source,
+                schema=SchemaContract(
+                    required=("token",),
+                    dtypes={"token": "string"},
+                    read_as={"token": "str"},
+                    rename={"password": "pw"},
+                    zfill={"secret": 5},
+                    coalesce={"api_key": ("apikey", "api_key")},
+                    column_null_tokens={
+                        "token": ColumnNullTokens(tokens=("", "-"), on_absent="error"),
+                    },
+                ),
+            ),
+        ),
+    )
+
+
+def test_column_names_that_look_like_credentials_are_not_redacted() -> None:
+    # 컬럼명은 credential이 아니다. redaction을 걸면 스냅샷이 loader가 기대하는
+    # 타입 대신 "<redacted>" 문자열을 담게 되어 다시 파싱되지 않는다.
+    spec = _spec_with_secret_named_columns()
+
+    parsed = _parse_yaml(serialize_spec(spec))
+
+    assert parsed == spec
+
+
+def test_specs_differing_only_by_column_null_tokens_get_different_digests() -> None:
+    # redaction이 토큰 목록을 통째로 "<redacted>"로 만들면 서로 다른 결측 표기를
+    # 선언한 두 spec이 같은 digest를 갖는다 — recipe 동일성이 무너진다.
+    from kpubdata_builder.spec.models import ColumnNullTokens
+
+    first = _spec_with_secret_named_columns()
+    source = first.sources[0]
+    assert source.schema is not None
+    second = replace(
+        first,
+        sources=(
+            replace(
+                source,
+                schema=replace(
+                    source.schema,
+                    column_null_tokens={
+                        "token": ColumnNullTokens(tokens=("N/A",), on_absent="error"),
+                    },
+                ),
+            ),
+        ),
+    )
+
+    assert compute_spec_digest(serialize_spec_bytes(first)) != compute_spec_digest(
+        serialize_spec_bytes(second)
+    )
+
+
+def test_credential_params_are_still_redacted_alongside_column_names() -> None:
+    # 구조적 매핑에서 redaction을 뺀 것이 자유 형식 params의 redaction을 약화시켜서는
+    # 안 된다.
+    spec = _spec_with_secret_named_columns()
+    source = spec.sources[0]
+    with_secret = replace(spec, sources=(replace(source, params={"serviceKey": "plain-secret"}),))
+
+    text = serialize_spec(with_secret)
+
+    assert "plain-secret" not in text
+    assert serializer.REDACTED_VALUE in text

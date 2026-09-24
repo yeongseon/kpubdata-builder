@@ -322,8 +322,44 @@ def _coalesce_problems(
 
     후보가 비면 normalize 가 런타임에 "후보가 하나도 없다"로 실패한다. 선언 시점에
     막는 편이 어디를 고쳐야 하는지 말해 준다.
+
+    겹치는 그룹도 여기서 막는다. 각 규칙은 수렴한 후보 컬럼을 지우므로, 한 규칙의
+    target 이 다른 규칙의 후보이면 결과가 매핑 순회 순서에 달린다. 그런데
+    ``canonical_spec_mapping()`` 은 키를 정렬해 스냅샷을 쓰기 때문에, 같은 digest 의
+    선언이 원래 빌드와 다르게 동작할 수 있다 — recipe 재현 가능성이 거기서 깨진다.
     """
     problems: list[ValidationProblem] = []
+    targets = set(coalesce)
+    owners: dict[str, str] = {}
+    for target, candidates in coalesce.items():
+        field = f"{prefix}.schema.coalesce.{target}"
+        for candidate in candidates:
+            if candidate in targets and candidate != target:
+                problems.append(
+                    _p(
+                        "overlapping_coalesce_groups",
+                        field,
+                        f"coalesce target {candidate!r} is also a candidate of {target!r}",
+                        hint=(
+                            "Overlapping coalesce groups make the result depend on "
+                            "declaration order; declare independent alias groups"
+                        ),
+                    )
+                )
+            owner = owners.setdefault(candidate, target)
+            if owner != target:
+                problems.append(
+                    _p(
+                        "overlapping_coalesce_groups",
+                        field,
+                        f"coalesce candidate {candidate!r} is claimed by both {owner!r} "
+                        f"and {target!r}",
+                        hint=(
+                            "Overlapping coalesce groups make the result depend on "
+                            "declaration order; declare independent alias groups"
+                        ),
+                    )
+                )
     for target, candidates in coalesce.items():
         field = f"{prefix}.schema.coalesce.{target}"
         if not candidates:

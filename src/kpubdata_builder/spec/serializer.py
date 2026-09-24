@@ -52,7 +52,11 @@ def _normalized_key(key: str) -> str:
 
 
 def _canonical_json(value: JsonValue) -> JsonValue:
-    """JSON 값을 key 순서와 secret redaction이 고정된 값으로 복사한다."""
+    """자유 형식 JSON 값을 key 순서와 secret redaction이 고정된 값으로 복사한다.
+
+    ``params``/``auth`` 처럼 **키가 credential 이름일 수 있는** 자유 형식 매핑에만
+    쓴다. 키가 컬럼명인 구조적 매핑에는 :func:`_canonical_structure` 를 쓴다.
+    """
     if isinstance(value, dict):
         result: dict[str, JsonValue] = {}
         for key in sorted(value):
@@ -68,6 +72,23 @@ def _canonical_json(value: JsonValue) -> JsonValue:
     return value
 
 
+def _canonical_structure(value: JsonValue) -> JsonValue:
+    """구조적 매핑을 key 순서만 고정해 복사한다 — redaction은 하지 않는다 (#623).
+
+    ``schema.rename``/``read_as``/``column_null_tokens`` 등은 키가 **원천 컬럼명**
+    이다. 여기에 credential-key redaction을 걸면 ``token``/``api_key``/``password``
+    라는 이름의 컬럼이 ``"<redacted>"`` 로 치환된다. 그러면 스냅샷은 loader 가
+    기대하는 타입(list/dict)이 아니라 문자열을 담게 되어 다시 파싱되지 않고, 서로
+    다른 결측 표기를 선언한 spec 들이 같은 digest 를 갖게 되어 recipe 동일성도
+    무너진다. 컬럼명은 credential 이 아니다 — 값만 구조 그대로 옮긴다.
+    """
+    if isinstance(value, dict):
+        return {key: _canonical_structure(value[key]) for key in sorted(value)}
+    if isinstance(value, list):
+        return [_canonical_structure(item) for item in value]
+    return value
+
+
 def canonical_spec_mapping(spec: BuildSpec) -> dict[str, JsonValue]:
     """BuildSpec을 필드 순서와 optional 기본값이 고정된 JSON 호환 매핑으로 만든다."""
     sources: list[JsonValue] = []
@@ -76,15 +97,15 @@ def canonical_spec_mapping(spec: BuildSpec) -> dict[str, JsonValue]:
         if source.schema is not None:
             schema = {
                 "required": list(source.schema.required),
-                "dtypes": _canonical_json(cast(JsonValue, source.schema.dtypes)),
-                "casts": _canonical_json(cast(JsonValue, source.schema.casts)),
+                "dtypes": _canonical_structure(cast(JsonValue, source.schema.dtypes)),
+                "casts": _canonical_structure(cast(JsonValue, source.schema.casts)),
                 # rename/derived도 recipe의 일부다 (#611). 빠지면 변환 규칙을
                 # 바꿔도 spec digest가 그대로라, R1의 "같은 recipe는 같은 output"
                 # 주장에서 정작 Silver를 만든 규칙이 recipe 밖에 남는다.
-                "rename": _canonical_json(cast(JsonValue, source.schema.rename)),
-                "read_as": _canonical_json(cast(JsonValue, source.schema.read_as)),
+                "rename": _canonical_structure(cast(JsonValue, source.schema.rename)),
+                "read_as": _canonical_structure(cast(JsonValue, source.schema.read_as)),
                 "null_tokens": list(source.schema.null_tokens),
-                "column_null_tokens": _canonical_json(
+                "column_null_tokens": _canonical_structure(
                     cast(
                         JsonValue,
                         {
@@ -96,7 +117,7 @@ def canonical_spec_mapping(spec: BuildSpec) -> dict[str, JsonValue]:
                         },
                     )
                 ),
-                "coalesce": _canonical_json(
+                "coalesce": _canonical_structure(
                     cast(
                         JsonValue,
                         {
@@ -105,7 +126,7 @@ def canonical_spec_mapping(spec: BuildSpec) -> dict[str, JsonValue]:
                         },
                     )
                 ),
-                "zfill": _canonical_json(cast(JsonValue, source.schema.zfill)),
+                "zfill": _canonical_structure(cast(JsonValue, source.schema.zfill)),
                 "derived": [
                     {
                         "name": rule.name,
@@ -149,7 +170,7 @@ def canonical_spec_mapping(spec: BuildSpec) -> dict[str, JsonValue]:
     if spec.splits is not None:
         splits = {
             "mode": spec.splits.mode,
-            "ratios": _canonical_json(cast(JsonValue, spec.splits.ratios)),
+            "ratios": _canonical_structure(cast(JsonValue, spec.splits.ratios)),
             "key": spec.splits.key,
             "seed": spec.splits.seed,
         }
@@ -163,8 +184,8 @@ def canonical_spec_mapping(spec: BuildSpec) -> dict[str, JsonValue]:
         quality = {
             "max_duplicate_rate": spec.quality.max_duplicate_rate,
             "max_duplicate_rate_severity": spec.quality.max_duplicate_rate_severity,
-            "max_null_ratio": _canonical_json(cast(JsonValue, spec.quality.max_null_ratio)),
-            "max_null_ratio_severity": _canonical_json(
+            "max_null_ratio": _canonical_structure(cast(JsonValue, spec.quality.max_null_ratio)),
+            "max_null_ratio_severity": _canonical_structure(
                 cast(JsonValue, spec.quality.max_null_ratio_severity)
             ),
             "min_rows": spec.quality.min_rows,

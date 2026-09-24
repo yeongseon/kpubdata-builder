@@ -415,6 +415,47 @@ class TestDerivedColumns:
 
         assert table["join_key"].to_list() == ["11110|202609"]
 
+    def test_join_key_separator_in_value_does_not_collide(self) -> None:
+        # 구분자를 그냥 이어 붙이면 ("a|b", "c")와 ("a", "b|c")가 같은 키가 되어
+        # 무관한 행이 조인된다. 구성 요소를 이스케이프해 인코딩을 단사로 유지한다.
+        from kpubdata_builder.spec import DerivedColumn
+
+        bronze = _bronze(
+            (
+                {"left": "a|b", "right": "c"},
+                {"left": "a", "right": "b|c"},
+            )
+        )
+
+        table = normalize_table(
+            bronze,
+            derived=(DerivedColumn(name="join_key", kind="join_key", columns=("left", "right")),),
+        )
+
+        keys = table["join_key"].to_list()
+        assert keys[0] != keys[1]
+        assert keys == ["a\\|b|c", "a|b\\|c"]
+
+    def test_join_key_escape_character_in_value_does_not_collide(self) -> None:
+        # 이스케이프 문자 자체도 값에 나타날 수 있다. 두 배로 늘리지 않으면
+        # ("a\\", "b")와 ("a", "\\b")가 다시 같은 키로 뭉친다.
+        from kpubdata_builder.spec import DerivedColumn
+
+        bronze = _bronze(
+            (
+                {"left": "a\\", "right": "b"},
+                {"left": "a", "right": "\\b"},
+            )
+        )
+
+        table = normalize_table(
+            bronze,
+            derived=(DerivedColumn(name="join_key", kind="join_key", columns=("left", "right")),),
+        )
+
+        keys = table["join_key"].to_list()
+        assert keys[0] != keys[1]
+
 
 class TestSchemaContractReachesNormalization:
     """BuildSpec의 rename/derived 선언이 실제 Silver 테이블에 도달한다 (#611).
@@ -514,6 +555,23 @@ class TestNullTokenNormalization:
         table = normalize_table(bronze, null_tokens=("",))
 
         assert table["grade"].to_list() == ["-", "A"]
+
+    def test_native_numeric_next_to_a_null_token_is_not_rejected(self) -> None:
+        # JSON/공공 API 레코드는 84.5를 네이티브 숫자로, 결측을 ""로 준다. 선언이
+        # 테이블 생성 *뒤* 에 적용되면 이질 타입 가드(#187)가 먼저 걸려, 올바른
+        # null_tokens 선언이 무관한 read_as 선언 없이는 통하지 않는다.
+        bronze = _bronze(({"area": 84.5}, {"area": ""}))
+
+        table = normalize_table(bronze, null_tokens=("",))
+
+        assert table["area"].to_list() == [84.5, None]
+
+    def test_native_numeric_next_to_a_null_token_casts_cleanly(self) -> None:
+        bronze = _bronze(({"area": 84.5}, {"area": ""}))
+
+        table = normalize_table(bronze, casts={"area": "float"}, null_tokens=("",))
+
+        assert table["area"].to_list() == [84.5, None]
 
 
 class TestColumnNullTokens:
@@ -716,6 +774,41 @@ class TestCoalesce:
 
         assert table["merged"].to_list() == ["3"]
 
+    def test_target_that_is_another_targets_candidate_is_rejected(self) -> None:
+        # 각 규칙은 수렴한 후보를 지운다. 그래서 {"a": ["x"], "b": ["a"]}는 a,b
+        # 순서에서는 성공하고 b,a 순서에서는 실패한다 — 그런데
+        # canonical_spec_mapping()은 키를 정렬해 스냅샷을 쓰므로, 같은 digest의
+        # 선언이 원래 빌드와 다르게 동작할 수 있다.
+        bronze = _bronze(({"x": "1"},))
+
+        with pytest.raises(TabularError, match="overlapping coalesce groups"):
+            normalize_table(bronze, coalesce={"a": ("x",), "b": ("a",)})
+
+    def test_declaration_order_does_not_change_the_rejection(self) -> None:
+        bronze = _bronze(({"x": "1"},))
+
+        with pytest.raises(TabularError, match="overlapping coalesce groups"):
+            normalize_table(bronze, coalesce={"b": ("a",), "a": ("x",)})
+
+    def test_candidate_shared_by_two_targets_is_rejected(self) -> None:
+        bronze = _bronze(({"x": "1", "y": "2"},))
+
+        with pytest.raises(TabularError, match="overlapping coalesce groups"):
+            normalize_table(bronze, coalesce={"a": ("x", "y"), "b": ("y",)})
+
+    def test_independent_groups_are_applied_in_a_stable_order(self) -> None:
+        # 겹치지 않는 그룹은 어떤 선언 순서로도 같은 결과여야 한다.
+        records = ({"old_id": "1", "legacy_name": "seoul"},)
+
+        first = normalize_table(
+            _bronze(records), coalesce={"id": ("old_id",), "name": ("legacy_name",)}
+        )
+        second = normalize_table(
+            _bronze(records), coalesce={"name": ("legacy_name",), "id": ("old_id",)}
+        )
+
+        assert first.to_dicts() == second.to_dicts()
+
 
 class TestZfill:
     def test_pads_identifier_to_declared_width(self) -> None:
@@ -745,6 +838,26 @@ class TestZfill:
 
         with pytest.raises(TabularError, match="declare read_as"):
             normalize_table(bronze, zfill={"station": 5})
+
+    def test_all_null_column_is_promoted_instead_of_rejected(self) -> None:
+        # 값이 전부 null이면 Polars는 pl.Null로 추론한다. read_as로도 풀 수 없고
+        # (_apply_read_as는 null을 건드리지 않는다), zfill은 null을 null로 둔다고
+        # 약속했으므로 거부할 이유가 없다.
+        bronze = _bronze(({"station": None}, {"station": None}))
+
+        table = normalize_table(bronze, zfill={"station": 5})
+
+        assert table["station"].to_list() == [None, None]
+        assert table.schema["station"] == pl.Utf8
+
+    def test_all_null_coalesced_alias_can_be_zfilled(self) -> None:
+        bronze = _bronze(({"legacy_station": None}, {"legacy_station": None}))
+
+        table = normalize_table(
+            bronze, coalesce={"station": ("legacy_station",)}, zfill={"station": 5}
+        )
+
+        assert table["station"].to_list() == [None, None]
 
     def test_absent_column_fails(self) -> None:
         bronze = _bronze(({"other": "1"},))
