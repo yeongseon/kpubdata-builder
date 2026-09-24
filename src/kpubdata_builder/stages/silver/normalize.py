@@ -15,7 +15,7 @@ from collections.abc import Mapping, Sequence
 import polars as pl
 
 from ...errors import TabularError
-from ...spec import DerivedColumn
+from ...spec import DerivedColumn, JsonValue
 from ...tabular.convert import records_to_dataframe
 from ...tabular.polars_helpers import DtypeSpec, cast_columns
 from ..bronze.models import BronzeArtifact
@@ -33,6 +33,8 @@ def normalize_table(
     casts: Mapping[str, DtypeSpec] | None = None,
     rename: Mapping[str, str] | None = None,
     derived: Sequence[DerivedColumn] = (),
+    read_as: Mapping[str, str] | None = None,
+    null_tokens: Sequence[str] = (),
 ) -> pl.DataFrame:
     """Bronze raw records를 테이블로 변환하고 선언된 캐스팅만 적용한다.
 
@@ -48,6 +50,13 @@ def normalize_table(
         rename: 원 필드명 → canonical 컬럼명 매핑 (#611). 캐스팅보다 먼저 적용된다.
         derived: 기존 컬럼에서 새 컬럼을 만드는 규칙 (#611). 캐스팅 뒤에 적용된다 —
             파생 규칙이 캐스팅된 값을 읽을 수 있어야 하기 때문이다.
+        read_as: 원천 컬럼을 읽을 타입 선언 (``{컬럼: "str"}``). 레코드마다 타입이
+            다른 원천 컬럼을 선언으로 처리한다. 키는 rename *이전* 의 원 필드명이다 —
+            테이블이 만들어지기 전에 적용되기 때문이다.
+        null_tokens: 결측을 나타내는 원천 표기 (예: ``("",)``). 캐스팅 전에 null로
+            모은다. 결측을 지우는 것이 아니라 표기를 하나로 맞추는 것이며, 선언되지
+            않은 값은 건드리지 않는다 — 무엇을 결측으로 볼지는 데이터셋마다 다르고,
+            builder가 임의로 정하면 품질 측정 대상이 오염된다.
 
     반환값:
         pl.DataFrame: 정규화된 테이블.
@@ -55,7 +64,12 @@ def normalize_table(
     예외:
         TabularError: 선언된 캐스팅이 값을 null로 떨어뜨려 데이터가 손실된 경우.
     """
-    table = records_to_dataframe(bronze.raw_records)
+    # null_tokens는 테이블이 만들어지기 *전* 에 적용한다. records_to_dataframe은
+    # 이질 타입 컬럼을 거부하는데(#187), 공공 API가 결측을 ""로 주면 같은 컬럼에
+    # 숫자 84.5와 문자열 ""이 섞여 선언이 닿기도 전에 빌드가 멈춘다 — 선언된
+    # 표기를 먼저 null로 모아야 그 선언이 실제로 효력을 갖는다.
+    records = _replace_null_tokens(bronze.raw_records, null_tokens)
+    table = records_to_dataframe(records, read_as=read_as)
     if rename:
         missing = [source for source in rename if source not in table.columns]
         if missing:
@@ -76,6 +90,26 @@ def normalize_table(
     for rule in derived:
         table = _apply_derived(table, rule)
     return table
+
+
+def _replace_null_tokens(
+    records: Sequence[dict[str, JsonValue]], null_tokens: Sequence[str]
+) -> Sequence[dict[str, JsonValue]]:
+    """선언된 결측 표기를 원시 레코드 단계에서 null로 모은다 (#613).
+
+    문자열 값만 본다 — 결측을 지우는 것이 아니라 표기를 하나로 맞추는 것이고,
+    선언되지 않은 값은 건드리지 않는다.
+    """
+    if not null_tokens:
+        return records
+    tokens = frozenset(null_tokens)
+    return [
+        {
+            key: (None if isinstance(value, str) and value in tokens else value)
+            for key, value in record.items()
+        }
+        for record in records
+    ]
 
 
 def _apply_derived(table: pl.DataFrame, rule: DerivedColumn) -> pl.DataFrame:

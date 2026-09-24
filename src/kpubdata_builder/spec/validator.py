@@ -23,6 +23,7 @@ from ..exporters import EXPORTER_REGISTRY
 from ..tabular.polars_helpers import _FORMATTED_CASTS, _NAMED_DTYPES
 from .models import (
     DERIVED_KINDS,
+    READ_AS_TYPES,
     SOURCE_FILE_FORMATS,
     SOURCE_KINDS,
     SOURCE_URL_FORMATS,
@@ -259,6 +260,16 @@ def _schema_problems(spec: BuildSpec) -> list[ValidationProblem]:
                         f"sources[{i}].schema.casts.{col}",
                         f"unknown cast dtype {cast!r} for column {col!r}",
                         hint=f"Use one of: {', '.join(supported_casts)}",
+                    )
+                )
+        for col, dtype in source.schema.read_as.items():
+            if dtype not in READ_AS_TYPES:
+                problems.append(
+                    _p(
+                        "unknown_read_as_type",
+                        f"sources[{i}].schema.read_as.{col}",
+                        f"unknown read_as type {dtype!r} for column {col!r}",
+                        hint=f"Use one of: {', '.join(READ_AS_TYPES)}",
                     )
                 )
         problems.extend(_derived_problems(source.schema.derived, prefix=f"sources[{i}]"))
