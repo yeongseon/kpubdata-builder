@@ -422,7 +422,12 @@ def _strip_internal_fields(entries: list[_BuildListEntry]) -> list[_BuildListEnt
 # additive — 기존 필드/동작 불변). read_as는 레코드마다 타입이 다른 원천 컬럼을
 # 선언으로 읽고(CSV는 파싱 단계에서 적용되어 앞자리 0이 보존된다), null_tokens는
 # 결측을 나타내는 원천 표기를 캐스팅 전에 null로 모은다.
-API_CONTRACT_VERSION = "1.24.0"
+# 1.24.0 -> 1.25.0: SchemaContract에 coalesce와 zfill을 추가한다(#620, additive
+# — 기존 필드/동작 불변). coalesce는 세대별 alias 컬럼을 하나의 canonical 컬럼으로
+# 모으고(겹치는 그룹은 결과가 선언 순서에 달리므로 거부한다), zfill은 canonical
+# 식별자를 선언된 폭으로 왼쪽 0 padding 한다. casts의 dtype 어휘에 year_month가
+# 더해진다.
+API_CONTRACT_VERSION = "1.25.0"
 
 
 def _quality_result_to_json(r: QualityCheckResult) -> dict[str, JsonValue]:

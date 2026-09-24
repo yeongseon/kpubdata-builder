@@ -365,7 +365,7 @@ def test_validate_spec_rejects_chained_coalesce_groups() -> None:
     with pytest.raises(ValidationError) as exc:
         validate_spec(spec)
 
-    assert "overlapping" in str(exc.value).lower()
+    assert "is also a candidate of" in str(exc.value)
 
 
 def test_validate_spec_rejects_coalesce_candidate_claimed_twice() -> None:
