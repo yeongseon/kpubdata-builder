@@ -328,3 +328,61 @@ def test_validate_spec_rejects_date_parts_without_three_columns() -> None:
 
     with pytest.raises(ValidationError):
         validate_spec(spec)
+
+
+def test_validate_spec_accepts_year_month_cast() -> None:
+    # #620 — year_month도 dtype이 아니라 named cast다. validator가 모르면 선언이
+    # validate 단계에서 막혀 Silver 빌드까지 가지도 못한다.
+    spec = _spec_with_schema(SchemaContract(casts={"ym": "year_month"}))
+
+    validate_spec(spec)
+
+
+def test_validate_spec_rejects_coalesce_without_candidates() -> None:
+    # #620 — 후보가 비면 normalize가 런타임에 실패한다. 선언 시점에 막는 편이
+    # 어디를 고쳐야 하는지 말해 준다.
+    spec = _spec_with_schema(SchemaContract(coalesce={"move_meter": ()}))
+
+    with pytest.raises(ValidationError) as exc:
+        validate_spec(spec)
+
+    assert "move_meter" in str(exc.value)
+
+
+def test_validate_spec_rejects_repeated_coalesce_candidate() -> None:
+    spec = _spec_with_schema(SchemaContract(coalesce={"move_meter": ("a", "a")}))
+
+    with pytest.raises(ValidationError):
+        validate_spec(spec)
+
+
+def test_validate_spec_rejects_chained_coalesce_groups() -> None:
+    # #620 — 각 규칙은 수렴한 후보를 지우므로 {"a": ["x"], "b": ["a"]}의 결과는
+    # 선언 순서에 달린다. canonical_spec_mapping()은 키를 정렬해 스냅샷을 쓰기
+    # 때문에 같은 digest의 선언이 원래 빌드와 다르게 동작할 수 있다.
+    spec = _spec_with_schema(SchemaContract(coalesce={"a": ("x",), "b": ("a",)}))
+
+    with pytest.raises(ValidationError) as exc:
+        validate_spec(spec)
+
+    assert "is also a candidate of" in str(exc.value)
+
+
+def test_validate_spec_rejects_coalesce_candidate_claimed_twice() -> None:
+    spec = _spec_with_schema(SchemaContract(coalesce={"a": ("x", "y"), "b": ("y",)}))
+
+    with pytest.raises(ValidationError):
+        validate_spec(spec)
+
+
+def test_validate_spec_allows_a_coalesce_target_among_its_own_candidates() -> None:
+    # 세대가 섞인 스냅샷에서 canonical 이름이 후보 중 하나인 것은 정상이다.
+    validate_spec(_spec_with_schema(SchemaContract(coalesce={"a": ("a", "legacy_a")})))
+
+
+@pytest.mark.parametrize("width", [0, -1])
+def test_validate_spec_rejects_non_positive_zfill_width(width: int) -> None:
+    spec = _spec_with_schema(SchemaContract(zfill={"station_no": width}))
+
+    with pytest.raises(ValidationError):
+        validate_spec(spec)

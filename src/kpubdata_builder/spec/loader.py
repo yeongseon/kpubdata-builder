@@ -394,6 +394,8 @@ def _parse_schema(value: object, *, prefix: str) -> SchemaContract:
     null_tokens = _parse_string_list(
         mapping.get("null_tokens", []), field_name=f"{prefix}.schema.null_tokens"
     )
+    coalesce = _parse_coalesce(mapping.get("coalesce", {}), prefix=f"{prefix}.schema.coalesce")
+    zfill = _parse_zfill(mapping.get("zfill", {}), prefix=f"{prefix}.schema.zfill")
     return SchemaContract(
         required=required,
         dtypes=dtypes,
@@ -402,7 +404,32 @@ def _parse_schema(value: object, *, prefix: str) -> SchemaContract:
         derived=derived,
         read_as=read_as,
         null_tokens=null_tokens,
+        coalesce=coalesce,
+        zfill=zfill,
     )
+
+
+def _parse_coalesce(value: object, *, prefix: str) -> dict[str, tuple[str, ...]]:
+    """schema.coalesce 를 ``{canonical: (후보, ...)}`` 로 변환한다 (#620).
+
+    구조만 검사한다 — 후보가 비었는지 같은 의미 검증은 validator.py 가 한다.
+    """
+    mapping = _ensure_mapping(value, field_name=prefix)
+    parsed: dict[str, tuple[str, ...]] = {}
+    for target, candidates in mapping.items():
+        parsed[target] = _parse_string_list(candidates, field_name=f"{prefix}.{target}")
+    return parsed
+
+
+def _parse_zfill(value: object, *, prefix: str) -> dict[str, int]:
+    """schema.zfill 을 ``{컬럼: 폭}`` 으로 변환한다 (#620)."""
+    mapping = _ensure_mapping(value, field_name=prefix)
+    parsed: dict[str, int] = {}
+    for column, width in mapping.items():
+        if not isinstance(width, int) or isinstance(width, bool):
+            raise TypeError(f"{prefix}.{column} must be an integer width")
+        parsed[column] = width
+    return parsed
 
 
 def _parse_derived(value: object, *, prefix: str) -> tuple[DerivedColumn, ...]:

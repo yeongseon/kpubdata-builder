@@ -700,3 +700,48 @@ def test_preview_applies_the_same_transform_rules_as_build() -> None:
     columns = [c.name for c in result.previews[0].schema.columns]
     assert "district_code" in columns
     assert "deal_date" in columns
+
+
+class TestPreviewAppliesSilverDeclarations:
+    """preview와 build가 같은 선언을 본다 (#620).
+
+    둘이 다른 데이터를 보면 preview로 확인한 결과가 빌드를 보장하지 못한다.
+    """
+
+    def _records(self) -> list[dict[str, JsonValue]]:
+        return [
+            {"이동거리": "1210", "이동거리(M)": None, "대여소번호": "3", "ym": "2020-01"},
+            {"이동거리": None, "이동거리(M)": "980", "대여소번호": "102", "ym": "202207"},
+        ]
+
+    def _schema(self) -> SchemaContract:
+        return SchemaContract(
+            coalesce={"move_meter": ("이동거리", "이동거리(M)")},
+            rename={"대여소번호": "station_no"},
+            zfill={"station_no": 5},
+            casts={"ym": "year_month"},
+        )
+
+    def test_preview_output_matches_build_output(self) -> None:
+        source = SourceRef(provider="datago", dataset="apt_trade", schema=self._schema())
+        client = _FakeClient({"datago.apt_trade": self._records()})
+
+        preview = preview_build(_spec(source), client=client, limit=10).previews[0]
+
+        assert preview.status == "ok"
+        columns = [c.name for c in preview.schema.columns]
+        assert "move_meter" in columns
+        assert "이동거리" not in columns
+        assert [row["station_no"] for row in preview.preview.rows] == ["00003", "00102"]
+        assert [row["ym"] for row in preview.preview.rows] == ["2020-01", "2022-07"]
+
+    def test_preview_surfaces_the_same_failure_as_build(self) -> None:
+        """zfill 폭 초과는 preview에서도 drift 신호로 드러나야 한다."""
+        source = SourceRef(provider="datago", dataset="apt_trade", schema=self._schema())
+        records = self._records()
+        records[0]["대여소번호"] = "1234567"
+        client = _FakeClient({"datago.apt_trade": records})
+
+        preview = preview_build(_spec(source), client=client, limit=10).previews[0]
+
+        assert preview.status == "failed"
