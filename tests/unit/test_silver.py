@@ -394,6 +394,102 @@ class TestDerivedColumns:
 
         assert table["deal_date"].to_list() == [date(2026, 9, 8)]
 
+    @pytest.mark.parametrize(
+        ("month", "day"),
+        [("13", "1"), ("2", "30"), ("0", "5")],
+    )
+    def test_date_parts_that_form_no_date_fail_instead_of_turning_null(
+        self, month: str, day: str
+    ) -> None:
+        # 세 조각이 모두 있는데 날짜가 되지 않으면 값이 사라진 것이다. cast가 같은
+        # 손실을 내면 #188이 빌드를 세우는데, 파생 규칙에서만 조용히 null이 되면
+        # 월/일이 뒤바뀐 원천이 required 날짜의 절반을 잃고도 통과한다.
+        from kpubdata_builder.spec import DerivedColumn
+
+        bronze = _bronze(({"dealYear": "2026", "dealMonth": month, "dealDay": day},))
+
+        with pytest.raises(TabularError, match="data loss"):
+            normalize_table(
+                bronze,
+                derived=(
+                    DerivedColumn(
+                        name="deal_date",
+                        kind="date_parts",
+                        columns=("dealYear", "dealMonth", "dealDay"),
+                    ),
+                ),
+            )
+
+    def test_date_parts_with_a_missing_part_stay_null_without_failing(self) -> None:
+        # 조각이 이미 없던 행은 규칙이 잃은 것이 아니다 — cast audit과 같은 기준
+        # (null 증가만 손실로 센다).
+        from kpubdata_builder.spec import DerivedColumn
+
+        bronze = _bronze(
+            (
+                {"dealYear": "2026", "dealMonth": "9", "dealDay": "8"},
+                {"dealYear": "2026", "dealMonth": None, "dealDay": "8"},
+            )
+        )
+
+        table = normalize_table(
+            bronze,
+            derived=(
+                DerivedColumn(
+                    name="deal_date",
+                    kind="date_parts",
+                    columns=("dealYear", "dealMonth", "dealDay"),
+                ),
+            ),
+        )
+
+        assert table["deal_date"].to_list() == [date(2026, 9, 8), None]
+
+    def test_date_parts_output_named_after_an_input_is_rejected(self) -> None:
+        # name이 입력 컬럼 중 하나이면 with_columns가 그 원천 컬럼을 소리 없이
+        # 덮어쓴다. 게다가 덮어쓴 뒤에는 잘못된 날짜인 행에서 조각 자체가 null로
+        # 보여, 손실 감사가 잡으려던 것을 놓친다. 선언 오류로 거부한다.
+        from kpubdata_builder.spec import DerivedColumn
+
+        bronze = _bronze(({"dealYear": "2026", "dealMonth": "30", "dealDay": "2"},))
+
+        with pytest.raises(TabularError, match="overwrite"):
+            normalize_table(
+                bronze,
+                derived=(
+                    DerivedColumn(
+                        name="dealMonth",
+                        kind="date_parts",
+                        columns=("dealYear", "dealMonth", "dealDay"),
+                    ),
+                ),
+            )
+
+    def test_derived_name_must_not_overwrite_an_unrelated_column(self) -> None:
+        from kpubdata_builder.spec import DerivedColumn
+
+        bronze = _bronze(({"a": "x", "b": "y", "k": "ORIGINAL"},))
+
+        with pytest.raises(TabularError, match="overwrite"):
+            normalize_table(
+                bronze, derived=(DerivedColumn(name="k", kind="join_key", columns=("a", "b")),)
+            )
+
+    def test_rename_target_must_not_collide_with_an_untouched_column(self) -> None:
+        # Polars DuplicateError가 아니라 spec 용어의 TabularError로 실패한다.
+        bronze = _bronze(({"sggCd": "11110", "district_code": "already"},))
+
+        with pytest.raises(TabularError, match="collide"):
+            normalize_table(bronze, rename={"sggCd": "district_code"})
+
+    def test_rename_swap_is_allowed(self) -> None:
+        # 서로 바꾸는 rename은 충돌이 아니다 — 두 원 컬럼 모두 rename 대상이다.
+        bronze = _bronze(({"a": 1, "b": 2},))
+
+        table = normalize_table(bronze, rename={"a": "b", "b": "a"})
+
+        assert table.columns == ["b", "a"]
+
     def test_join_key_concatenates_columns_into_one(self) -> None:
         # T3(매매×전월세)는 4개 키로 조인해야 하는데 composition의 equi-join은
         # 단일 컬럼만 받는다. Silver에서 복합키를 만들어 두면 compose.py를

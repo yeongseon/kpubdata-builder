@@ -413,3 +413,70 @@ def test_validate_spec_rejects_unknown_on_absent_policy() -> None:
         validate_spec(spec)
 
     assert "skip" in str(exc.value)
+
+
+def test_validate_spec_rejects_duplicate_rename_targets() -> None:
+    # 두 원 필드가 같은 canonical 이름으로 모이면 normalize_table이 Polars
+    # DuplicateError로 터진다 — 선언 시점에 spec 용어로 막는다.
+    spec = _spec_with_schema(SchemaContract(rename={"sggCd": "code", "lawdCd": "code"}))
+
+    with pytest.raises(ValidationError) as exc:
+        validate_spec(spec)
+
+    assert "duplicate_rename_target" in {p.code for p in (exc.value.structured_problems or [])}
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [
+        # rename 대상과 충돌
+        SchemaContract(
+            rename={"dealYmd": "deal_date"},
+            derived=(DerivedColumn(name="deal_date", kind="date_parts", columns=("y", "m", "d")),),
+        ),
+        # casts 키와 충돌 (casts 는 derived 앞에 돈다)
+        SchemaContract(
+            casts={"deal_date": "str"},
+            derived=(DerivedColumn(name="deal_date", kind="date_parts", columns=("y", "m", "d")),),
+        ),
+        # zfill 키와 충돌
+        SchemaContract(
+            zfill={"key": 5},
+            derived=(DerivedColumn(name="key", kind="join_key", columns=("a",)),),
+        ),
+        # coalesce 대상과 충돌
+        SchemaContract(
+            coalesce={"key": ("legacy_key",)},
+            derived=(DerivedColumn(name="key", kind="join_key", columns=("a",)),),
+        ),
+        # 파생 규칙끼리 충돌
+        SchemaContract(
+            derived=(
+                DerivedColumn(name="key", kind="join_key", columns=("a",)),
+                DerivedColumn(name="key", kind="join_key", columns=("b",)),
+            ),
+        ),
+    ],
+)
+def test_validate_spec_rejects_derived_name_collision(schema: SchemaContract) -> None:
+    # 파생 컬럼이 같은 schema가 이미 약속한 이름을 쓰면 with_columns가 기존 컬럼을
+    # 소리 없이 덮어쓴다 — 선언끼리의 충돌은 선언 시점에 잡는다.
+    with pytest.raises(ValidationError) as exc:
+        validate_spec(_spec_with_schema(schema))
+
+    assert "derived_name_collision" in {p.code for p in (exc.value.structured_problems or [])}
+
+
+def test_validate_spec_allows_declaring_a_derived_columns_expected_dtype() -> None:
+    # dtypes 는 컬럼을 만들지 않고 기대 타입을 선언할 뿐이다 — 파생 컬럼의 dtype 을
+    # 선언하는 것은 충돌이 아니라 정상적인 사용이다.
+    validate_spec(
+        _spec_with_schema(
+            SchemaContract(
+                dtypes={"deal_date": "date"},
+                derived=(
+                    DerivedColumn(name="deal_date", kind="date_parts", columns=("y", "m", "d")),
+                ),
+            )
+        )
+    )

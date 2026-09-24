@@ -67,6 +67,8 @@ class SchemaContract:
         rename: 원 필드명 → canonical 컬럼명 매핑 (#611). 캐스팅보다 먼저 적용되므로
             dtypes/casts/derived 는 모두 rename 이후의 이름을 가리킨다.
         derived: 기존 컬럼에서 새 컬럼을 만드는 규칙 (#611). 캐스팅 뒤에 적용된다.
+            ``date_parts`` 가 조각이 모두 있는 행을 날짜로 만들지 못하면 casts 와 같은
+            기준으로 TabularError 를 낸다 (#188).
         read_as: 원천 컬럼을 읽을 타입 선언 (``{컬럼: "str"}``). 레코드마다 타입이
             다른 원천 컬럼을 선언으로 처리한다. 키는 rename 이전의 원 필드명이다.
         null_tokens: 결측을 나타내는 원천 표기. 캐스팅 전에 null로 모은다. 모든

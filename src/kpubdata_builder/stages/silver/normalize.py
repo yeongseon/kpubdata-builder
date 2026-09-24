@@ -82,7 +82,8 @@ def normalize_table(
         pl.DataFrame: 정규화된 테이블.
 
     예외:
-        TabularError: 선언된 캐스팅이 값을 null로 떨어뜨려 데이터가 손실된 경우.
+        TabularError: 선언된 캐스팅이나 ``date_parts`` 파생 규칙이 값을 null로
+            떨어뜨려 데이터가 손실된 경우.
     """
     # null_tokens는 테이블이 만들어지기 *전* 에 적용한다. records_to_dataframe은
     # 이질 타입 컬럼을 거부하는데(#187), 공공 API가 결측을 ""로 주면 같은 컬럼에
@@ -98,6 +99,15 @@ def normalize_table(
         if missing:
             raise TabularError(
                 f"declared rename refers to columns absent from the source: {missing}"
+            )
+        # 두 원 컬럼이 같은 이름으로 모이거나, 대상 이름이 rename 되지 않는 기존
+        # 컬럼과 겹치면 Polars가 DuplicateError를 던진다 — 내부 예외가 아니라
+        # spec 용어로 실패시킨다. (값 중복은 validator가 선언 시점에 먼저 잡는다.)
+        untouched = set(table.columns) - set(rename)
+        collisions = sorted({target for target in rename.values() if target in untouched})
+        if collisions:
+            raise TabularError(
+                f"declared rename targets collide with existing columns: {collisions}"
             )
         table = table.rename(dict(rename))
     if zfill:
@@ -353,6 +363,14 @@ def _apply_derived(table: pl.DataFrame, rule: DerivedColumn) -> pl.DataFrame:
         raise TabularError(
             f"derived column {rule.name!r} refers to columns absent from the table: {missing}"
         )
+    if rule.name in table.columns:
+        # with_columns 는 같은 이름의 기존 컬럼을 소리 없이 덮어쓴다 — 원천 값이
+        # 사라진 채 다운스트림이 빌드되므로 선언 오류로 표면화한다. 파생 규칙이
+        # 자기 입력 컬럼을 결과 이름으로 쓰는 경우(name=dealMonth,
+        # columns=[dealYear, dealMonth, dealDay])도 여기서 걸린다.
+        raise TabularError(
+            f"derived column {rule.name!r} would overwrite an existing column of the same name"
+        )
     if rule.kind == "date_parts":
         year, month, day = rule.columns
         composed = (
@@ -362,7 +380,27 @@ def _apply_derived(table: pl.DataFrame, rule: DerivedColumn) -> pl.DataFrame:
             + pl.lit("-")
             + pl.col(day).cast(pl.Utf8).str.zfill(2)
         )
-        return table.with_columns(composed.str.to_date("%Y-%m-%d", strict=False).alias(rule.name))
+        result = table.with_columns(composed.str.to_date("%Y-%m-%d", strict=False).alias(rule.name))
+        # #188과 같은 기준: 조각이 모두 있었는데 날짜가 되지 못한 행은 규칙이 잃은
+        # 값이다. cast였다면 빌드가 섰을 손실이 파생 규칙에서만 조용히 null이 되면
+        # 안 된다. 조각이 이미 없던 행은 손실이 아니다.
+        #
+        # 조각의 존재 여부는 반드시 *원본* table에서 판정한다. rule.name이 입력
+        # 컬럼 중 하나와 같으면(예: name=dealMonth, columns=[dealYear, dealMonth,
+        # dealDay] — validator가 허용하는 선언이다) with_columns가 그 입력 컬럼을
+        # 이미 덮어써서, 잘못된 날짜인 행에서는 조각 자체가 null로 보인다. 그러면
+        # "조각이 모두 있었다"가 거짓이 되어 잡으려던 손실이 그대로 빠져나간다.
+        parts_present = table.select(
+            pl.all_horizontal(pl.col(c).is_not_null() for c in rule.columns)
+        ).to_series()
+        lost = table.filter(parts_present & result.get_column(rule.name).is_null())
+        if lost.height:
+            examples = lost.select(rule.columns).unique().head(3).to_dicts()
+            raise TabularError(
+                f"derived column {rule.name!r} dropped {lost.height} value(s) to null "
+                f"(data loss): parts that form no date, e.g. {examples}"
+            )
+        return result
     if rule.kind == "join_key":
         # 키 컬럼 중 하나라도 null이면 결과도 null이다(concat_str 기본 동작) —
         # 조인 키를 만들 수 없는 행을 빈 문자열로 붙여 만들어내지 않는다.
