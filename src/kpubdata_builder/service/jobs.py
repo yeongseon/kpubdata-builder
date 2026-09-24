@@ -532,8 +532,12 @@ class AsyncBuildExecutor:
             if cancellation is None:  # pragma: no cover - create()가 항상 함께 만든다
                 cancellation = RunCancellation()
             response = runner(spec_yaml, run_id, created_by, cancellation)
-        except RuntimeError as exc:
-            self._finish(run_id, failed=True, error=str(exc))
+        except Exception as exc:  # noqa: BLE001 - 어떤 실패든 job은 종결되어야 한다
+            # RuntimeError만 잡던 시절에는 그 밖의 예외가 worker thread를 그대로
+            # 빠져나가, job이 영원히 running으로 남았다. polling하는 클라이언트는
+            # 끝나지 않는 build를 기다리고, queue 슬롯도 돌아오지 않는다. 무엇이
+            # 터졌든 terminal 상태를 확정하는 것이 이 지점의 책임이다.
+            self._finish(run_id, failed=True, error=f"{type(exc).__name__}: {exc}")
             return
         if response.status_code < 400:
             self._finish(run_id, failed=False, response=response.body)

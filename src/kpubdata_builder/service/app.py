@@ -452,8 +452,17 @@ def _quality_result_to_json(r: QualityCheckResult) -> dict[str, JsonValue]:
 
 
 def _parse_spec_text(spec_yaml: str) -> BuildSpec:
-    """YAML 텍스트를 BuildSpec으로 파싱한다."""
-    raw = cast(object, yaml.safe_load(spec_yaml))
+    """YAML 텍스트를 BuildSpec으로 파싱한다.
+
+    문법이 깨진 YAML은 ``yaml.YAMLError`` 로 나오는데, 그것은 서버 결함이 아니라
+    사용자가 보낸 입력의 문제다. SpecLoadError 로 옮겨 호출자가 다른 파싱 실패와
+    똑같이 400 으로 다루게 한다 — 그러지 않으면 동기 경로는 500 을 돌려주고,
+    비동기 worker 는 아예 종결하지 못한다.
+    """
+    try:
+        raw = cast(object, yaml.safe_load(spec_yaml))
+    except yaml.YAMLError as exc:
+        raise SpecLoadError(f"spec is not valid YAML: {exc}") from exc
     if not isinstance(raw, dict):
         raise SpecLoadError("top-level YAML must be a mapping")
     return parse_spec(cast(dict[str, object], raw))
