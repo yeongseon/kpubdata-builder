@@ -1581,6 +1581,112 @@ class TestHttpRobustness:
         assert observed == max_workers
         assert len(results) == num_clients
 
+    def test_bounded_server_rejects_connections_past_the_pending_limit(
+        self, tmp_path: Path
+    ) -> None:
+        """스레드 수만 제한하면 대기열은 여전히 무한이다.
+
+        ``ThreadPoolExecutor`` 의 작업 큐에 상한이 없어서, 워커가 다 찬 뒤에
+        들어온 연결은 소켓을 연 채로 얼마든지 쌓였다 — 스레드는 열 개여도
+        파일 디스크립터는 접속하는 만큼 늘어났다.
+        """
+        from kpubdata_builder.service.http import BoundedThreadingHTTPServer, make_handler
+
+        class _FakeSocket:
+            def __init__(self) -> None:
+                self.sent = b""
+                self.closed = False
+
+            def sendall(self, data: bytes) -> None:
+                self.sent += data
+
+            def shutdown(self, how: int) -> None:
+                return
+
+            def close(self) -> None:
+                self.closed = True
+
+        # 처리 1 + 대기 1 = 두 연결까지만 받는다.
+        server = BoundedThreadingHTTPServer(
+            ("127.0.0.1", 0),
+            make_handler(_service(tmp_path)),
+            max_workers=1,
+            max_pending_requests=1,
+        )
+        started = threading.Event()
+        release = threading.Event()
+
+        def _blocking(request: object, client_address: object) -> None:
+            started.set()
+            release.wait(timeout=5.0)
+
+        server.process_request_thread = _blocking  # type: ignore[method-assign]
+
+        running, pending, rejected = _FakeSocket(), _FakeSocket(), _FakeSocket()
+        try:
+            server.process_request(running, ("10.0.0.1", 1))  # type: ignore[arg-type]
+            assert started.wait(timeout=5.0)
+            server.process_request(pending, ("10.0.0.2", 2))  # type: ignore[arg-type]
+            server.process_request(rejected, ("10.0.0.3", 3))  # type: ignore[arg-type]
+
+            # 받아들인 둘은 아직 아무 응답도 받지 않았다 — 핸들러가 잡고 있다.
+            assert running.sent == b""
+            assert pending.sent == b""
+            # 세 번째는 기다리지 않고 즉시 503 을 받고 끊긴다.
+            assert rejected.sent.startswith(b"HTTP/1.1 503 Service Unavailable\r\n")
+            assert b"Retry-After: 1" in rejected.sent
+            assert b"Connection: close" in rejected.sent
+            assert rejected.closed
+        finally:
+            release.set()
+            server.server_close()
+
+    def test_bounded_server_admits_again_once_requests_drain(self, tmp_path: Path) -> None:
+        """거절 카운터를 되돌리지 않으면 서버가 한 번 붐빈 뒤 영구히 닫힌다."""
+        import time
+
+        from kpubdata_builder.service.http import BoundedThreadingHTTPServer, make_handler
+
+        class _FakeSocket:
+            def __init__(self) -> None:
+                self.sent = b""
+
+            def sendall(self, data: bytes) -> None:
+                self.sent += data
+
+            def shutdown(self, how: int) -> None:
+                return
+
+            def close(self) -> None:
+                return
+
+        server = BoundedThreadingHTTPServer(
+            ("127.0.0.1", 0),
+            make_handler(_service(tmp_path)),
+            max_workers=1,
+            max_pending_requests=0,
+        )
+        server.process_request_thread = lambda *_a: None  # type: ignore[method-assign]
+        try:
+            for _ in range(5):
+                sock = _FakeSocket()
+                deadline = time.monotonic() + 5.0
+                while server._inflight > 0 and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                server.process_request(sock, ("10.0.0.1", 1))  # type: ignore[arg-type]
+                assert sock.sent == b"", "drain 된 뒤에는 다시 받아야 한다"
+        finally:
+            server.server_close()
+
+    def test_overloaded_response_is_a_well_formed_http_message(self) -> None:
+        """핸들러를 거치지 않고 소켓에 직접 쓰는 응답이라 형식이 틀려도 아무도 못 잡는다."""
+        from kpubdata_builder.service.http import _OVERLOADED_RESPONSE
+
+        head, _, body = _OVERLOADED_RESPONSE.partition(b"\r\n\r\n")
+        headers = dict(line.split(b": ", 1) for line in head.split(b"\r\n")[1:])
+        assert int(headers[b"Content-Length"]) == len(body)
+        assert json.loads(body) == {"error": "server overloaded"}
+
     def test_oversized_body_content_length_returns_413_http(
         self, http_server: tuple[str, HTTPServer, threading.Thread]
     ) -> None:
