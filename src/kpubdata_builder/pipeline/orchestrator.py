@@ -81,6 +81,33 @@ def _dataset_card_license(spec: BuildSpec) -> str:
     return legacy_license if isinstance(legacy_license, str) else ""
 
 
+def _gold_package_metadata(spec: BuildSpec) -> dict[str, str]:
+    """Gold 패키지에 실을 metadata — exporter가 보는 유일한 출처다 (#629).
+
+    exporter는 ``ArtifactDataset.metadata`` 하나만 본다. 그 하나를 만드는 곳이
+    두 군데였기 때문에 둘이 갈렸고, 뒤가 앞을 덮었다. 이제 여기가 유일한
+    출처다.
+
+    ``license``는 **선언됐을 때만** 키를 싣는다. 빈 문자열을 실으면 Kaggle
+    exporter의 기본값(CC-BY-4.0) 대신 빈 라이선스가 게시된다 — 선언하지 않은
+    것과 빈 값으로 선언한 것은 다르다.
+    """
+    metadata = {
+        "title": spec.title,
+        "description": spec.description,
+        # Kaggle exporter가 dataset-metadata.json의 id를 여기서 읽는다
+        # (#550 정합화 — spec.dataset_id가 곧 게시 destination 식별자).
+        "dataset_id": spec.dataset_id,
+    }
+    declared_license = _dataset_card_license(spec)
+    if declared_license:
+        # 이것이 없으면 spec.license를 무엇으로 선언하든 Kaggle
+        # dataset-metadata.json은 항상 CC-BY-4.0이었다 — 같은 빌드가 dataset
+        # card와 Kaggle metadata에 서로 다른 라이선스를 적었다.
+        metadata["license"] = declared_license
+    return metadata
+
+
 def _dataset_card_version(spec: BuildSpec) -> str:
     """metadata.version이 문자열일 때만 사용한다.
 
@@ -485,13 +512,7 @@ def _run_source_pipeline(
             silver,
             dataset_name=output_key,
             exports=context.spec.exports,
-            metadata={
-                "title": context.spec.title,
-                "description": context.spec.description,
-                # Kaggle exporter가 dataset-metadata.json의 id를 여기서 읽는다
-                # (#550 정합화 — spec.dataset_id가 곧 게시 destination 식별자).
-                "dataset_id": context.spec.dataset_id,
-            },
+            metadata=_gold_package_metadata(context.spec),
             splits_spec=context.spec.splits,
         )
         gold_paths = persist_gold_package(
@@ -535,30 +556,17 @@ def _run_source_pipeline(
         _ = card_path.write_text(render_dataset_card(card), encoding="utf-8")
         _record_output_paths(outputs, card_path)
 
-        # BuildSpec.exports에 정의된 내보내기 도구 실행
-        export_artifact = ArtifactDataset(
-            records=tuple(gold.table.iter_rows(named=True)),
-            metadata={
-                "title": context.spec.title,
-                "description": context.spec.description,
-                # Kaggle metadata id 정합(#550) — 이 경로가 파일을 다시 쓰므로
-                # dataset_id가 누락되면 unknown/dataset로 덮어쓴다.
-                "dataset_id": context.spec.dataset_id,
-            },
-            statistics={"row_count": len(gold.table)},
-            provenance=(output_key,),
-        )
-        buildspec_export_paths = _execute_exports(
-            gold_paths.gold_dir,
-            export_artifact,
-            context.spec.exports,
-        )
-        _record_output_paths(outputs, *buildspec_export_paths)
+        # BuildSpec.exports는 위 export_gold_package가 이미 전부 실행했다 —
+        # package.export_plan.targets가 곧 spec.exports이기 때문이다 (#629).
+        # 예전에는 같은 타깃을 같은 디렉터리에 한 번 더 썼고, 두 번째가 만든
+        # ArtifactDataset에는 schema가 없어서 게시되는 산출물에서 schema가
+        # 사라졌다. manifest outputs에는 같은 경로가 중복됐고 file_count는 두
+        # 배였다.
         recorder.stage_completed(
             output_key,
             "export",
             message="Export written",
-            metrics={"file_count": len(export_paths) + len(buildspec_export_paths)},
+            metrics={"file_count": len(export_paths)},
         )
 
         schema_summary = build_schema_summary(
@@ -696,7 +704,7 @@ def _run_composition(
             join=join,
             dataset_name=composition.name,
             exports=context.spec.exports,
-            metadata={"title": context.spec.title, "description": context.spec.description},
+            metadata=_gold_package_metadata(context.spec),
         )
     except CompositionError as exc:
         return _CompositionPipelineResult(
@@ -747,21 +755,7 @@ def _run_composition(
     _ = card_path.write_text(render_dataset_card(card), encoding="utf-8")
     _record_output_paths(outputs, card_path)
 
-    export_artifact = ArtifactDataset(
-        records=tuple(package.table.iter_rows(named=True)),
-        metadata={
-            "title": context.spec.title,
-            "description": context.spec.description,
-            # Kaggle metadata id 정합(#550) — 위와 같은 이유로 dataset_id 필수.
-            "dataset_id": context.spec.dataset_id,
-        },
-        statistics={"row_count": package.table.height},
-        provenance=(join.left, join.right),
-    )
-    buildspec_export_paths = _execute_exports(
-        gold_paths.gold_dir, export_artifact, context.spec.exports
-    )
-    _record_output_paths(outputs, *buildspec_export_paths)
+    # 단일 소스 경로와 같은 이유로 여기서도 다시 export하지 않는다 (#629).
 
     schema_summary = build_schema_summary(
         (col.name, col.dtype, col.nullable) for col in combined_schema.columns
