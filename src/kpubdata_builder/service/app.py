@@ -550,6 +550,7 @@ class BuilderService:
             output_root=self._output_root,
             publish_receipts=self._publish_receipts,
             async_builds=self._async_builds,
+            credential_repository=self._credential_resolver.repository,
         )
 
     @property

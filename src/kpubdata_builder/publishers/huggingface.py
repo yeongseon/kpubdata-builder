@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from pathlib import Path
 
 from ..errors import PublishError
@@ -36,6 +37,7 @@ class HuggingFacePublisher(BasePublisher):
         *,
         destination: str,
         private: bool = True,
+        credentials: Mapping[str, str] | None = None,
     ) -> PublishResult:
         """artifact를 HuggingFace 데이터셋 레포지토리에 게시한다.
 
@@ -53,11 +55,13 @@ class HuggingFacePublisher(BasePublisher):
                 "Install it with: pip install huggingface_hub"
             ) from exc
 
-        token = os.environ.get("HF_TOKEN")
+        # 요청자별 credential 이 있으면 그것을 쓰고, 없으면 예전처럼 서버
+        # 환경변수로 내려간다 (#635).
+        token = (credentials or {}).get("HF_TOKEN") or os.environ.get("HF_TOKEN")
         if not token:
             raise RuntimeError(
-                "Environment variable HF_TOKEN is not set. "
-                "A Hugging Face API token is required for publishing."
+                "No Hugging Face API token is available. Store one for this "
+                "principal, or set HF_TOKEN on the server."
             )
 
         api = HfApi(token=token)

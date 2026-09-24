@@ -15,6 +15,7 @@ PublishResult 값 객체를 정의한다.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -60,12 +61,25 @@ class BasePublisher(ABC):
         return False
 
     @abstractmethod
-    def publish(self, artifact_paths: tuple[Path, ...], *, destination: str) -> PublishResult:
+    def publish(
+        self,
+        artifact_paths: tuple[Path, ...],
+        *,
+        destination: str,
+        credentials: Mapping[str, str] | None = None,
+    ) -> PublishResult:
         """생성된 산출물 경로를 지정한 destination에 게시한다.
 
         매개변수:
             artifact_paths: 게시 대상 파일 경로 튜플.
             destination: 게시 대상 식별자 (로컬 경로, 원격 repo id 등).
+            credentials: 이 게시에 쓸 credential (#635). 주어지면 환경변수보다
+                우선한다. ``None`` 이면 예전처럼 환경변수를 읽는다 — 단일 사용자
+                배포의 기존 동작이 그대로다.
+
+                이 인자가 생긴 이유는 publish credential 이 요청자별이 아니라
+                서버 전역이었기 때문이다. 그러면 인증된 아무 사용자나 **서버
+                소유자의 계정으로** 게시할 수 있다.
 
         반환값:
             PublishResult: 게시 결과 메타데이터.

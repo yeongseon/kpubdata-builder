@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 
 from ..errors import PublishError
@@ -27,6 +28,7 @@ class KagglePublisher(BasePublisher):
         *,
         destination: str,
         public: bool = False,
+        credentials: Mapping[str, str] | None = None,
     ) -> PublishResult:
         """Kaggle 데이터셋을 새 버전으로 업로드한다.
 

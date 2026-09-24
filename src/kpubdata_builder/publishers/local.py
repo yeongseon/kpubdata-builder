@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import shutil
+from collections.abc import Mapping
 from pathlib import Path
 
 from ..errors import PublishError
@@ -32,7 +33,13 @@ class LocalPublisher(BasePublisher):
         """게시 도구 식별자."""
         return "local"
 
-    def publish(self, artifact_paths: tuple[Path, ...], *, destination: str) -> PublishResult:
+    def publish(
+        self,
+        artifact_paths: tuple[Path, ...],
+        *,
+        destination: str,
+        credentials: Mapping[str, str] | None = None,
+    ) -> PublishResult:
         """산출물 파일을 destination 디렉터리로 복사하고 결과를 반환한다.
 
         매개변수:
