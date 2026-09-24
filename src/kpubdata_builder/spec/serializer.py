@@ -82,6 +82,18 @@ def canonical_spec_mapping(spec: BuildSpec) -> dict[str, JsonValue]:
                 # 바꿔도 spec digest가 그대로라, R1의 "같은 recipe는 같은 output"
                 # 주장에서 정작 Silver를 만든 규칙이 recipe 밖에 남는다.
                 "rename": _canonical_json(cast(JsonValue, source.schema.rename)),
+                "read_as": _canonical_json(cast(JsonValue, source.schema.read_as)),
+                "null_tokens": list(source.schema.null_tokens),
+                "coalesce": _canonical_json(
+                    cast(
+                        JsonValue,
+                        {
+                            target: list(candidates)
+                            for target, candidates in source.schema.coalesce.items()
+                        },
+                    )
+                ),
+                "zfill": _canonical_json(cast(JsonValue, source.schema.zfill)),
                 "derived": [
                     {
                         "name": rule.name,

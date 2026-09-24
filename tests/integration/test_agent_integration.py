@@ -76,11 +76,7 @@ class TestMonitorIntegration:
 
     def test_check_nonexistent_spec(self) -> None:
         """존재하지 않는 spec → SPEC_NOT_FOUND."""
-        try:
-            result = check_approval("nonexistent.dataset_xyz")
-            assert result == "SPEC_NOT_FOUND"
-        except ImportError:
-            pytest.skip("verify module required for check_approval")
+        assert check_approval("nonexistent.dataset_xyz") == "SPEC_NOT_FOUND"
 
 
 class TestPipelineIntegration:
@@ -115,6 +111,6 @@ class TestCrossRepoIntegration:
     def test_license_field_accessible(self) -> None:
         spec = find_spec("datago.apt_trade")
         assert spec is not None
-        if hasattr(spec, "license") and spec.license is not None:
+        if spec.license is not None:
             assert hasattr(spec.license, "type")
             assert hasattr(spec.license, "commercial_use")

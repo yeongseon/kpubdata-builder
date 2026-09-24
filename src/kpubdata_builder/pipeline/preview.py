@@ -268,6 +268,10 @@ def _preview_source(
         casts = source.schema.casts if source.schema else None
         rename = source.schema.rename if source.schema else None
         derived = source.schema.derived if source.schema else ()
+        read_as = source.schema.read_as if source.schema else None
+        null_tokens = source.schema.null_tokens if source.schema else ()
+        coalesce = source.schema.coalesce if source.schema else None
+        zfill = source.schema.zfill if source.schema else None
         # kind(public_api/file/url)에 맞는 resolver로 원시 레코드를 가져온다
         # (#498) — Build와 동일한 resolver를 공유해 preview와 build가 같은
         # source에 대해 항상 같은 데이터를 본다.
@@ -284,6 +288,10 @@ def _preview_source(
             casts=casts,
             rename=rename,
             derived=derived,
+            read_as=read_as,
+            null_tokens=null_tokens,
+            coalesce=coalesce,
+            zfill=zfill,
             column_dtypes=column_dtypes,
         )
         # Build와 동일한 공통 evaluator (#486) — 파일 persist는 하지 않는다.
@@ -298,8 +306,10 @@ def _preview_source(
         total_rows = silver.statistics.row_count
         # diff alignment의 진짜 근거는 count가 아니라 현재 Silver 정규화 경로의
         # row-preserving invariant다: normalize_table()은 records_to_dataframe()
-        # (레코드 순서 그대로 pl.DataFrame 구성) 다음 cast_columns()(같은 행 수를
-        # 유지한 채 값만 캐스팅)만 호출하고, validate_table()은 테이블을 아예
+        # (레코드 순서 그대로 pl.DataFrame 구성) 다음 컬럼 단위 연산만 호출한다 —
+        # null_tokens/coalesce/rename/zfill/cast_columns/derived는 모두 같은 행
+        # 수를 유지한 채 값이나 컬럼 구성만 바꾸고(#620의 coalesce는 후보 *컬럼*
+        # 을 지우지 행을 지우지 않는다), validate_table()은 테이블을 아예
         # 건드리지 않는다 — 어느 단계도 행을 filter/dedup/reorder하지 않는다
         # (test_silver.py::TestRowPreservingInvariant#497이 이 불변조건을 회귀
         # 고정한다). 그 불변조건이 유지되는 한 bronze.raw_records[i]는 항상

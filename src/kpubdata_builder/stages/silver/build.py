@@ -29,6 +29,10 @@ def build_silver_dataset(
     casts: Mapping[str, DtypeSpec] | None = None,
     rename: Mapping[str, str] | None = None,
     derived: Sequence[DerivedColumn] = (),
+    read_as: Mapping[str, str] | None = None,
+    null_tokens: Sequence[str] = (),
+    coalesce: Mapping[str, Sequence[str]] | None = None,
+    zfill: Mapping[str, int] | None = None,
     column_dtypes: Mapping[str, DtypeSpec] | None = None,
     preview_limit: int = DEFAULT_PREVIEW_LIMIT,
 ) -> SilverDataset:
@@ -40,6 +44,10 @@ def build_silver_dataset(
         casts: 정규화 시 적용할 컬럼별 dtype 캐스팅 규칙.
         rename: 원 필드명 → canonical 컬럼명 매핑 (#611).
         derived: 기존 컬럼에서 새 컬럼을 만드는 규칙 (#611).
+        read_as: 원천 컬럼을 읽을 타입 선언.
+        null_tokens: 결측을 나타내는 원천 표기.
+        coalesce: 세대별 alias 컬럼을 하나로 모으는 규칙 (#620).
+        zfill: canonical 식별자를 선언된 폭으로 채우는 규칙 (#620).
         column_dtypes: 검증에 사용할 코럼별 기대 dtype 규칙. 키는 코럼명,
             값은 DtypeSpec(str | pl.DataType | type[pl.DataType]).
         preview_limit: 미리보기에 포함할 최대 행 수.
@@ -52,7 +60,16 @@ def build_silver_dataset(
     """
     if preview_limit < 0:
         raise ValueError(f"preview_limit must be >= 0, got {preview_limit}")
-    table = normalize_table(bronze, casts=casts, rename=rename, derived=derived)
+    table = normalize_table(
+        bronze,
+        casts=casts,
+        rename=rename,
+        derived=derived,
+        read_as=read_as,
+        null_tokens=null_tokens,
+        coalesce=coalesce,
+        zfill=zfill,
+    )
     validation = validate_table(
         table, required_columns=required_columns, column_dtypes=column_dtypes
     )
