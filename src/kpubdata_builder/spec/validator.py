@@ -134,6 +134,7 @@ def validate_spec(spec: BuildSpec) -> None:
     problems.extend(_split_problems(spec))
     problems.extend(_schema_problems(spec))
     problems.extend(_source_kind_problems(spec))
+    problems.extend(_source_key_problems(spec))
     problems.extend(_pii_problems(spec))
     problems.extend(_license_problems(spec))
     problems.extend(_quality_problems(spec))
@@ -621,6 +622,67 @@ def _endpoint_problems(endpoint: str, path: str) -> list[ValidationProblem]:
         )
     if not parsed.hostname:
         problems.append(_p("missing_url_host", path, f"{path} must include a host"))
+    return problems
+
+
+def _source_key_problems(spec: BuildSpec) -> list[ValidationProblem]:
+    """출력 키가 겹치거나 경로로 안전하지 않은 source 선언을 잡는다 (#630).
+
+    산출물 디렉터리(``bronze/<key>/``, ``silver/<key>/``, ``gold/<key>/``)와
+    ``row_counts``/``schema_summaries`` 의 키가 모두 이 값이다. 같은
+    ``(provider, dataset)`` 을 params 만 달리해 alias 없이 두 번 선언하면 두
+    source 가 같은 키를 갖는데, source 들은 스레드 풀에서 동시에 돌고 persist 는
+    디렉터리를 통째로 교체하므로 한쪽 산출물이 사라진다. dict 키도 하나만
+    살아남는다. 그런데 두 outcome 모두 "ok" 라서 **run 은 성공으로 보고되고
+    데이터는 절반이 조용히 없어진다.**
+
+    alias 는 경로 세그먼트가 된다. persist 의 ``validate_path_segment`` 가
+    결국 잡기는 하지만 그때는 이미 fetch 를 마친 뒤다. 선언 단계에서 멈춘다.
+    """
+    # spec -> stages 최상위 import 는 순환이다(stages.bronze.resolve 가 spec 을
+    # 읽는다). 키 계산을 여기서 복제하면 두 정의가 갈리므로(#629 가 정확히 그
+    # 사고였다) 정의는 하나로 두고 import 만 미룬다.
+    from ..stages._path_safety import validate_path_segment
+    from ..stages.bronze.resolve import source_identity
+
+    problems: list[ValidationProblem] = []
+    first_index: dict[str, int] = {}
+    for i, source in enumerate(spec.sources):
+        if source.alias:
+            try:
+                validate_path_segment(source.alias, field_name=f"sources[{i}].alias")
+            except ValueError as error:
+                problems.append(
+                    _p(
+                        "unsafe_alias",
+                        f"sources[{i}].alias",
+                        str(error),
+                        hint="alias becomes a directory name under the run workspace",
+                    )
+                )
+                continue
+            key = source.alias
+        else:
+            try:
+                provider, dataset = source_identity(source)
+            except (AttributeError, TypeError):
+                # kind 별 필수 field 가 비었을 때다. 그쪽 문제는
+                # _source_kind_problems 가 이미 보고하므로 여기서 겹쳐 말하지 않는다.
+                continue
+            key = f"{provider}.{dataset}"
+
+        if key in first_index:
+            problems.append(
+                _p(
+                    "duplicate_source_key",
+                    f"sources[{i}]",
+                    f"sources[{i}] resolves to the same output key {key!r} as "
+                    f"sources[{first_index[key]}]; outputs would overwrite each other",
+                    hint="give each source a distinct alias",
+                )
+            )
+        else:
+            first_index[key] = i
     return problems
 
 

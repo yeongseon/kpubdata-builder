@@ -480,3 +480,68 @@ def test_validate_spec_allows_declaring_a_derived_columns_expected_dtype() -> No
             )
         )
     )
+
+
+def _spec_with_sources(*sources: SourceRef) -> BuildSpec:
+    return BuildSpec(
+        dataset_id="dataset.sample",
+        title="Sample Dataset",
+        description="Sample description",
+        sources=tuple(sources),
+        exports=_EXP,
+    )
+
+
+def test_two_sources_resolving_to_the_same_output_key_are_rejected() -> None:
+    """같은 dataset을 params만 달리 선언하면 산출물 디렉터리가 겹친다 (#630).
+
+    두 outcome 모두 "ok"로 끝나기 때문에, 막지 않으면 run은 성공으로 보고되고
+    데이터는 절반이 조용히 사라진다.
+    """
+    spec = _spec_with_sources(
+        SourceRef(provider="datago", dataset="apt_trade", params={"LAWD_CD": "11110"}),
+        SourceRef(provider="datago", dataset="apt_trade", params={"LAWD_CD": "11140"}),
+    )
+
+    with pytest.raises(ValidationError) as exc_info:
+        validate_spec(spec)
+
+    problems = exc_info.value.problems
+    assert any("datago.apt_trade" in p for p in problems)
+    assert any("sources[1]" in p for p in problems)
+
+
+def test_distinct_aliases_make_the_same_dataset_declarable_twice() -> None:
+    """alias를 주면 합법이다 — 파라미터 그리드(#613)가 이 모양으로 쓴다."""
+    validate_spec(
+        _spec_with_sources(
+            SourceRef(
+                provider="datago", dataset="apt_trade", params={"LAWD_CD": "11110"}, alias="jongno"
+            ),
+            SourceRef(
+                provider="datago", dataset="apt_trade", params={"LAWD_CD": "11140"}, alias="mapo"
+            ),
+        )
+    )
+
+
+def test_two_sources_sharing_an_alias_are_rejected() -> None:
+    spec = _spec_with_sources(
+        SourceRef(provider="datago", dataset="apt_trade", alias="trades"),
+        SourceRef(provider="datago", dataset="apt_rent", alias="trades"),
+    )
+
+    with pytest.raises(ValidationError) as exc_info:
+        validate_spec(spec)
+
+    assert any("'trades'" in p for p in exc_info.value.problems)
+
+
+def test_an_alias_that_escapes_the_workspace_is_rejected_before_fetching() -> None:
+    """persist의 validate_path_segment도 잡지만 그때는 이미 fetch를 마친 뒤다 (#630)."""
+    spec = _spec_with_sources(SourceRef(provider="datago", dataset="apt_trade", alias=".."))
+
+    with pytest.raises(ValidationError) as exc_info:
+        validate_spec(spec)
+
+    assert any("sources[0].alias" in p for p in exc_info.value.problems)
