@@ -48,6 +48,9 @@ _TOKEN_LEEWAY_SECONDS = 60
 _OIDC_ALLOWED_HD_ENV = "OIDC_ALLOWED_HD"
 _OIDC_ALLOWED_SUBJECTS_ENV = "OIDC_ALLOWED_SUBJECTS"
 _OIDC_ALLOWED_EMAILS_ENV = "OIDC_ALLOWED_EMAILS"
+#: ownership.enforce_ownership() 이 읽는 이름. 여기서 import 하면 순환이므로
+#: 이름만 둔다 — 두 곳이 갈리면 test_env_var_contract 가 잡는다.
+_ENFORCE_OWNERSHIP_ENV = "ENFORCE_OWNERSHIP"
 # 허용 목록을 "필수"로 되돌리는 스위치. 미설정이면 공개 가입(제한 없음)이 기본이다.
 _OIDC_REQUIRE_ALLOWLIST_ENV = "OIDC_LEGACY_REQUIRE_ALLOWLIST"
 
@@ -162,7 +165,12 @@ def _verify_api_key(api_key: str | None) -> Principal | AuthError:
     expected = os.environ.get(_API_KEY_ENV)
     if not expected:
         return AuthError(reason="api key not configured")
-    if api_key is not None and hmac.compare_digest(api_key, expected):
+    # compare_digest 는 str 두 개를 받을 때 ASCII 만 허용한다 — 비ASCII 헤더
+    # 하나가 TypeError 로 500 을 만들고, 그 경로는 인증 실패로 기록되지도 않아
+    # 스로틀을 그냥 지나친다. 바이트로 비교하면 그런 입력도 평범한 불일치다.
+    if api_key is not None and hmac.compare_digest(
+        api_key.encode("utf-8"), expected.encode("utf-8")
+    ):
         return Principal(kind="service", owner_id=compute_owner_id("service", "default"))
     return AuthError(reason="invalid api key")
 
@@ -269,12 +277,25 @@ def validate_oidc_config() -> None:
         ) from e
     # 허용 목록은 선택이다(공개 가입이 기본). 제한 배포만 이 스위치로 필수화한다.
     hd, subs, emails = _oidc_allowlists()
-    if not (hd or subs or emails) and os.environ.get(_OIDC_REQUIRE_ALLOWLIST_ENV) == "true":
+    open_signup = not (hd or subs or emails)
+    if open_signup and os.environ.get(_OIDC_REQUIRE_ALLOWLIST_ENV) == "true":
         raise RuntimeError(
             "OIDC_ISSUER is set but no allowlist is configured "
             "(OIDC_ALLOWED_HD/SUBJECTS/EMAILS) while "
             f"{_OIDC_REQUIRE_ALLOWLIST_ENV}=true; refusing to start "
             "(fail-closed, ADR 0009, #386)."
+        )
+    # 두 기본값이 각각은 의도된 것이지만, 겹치면 "아무 Google 계정이나 로그인해
+    # 모든 run 과 query 에 접근한다" 가 된다. 둘 다 기본값이라 아무도 그 조합을
+    # 고른 적이 없고, 지금까지는 기동 로그에도 흔적이 없었다. 거부하지는 않는다 —
+    # 단일 사용자 배포에서는 정상적인 구성이다.
+    if open_signup and os.environ.get(_ENFORCE_OWNERSHIP_ENV, "").lower() not in ("true", "1"):
+        _logger.warning(
+            "OIDC signup is open (no OIDC_ALLOWED_HD/SUBJECTS/EMAILS) and %s is off: "
+            "any account that can obtain a token from this issuer will be able to read "
+            "and overwrite every run. Set an allowlist, or %s=true, or both.",
+            _ENFORCE_OWNERSHIP_ENV,
+            _ENFORCE_OWNERSHIP_ENV,
         )
 
 
@@ -322,6 +343,17 @@ def _get_jwks_client() -> object:
     return _jwks_client
 
 
+#: PyJWT 가 "JWKS 에 이 kid 가 없다" 를 알릴 때 쓰는 문구. 예외 타입이 하나뿐이라
+#: 메시지로 가를 수밖에 없다 — 못 알아보면 기존처럼 503 이므로 안전한 쪽으로 진다.
+_UNKNOWN_KEY_MARKERS = ("unable to find a signing key", "no matching key")
+
+
+def _is_unknown_signing_key(exc: Exception) -> bool:
+    """JWKS 는 받았는데 그 안에 이 토큰의 kid 가 없는 경우인지 판정한다."""
+    message = str(exc).casefold()
+    return any(marker in message for marker in _UNKNOWN_KEY_MARKERS)
+
+
 def _verify_bearer_token(token: str) -> Principal | AuthError:
     """Google ID token을 JWKS로 오프라인 검증한다 (#385, ADR 0009).
 
@@ -335,7 +367,17 @@ def _verify_bearer_token(token: str) -> Principal | AuthError:
     try:
         client = _get_jwks_client()
         signing_key = client.get_signing_key_from_jwt(token)  # type: ignore[attr-defined]
-    except (PyJWKClientError, ConnectionError, OSError):
+    except PyJWKClientError as exc:
+        # "서명 키를 못 찾았다" 와 "JWKS 에 닿지 못했다" 는 전혀 다른 사건인데
+        # 하나로 묶여 있었다. 전자를 503 으로 돌려주면 (a) 스로틀이 그것을 세지
+        # 않고 — 503 은 클라이언트 잘못이 아니므로 일부러 제외한다 — (b)
+        # PyJWKClient 가 캐시 미스마다 JWKS 를 새로 받으므로, 임의의 kid 를 단
+        # 토큰을 반복해 보내면 요청마다 IdP 아웃바운드 한 건이 나간다.
+        # 알 수 없는 kid 는 그냥 잘못된 자격증명이다.
+        if _is_unknown_signing_key(exc):
+            return AuthError(reason="invalid token")
+        return AuthError(reason="auth service unavailable (jwks)", status_code=503)
+    except (ConnectionError, OSError):
         return AuthError(reason="auth service unavailable (jwks)", status_code=503)
     except jwt.PyJWTError:
         # PyJWKClient parses the unverified JWT header before selecting a key.
