@@ -104,11 +104,53 @@ class TestPublisherPrefersPassedCredentials:
 
         from kpubdata_builder.publishers.huggingface import HuggingFacePublisher
 
-        with pytest.raises(Exception):  # noqa: B017 - 업로드까지 가지 않아도 된다
-            HuggingFacePublisher().publish(
-                (),
-                destination="kpubdata/x",
-                credentials={"HF_TOKEN": "her-own-token"},
-            )
+        HuggingFacePublisher().publish(
+            (),
+            destination="kpubdata/x",
+            credentials={"HF_TOKEN": "her-own-token"},
+        )
 
         assert captured["token"] == "her-own-token"
+
+    def test_huggingface_falls_back_to_the_server_token(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import sys
+        import types
+
+        captured: dict[str, object] = {}
+
+        class _Api:
+            def __init__(self, token: str | None = None) -> None:
+                captured["token"] = token
+
+            def create_repo(self, **_kwargs: object) -> None: ...
+            def upload_file(self, **_kwargs: object) -> None: ...
+            def upload_folder(self, **_kwargs: object) -> None: ...
+
+        module = types.ModuleType("huggingface_hub")
+        module.HfApi = _Api  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "huggingface_hub", module)
+        monkeypatch.setenv("HF_TOKEN", "server-token")
+
+        from kpubdata_builder.publishers.huggingface import HuggingFacePublisher
+
+        HuggingFacePublisher().publish((), destination="kpubdata/x")
+
+        assert captured["token"] == "server-token"
+
+    def test_huggingface_refuses_when_no_token_exists_anywhere(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import sys
+        import types
+
+        module = types.ModuleType("huggingface_hub")
+        module.HfApi = object  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "huggingface_hub", module)
+        monkeypatch.delenv("HF_TOKEN", raising=False)
+
+        from kpubdata_builder.publishers.huggingface import HuggingFacePublisher
+
+        with pytest.raises(RuntimeError, match="No Hugging Face API token"):
+            HuggingFacePublisher().publish((), destination="kpubdata/x")
