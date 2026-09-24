@@ -1206,7 +1206,9 @@ class TestReceiptReconcile:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         service = self._unknown_receipt_service(tmp_path, monkeypatch, "run-exists")
-        monkeypatch.setattr(service, "_probe_remote_publish_target", lambda *_args: True)
+        monkeypatch.setattr(
+            service._publish_api, "_probe_remote_publish_target", lambda *_args: True
+        )
 
         resp = dispatch(
             service,
@@ -1229,7 +1231,9 @@ class TestReceiptReconcile:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         service = self._unknown_receipt_service(tmp_path, monkeypatch, "run-absent")
-        monkeypatch.setattr(service, "_probe_remote_publish_target", lambda *_args: False)
+        monkeypatch.setattr(
+            service._publish_api, "_probe_remote_publish_target", lambda *_args: False
+        )
 
         resp = dispatch(
             service,
@@ -1252,7 +1256,9 @@ class TestReceiptReconcile:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         service = self._unknown_receipt_service(tmp_path, monkeypatch, "run-probe-down")
-        monkeypatch.setattr(service, "_probe_remote_publish_target", lambda *_args: None)
+        monkeypatch.setattr(
+            service._publish_api, "_probe_remote_publish_target", lambda *_args: None
+        )
 
         resp = dispatch(
             service,
@@ -1278,7 +1284,7 @@ class TestReceiptReconcile:
         assert _publish(service, "run-done").status_code == 200
         probes: list[tuple[str, str]] = []
         monkeypatch.setattr(
-            service,
+            service._publish_api,
             "_probe_remote_publish_target",
             lambda target, destination: probes.append((target, destination)),
         )
@@ -1412,7 +1418,9 @@ class TestReceiptReconcile:
     def test_reconcile_succeeded_records_owner_run_audit(self, tmp_path, monkeypatch):
         """reconcile 성공 감사 행도 owner/run을 스스로 들고 있다 (#563)."""
         service = self._unknown_receipt_service(tmp_path, monkeypatch, "run-rec-audit")
-        monkeypatch.setattr(service, "_probe_remote_publish_target", lambda *_args: True)
+        monkeypatch.setattr(
+            service._publish_api, "_probe_remote_publish_target", lambda *_args: True
+        )
         resp = dispatch(
             service,
             "POST",
@@ -1541,7 +1549,9 @@ class TestRemotePublishProbe:
         service = _service(tmp_path)
         calls = self._install_fake_hub(monkeypatch, object())
 
-        result = service._probe_remote_publish_target("huggingface", "kpubdata/air-quality")
+        result = service._publish_api._probe_remote_publish_target(
+            "huggingface", "kpubdata/air-quality"
+        )
 
         assert result is True
         # dataset_info는 이미 dataset 전용이라 repo_type을 받지 않는다.
@@ -1559,7 +1569,10 @@ class TestRemotePublishProbe:
         service = _service(tmp_path)
         self._install_fake_hub(monkeypatch, _raise)
 
-        assert service._probe_remote_publish_target("huggingface", "kpubdata/missing") is False
+        assert (
+            service._publish_api._probe_remote_publish_target("huggingface", "kpubdata/missing")
+            is False
+        )
 
     def test_probe_is_inconclusive_without_a_token(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1568,7 +1581,9 @@ class TestRemotePublishProbe:
         self._install_fake_hub(monkeypatch, object())
         monkeypatch.setenv("HF_TOKEN", "")
 
-        assert service._probe_remote_publish_target("huggingface", "kpubdata/x") is None
+        assert (
+            service._publish_api._probe_remote_publish_target("huggingface", "kpubdata/x") is None
+        )
 
     def test_a_signature_mismatch_is_not_reported_as_an_unreachable_remote(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1582,7 +1597,7 @@ class TestRemotePublishProbe:
         self._install_fake_hub(monkeypatch, _raise)
 
         with pytest.raises(TypeError):
-            service._probe_remote_publish_target("huggingface", "kpubdata/x")
+            service._publish_api._probe_remote_publish_target("huggingface", "kpubdata/x")
 
 
 class TestCancelledRunIsNotPublishable:
