@@ -13,12 +13,19 @@ provider credential 은 이미 principal 별 저장소를 갖고 있는데(ADR 0
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Mapping
 
 from kpubdata_builder.credentials.store import CredentialRepository
 
 __all__ = ["PUBLISH_CREDENTIAL_SLOTS", "resolve_publish_credentials"]
+
+logger = logging.getLogger(__name__)
+
+#: true 면 요청자에게 저장된 credential 이 없을 때 서버 환경변수로 내려가지
+#: 않는다. 기본은 미설정(= 폴백 허용) — 단일 사용자 배포를 깨지 않는다.
+_REQUIRE_OWN_CREDENTIAL_ENV = "KPUBDATA_BUILDER_REQUIRE_OWN_PUBLISH_CREDENTIAL"
 
 #: target 별로 필요한 환경변수 이름과, 그 값을 저장하는 credential slot.
 #:
@@ -32,7 +39,14 @@ PUBLISH_CREDENTIAL_SLOTS: Mapping[str, tuple[str, ...]] = {
 
 
 def _slot(target: str, variable: str) -> str:
-    return f"publish:{target}:{variable}"
+    """credential slot 이름. ``normalize_provider`` 를 통과해야 한다.
+
+    저장소가 provider key 를 ``^[a-z0-9][a-z0-9_-]{0,63}$`` 로 검증하므로 콜론을
+    쓸 수 없다. 처음에 ``publish:huggingface:HF_TOKEN`` 으로 만들었다가 실제
+    SQLite 저장소에서 ValueError 가 났다 — 가짜 repository 로만 테스트해서
+    놓쳤다. 하이픈으로 구분하고 소문자로 눕힌다.
+    """
+    return f"publish-{target}-{variable}".lower().replace("_", "-")
 
 
 def resolve_publish_credentials(
@@ -57,11 +71,30 @@ def resolve_publish_credentials(
     stored: dict[str, str] = {}
     if repository is not None and owner_id is not None:
         for variable in variables:
-            value = repository.get_secret(owner_id, _slot(target, variable))
+            # 저장소 조회 실패(키 형식, 복호화, 백엔드 장애)를 게시 실패로
+            # 흘리지 않는다 — 저장된 credential 이 없는 것과 같게 다루고 서버
+            # 폴백으로 내려간다. 다만 조용히 넘기지는 않는다.
+            try:
+                value = repository.get_secret(owner_id, _slot(target, variable))
+            except Exception:
+                logger.warning(
+                    "could not read the stored %s publish credential for this principal; "
+                    "falling back to the server environment",
+                    target,
+                    exc_info=True,
+                )
+                stored = {}
+                break
             if value:
                 stored[variable] = value
     if stored:
         return stored
+
+    if not _server_fallback_allowed():
+        # 서버 토큰 폴백을 닫으면, credential 을 저장하지 않은 principal 은
+        # 게시할 수 없다. 다중 사용자 배포가 "아무나 서버 소유자 계정으로 게시"
+        # 를 끝내려면 이 스위치가 필요하다 (#635).
+        return {}
 
     resolved: dict[str, str] = {}
     for variable in variables:
@@ -69,3 +102,13 @@ def resolve_publish_credentials(
         if value:
             resolved[variable] = value
     return resolved
+
+
+def _server_fallback_allowed() -> bool:
+    """저장된 credential 이 없을 때 서버 환경변수로 내려가도 되는지.
+
+    기본은 허용이다 — 단일 사용자 배포에서 전역 토큰 하나는 정상 구성이고,
+    기본값을 뒤집으면 그 배포가 조용히 게시를 멈춘다. 다중 사용자 배포는
+    ``KPUBDATA_BUILDER_REQUIRE_OWN_PUBLISH_CREDENTIAL=true`` 로 닫는다.
+    """
+    return os.environ.get(_REQUIRE_OWN_CREDENTIAL_ENV, "").lower() not in ("true", "1")

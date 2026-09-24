@@ -298,14 +298,15 @@ class PublishApiService:
                 )
             effective_destination = str(resolved_local[1])
         publish_kwargs: dict[str, object] = {"destination": effective_destination, **options}
-        # 요청자에게 저장된 publish credential 이 있으면 그것으로 게시한다 (#635).
-        # 없으면 resolve 가 서버 환경변수로 내려가므로 기존 배포는 그대로다.
-        credentials = resolve_publish_credentials(
-            self._credential_repository, principal.owner_id, resolved_target
-        )
-        if credentials:
-            publish_kwargs["credentials"] = credentials
         try:
+            # credential 해석은 try 안에 둔다. 밖에 두면 저장소가 던지는 어떤
+            # 예외든 그대로 올라가 500 이 되고, 아래의 "원격 응답/경로가 섞인
+            # 예외 메시지를 client 에 보내지 않는다" 규칙도 우회한다 (#635).
+            credentials = resolve_publish_credentials(
+                self._credential_repository, principal.owner_id, resolved_target
+            )
+            if credentials:
+                publish_kwargs["credentials"] = credentials
             result = publisher.publish(readiness.artifacts.paths, **publish_kwargs)  # type: ignore[arg-type]
         except Exception as exc:
             # Publisher가 던지는 예외(PublishError, credential/dependency
