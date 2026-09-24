@@ -152,6 +152,66 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run workspace root directory (default: build).",
     )
 
+    # -- Agent pipeline commands --
+
+    discover_cmd = subparsers.add_parser(
+        "discover",
+        help="Discover API metadata from a data.go.kr URL.",
+    )
+    discover_cmd.add_argument(
+        "url",
+        help="data.go.kr API detail page URL.",
+    )
+    discover_cmd.add_argument(
+        "--dataset-id",
+        default=None,
+        help="Override the generated dataset ID (e.g. datago.ocean_buoy).",
+    )
+    discover_cmd.add_argument(
+        "--output",
+        default=None,
+        help="Write generated spec YAML to this file path.",
+    )
+
+    monitor_cmd = subparsers.add_parser(
+        "monitor",
+        help="Check pending dataset applications for approval.",
+    )
+    monitor_cmd.add_argument(
+        "--state-file",
+        default=".kpubdata-monitor.yaml",
+        help="Path to monitor state file (default: .kpubdata-monitor.yaml).",
+    )
+    monitor_cmd.add_argument(
+        "--add",
+        default=None,
+        help="Add a dataset ID to the pending list.",
+    )
+    monitor_cmd.add_argument(
+        "--check",
+        action="store_true",
+        help="Check all pending datasets for approval status.",
+    )
+
+    pipeline_cmd = subparsers.add_parser(
+        "pipeline",
+        help="Run automated onboarding pipeline for a dataset.",
+    )
+    pipeline_cmd.add_argument(
+        "dataset",
+        help="Dataset ID to process (e.g. datago.ocean_buoy).",
+    )
+    pipeline_cmd.add_argument(
+        "--kpubdata-root",
+        default=None,
+        help="Path to kpubdata repository root (default: auto-detect).",
+    )
+    pipeline_cmd.add_argument(
+        "--skip-pr",
+        action="store_true",
+        help="Stop after verification, do not create a PR.",
+    )
+
     verify_cmd = subparsers.add_parser(
         "verify",
         help="Verify dataset specs against live APIs.",
@@ -531,6 +591,125 @@ def _run_prune_cancelled(*, output_dir: str, ttl_hours: float | None, apply: boo
     return 0
 
 
+def _run_discover(url: str, *, dataset_id: str | None, output: str | None) -> int:
+    """Discover API metadata from a data.go.kr URL."""
+    from .agent.discover import discover_from_url
+
+    try:
+        result = discover_from_url(url)
+    except Exception as exc:
+        print(f"error: discovery failed: {exc}", file=sys.stderr)
+        return 1
+
+    if dataset_id:
+        result.dataset_id = dataset_id
+
+    print(f"Discovered: {result.title}")
+    print(f"  Endpoint: {result.base_url}/{result.operation}")
+    print(f"  Params:   {[p.name for p in result.params]}")
+    print()
+
+    spec_yaml = result.to_spec_yaml()
+
+    if output:
+        out_path = Path(output)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(spec_yaml)
+        print(f"Spec written to {out_path}")
+    else:
+        print(spec_yaml)
+
+    return 0
+
+
+def _run_monitor(*, state_file: str, add: str | None, check: bool) -> int:
+    """Manage and check pending dataset applications."""
+    from .agent.monitor import MonitorState, check_approval
+
+    state_path = Path(state_file)
+    state = MonitorState.load(state_path)
+
+    if add:
+        state.add(add)
+        state.save(state_path)
+        print(f"Added {add} to pending list")
+        return 0
+
+    if check:
+        if not state.pending:
+            print("No pending datasets")
+            return 0
+
+        print(f"Checking {len(state.pending)} pending dataset(s)...\n")
+        changed = False
+        for p in list(state.pending):
+            status = check_approval(p.dataset_id)
+            old_status = p.status
+            p.status = status
+            p.last_checked = (
+                __import__("datetime")
+                .datetime.now(__import__("datetime").timezone.utc)
+                .strftime("%Y-%m-%dT%H:%M:%SZ")
+            )
+
+            icon = "APPROVED" if status == "HEALTHY" else status
+            print(f"  {p.dataset_id:40s} {old_status} -> {icon}")
+            if status != old_status:
+                changed = True
+
+        if changed:
+            state.save(state_path)
+            print(f"\nState updated: {state_path}")
+        return 0
+
+    # Default: list pending
+    if not state.pending:
+        print("No pending datasets")
+    else:
+        print(f"Pending datasets ({len(state.pending)}):\n")
+        for p in state.pending:
+            print(f"  {p.dataset_id:40s} {p.status}")
+    return 0
+
+
+def _run_pipeline(
+    dataset: str,
+    *,
+    kpubdata_root: str | None,
+    skip_pr: bool,
+) -> int:
+    """Run the automated onboarding pipeline for a dataset."""
+    from .agent.pipeline import run_pipeline
+
+    root = Path(kpubdata_root) if kpubdata_root else _find_kpubdata_root()
+    if root is None:
+        print("error: cannot find kpubdata root. Use --kpubdata-root.", file=sys.stderr)
+        return 1
+
+    print(f"Running pipeline for {dataset} (root: {root})\n")
+    result = run_pipeline(dataset, kpubdata_root=root, skip_pr=skip_pr)
+
+    print(f"  Step reached: {result.step_reached}")
+    print(f"  Success:      {result.success}")
+    if result.detail:
+        print(f"  Detail:       {result.detail}")
+    if result.pr_url:
+        print(f"  PR:           {result.pr_url}")
+
+    return 0 if result.success else 1
+
+
+def _find_kpubdata_root() -> Path | None:
+    """Try to find the kpubdata repo root relative to this package."""
+    # Common layout: kpubdata-builder and kpubdata are siblings
+    builder_root = Path(__file__).resolve().parents[2]
+    candidate = builder_root.parent / "kpubdata"
+    if (candidate / "src" / "kpubdata").is_dir():
+        return candidate
+    return None
+
+
 def _positive_int(value: str) -> int:
     """argparse type for options that must be a positive count."""
     try:
@@ -696,6 +875,20 @@ def dispatch(args: argparse.Namespace) -> int:
             output_dir=args.output_dir,
             ttl_hours=args.ttl_hours,
             apply=args.apply,
+        )
+    if command == "discover":
+        return _run_discover(args.url, dataset_id=args.dataset_id, output=args.output)
+    if command == "monitor":
+        return _run_monitor(
+            state_file=args.state_file,
+            add=args.add,
+            check=args.check,
+        )
+    if command == "pipeline":
+        return _run_pipeline(
+            args.dataset,
+            kpubdata_root=args.kpubdata_root,
+            skip_pr=args.skip_pr,
         )
     # 일반적인 CLI 경로로는 도달할 수 없지만(argparse가 알 수 없는 하위 명령을 거부함),
     # 프로그래밍 방식 호출자를 위한 방어적 대체 경로로 유지한다.
