@@ -1,9 +1,33 @@
 # ADR 0017 — 풀스택 배포 토폴로지: OCI 단일 VM(Builder) + Cloudflare Pages(Studio)
 
-- 상태: 제안됨(Proposed)
+- 상태: 제안됨(Proposed) — **ADR 0016 수용 이후 범위 축소됨**
 - 관련 이슈: —
-- 관련 문서: [ADR 0006 — 서비스 인증 & 배포(Docker)](./0006-service-auth-and-deployment.md), [ADR 0010 — ArtifactStore 상태 백엔드](./0010-artifactstore-state-backend.md), [배포 가이드](../deploy.md), [BOUNDARY.md](../BOUNDARY.md)
+- 관련 문서: [ADR 0006 — 서비스 인증 & 배포(Docker)](./0006-service-auth-and-deployment.md), [ADR 0010 — ArtifactStore 상태 백엔드](./0010-artifactstore-state-backend.md), [ADR 0016 — CUBRID 상태 백엔드](./0016-cubrid-state-backend.md), [배포 가이드](../deploy.md), [BOUNDARY.md](../BOUNDARY.md)
 - 참고: `our-tax` [ADR-0005 OCI Split-Topology](https://github.com/kpubdata-lab/our-tax/blob/main/docs/adr/0005-oci-split-topology.md)
+
+> ## ⚠️ ADR 0016과의 관계 (2026-09-24 정정)
+>
+> 이 ADR의 초안은 "Builder는 외부 데이터베이스가 필요 없다"를 전제로 쓰였고,
+> 상태 영속화 대안 중 **외부 RDBMS(CUBRID/Postgres)를 명시적으로 기각**했다.
+> 그 사이 [ADR 0016](./0016-cubrid-state-backend.md)이 **수용됨** 상태로 머지되어
+> CUBRID를 상태 백엔드이자 manifest 정본으로 확정했다. 두 문서가 정면으로
+> 충돌한 채 2일 간격으로 main에 들어갔다.
+>
+> **정정.** 상태 영속화에 관한 한 **ADR 0016이 이긴다.** 이 ADR은 그 결정을
+> 뒤집지 않으며, 아래 "상태 영속화" 절의 기각 판정은 **무효**다.
+>
+> 이 ADR에서 살아 있는 것은 **배포 토폴로지**뿐이다 — 단일 app VM, Cloudflare
+> Pages 정적 프론트엔드, Caddy 단일 공개 진입, `/data` 영속 볼륨, SSH 기반 CD.
+> 이 토폴로지는 두 백엔드 프로파일 모두에 적용된다.
+>
+> | 프로파일 | 상태 백엔드 | compose |
+> |---|---|---|
+> | `sqlite` (기본) | `/data` 매니페스트 + 파생 SQLite 인덱스 | `docker-compose.prod.app.yml` |
+> | `cubrid` (ADR 0016) | CUBRID(manifest 정본) + `/data` 아티팩트 | `infra/oci/docker-compose.yml` |
+>
+> 즉 이 ADR은 **"ADR 0016 위의 SQLite 프로파일 + 공통 배포 토폴로지"**로 읽는다.
+> CUBRID 프로파일을 쓰는 배포는 DB 호스팅(동일 VM 컨테이너 vs 별도 `db-01`)을
+> 따로 정해야 하며, 그 결정은 아직 어느 ADR에도 없다 — 후속 ADR이 필요하다.
 
 ## 결정 (제안됨)
 
@@ -11,7 +35,8 @@ KPubData 풀스택(Builder 백엔드 + Studio 프론트엔드)을 프로덕션�
 
 1. **Studio(프론트엔드)** → **Cloudflare Pages** 정적 배포. `our-tax` 프론트엔드와 동일한 패턴. 브라우저에서 `VITE_BUILDER_API_URL`로 OCI의 Builder 백엔드를 직접 호출한다.
 2. **Builder(백엔드)** → **OCI 단일 VM(`app-01`)** 위 Docker 컨테이너. GHCR 이미지 + Caddy 리버스 프록시 + 영속 `/data` 볼륨.
-3. **별도 DB 서버(db-01)는 두지 않는다.** `our-tax`가 CUBRID 전용 `db-01`을 분리한 것과 달리, Builder는 **외부 데이터베이스 서버가 필요 없다**(아래 "배경" 참조). 상태는 `/data` 볼륨 내부의 파일(매니페스트 + 파생 SQLite 인덱스)로 충분하다.
+3. **`sqlite` 프로파일에서는 별도 DB 서버(db-01)를 두지 않는다.** (CUBRID
+   프로파일은 ADR 0016을 따르며, DB 호스팅 형태는 후속 ADR에서 정한다.) `our-tax`가 CUBRID 전용 `db-01`을 분리한 것과 달리, Builder는 **외부 데이터베이스 서버가 필요 없다**(아래 "배경" 참조). 상태는 `/data` 볼륨 내부의 파일(매니페스트 + 파생 SQLite 인덱스)로 충분하다.
 4. **CI/CD**는 GitHub Actions → GHCR 이미지 빌드 → SSH 배포(pull → rollout → health check). `our-tax` `deploy.yml`에서 **db-01 배포 job과 Alembic migration job, CUBRID 관련 secret을 제거**한 단순화된 형태를 사용한다.
 
 > 근거: Builder는 상태를 외부 RDBMS가 아니라 **파일시스템(매니페스트가 source of truth, SQLite는 파생 캐시, 빌드 job 레지스트리는 in-memory)**로 관리한다(ADR 0003, 0010). 따라서 `our-tax`의 2-VM split-topology를 그대로 복제하면 필요 없는 DB VM과 migration 파이프라인을 짊어지게 된다. 최소 운영 부담 원칙에 따라 **단일 app VM + 영속 볼륨**으로 축소한다.
@@ -59,7 +84,11 @@ Builder의 영속성 모델(코드 확인 결과):
 ### 상태 영속화
 
 - **A. `/data` 파일 볼륨 (채택)**: 매니페스트 + 파생 SQLite. Builder 설계와 정합.
-- **B. 외부 RDBMS(CUBRID/Postgres) 도입**: Builder에 없는 의존성을 새로 만드는 것으로, "kpubdata 로직 중복 금지 / 결정적 동작 우선" 원칙과 상충. **기각**.
+- **B. 외부 RDBMS(CUBRID/Postgres) 도입**: ~~Builder에 없는 의존성을 새로 만드는 것으로, "kpubdata 로직 중복 금지 / 결정적 동작 우선" 원칙과 상충. **기각**.~~
+  **이 판정은 무효다.** [ADR 0016](./0016-cubrid-state-backend.md)이 조직 요구사항으로
+  CUBRID를 상태 백엔드이자 manifest 정본으로 확정했고(수용됨), 그 결정이 이
+  문서의 기각 판정보다 우선한다. 위 머리말 참조. 아래 A는 `sqlite` 프로파일에서만
+  기본이다.
 
 > **주의**: `/data`는 **로컬 블록 볼륨**이어야 한다. SQLite 파일을 네트워크 파일시스템(예: Azure Files/NFS)에 두면 파일 락 불안정이 발생한다(ADR 0010 §5, 배포 가이드 §6).
 

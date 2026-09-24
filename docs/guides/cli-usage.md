@@ -28,16 +28,27 @@ KPubData Builder command-line interface.
 
 positional arguments:
   command
-    validate  Validate a BuildSpec YAML file.
-    preview   Preview a BuildSpec: schema and sample rows without writing
-              artifacts.
-    build     Execute a BuildSpec through the Medallion pipeline.
-    publish   Publish build artifacts to a local or remote destination.
+    validate         Validate a BuildSpec YAML file.
+    preview          Preview a BuildSpec: schema and sample rows without
+                     writing artifacts.
+    build            Execute a BuildSpec through the Medallion pipeline.
+    publish          Publish build artifacts to a local or remote destination.
+    serve            Run the Builder HTTP service.
+    rebuild-index    Rebuild the build index from filesystem scans.
+    discover         Discover API metadata from a data.go.kr URL.
+    monitor          Check pending dataset applications for approval.
+    pipeline         Run automated onboarding pipeline for a dataset.
+    verify           Verify dataset specs against live APIs.
+    prune-cancelled  List (and optionally delete) cancelled partial-run
+                     artifacts past a TTL (#549).
 
 options:
   -h, --help  show this help message and exit
   --version   show program's version number and exit
 ```
+
+이 목록은 `tests/unit/test_cli_docs_contract.py` 가 실제 파서와 대조한다 — 서브커맨드가
+늘거나 줄면 이 문서가 낡았다는 사실이 테스트로 드러난다.
 
 ---
 
@@ -269,7 +280,12 @@ publish: dataset.seoul_apt_trade -> local
 
 ### 서비스 기동
 
-별도 CLI `serve` 명령은 없습니다. `BuilderService`와 `serve()`를 직접 임포트해 실행합니다.
+```console
+$ kpubdata-builder serve --output-dir build --host 127.0.0.1 --port 8000
+```
+
+라이브러리로 직접 기동할 수도 있습니다 — 커스텀 `client_factory` 를 주입하거나
+임베드해 실행할 때 쓰입니다.
 
 ```python
 # serve_dev.py  —  개발·로컬 테스트용 기동 스크립트 예시

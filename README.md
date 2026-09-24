@@ -107,6 +107,10 @@ build/{run_id}/
 | `KPUBDATA_BUILDER_CUBRID_URL` | CUBRID SQLAlchemy URL (예: `cubrid+pycubrid://user:pass@host:33000/db?charset=utf8`) | 미설정 | `STORAGE_BACKEND=cubrid` 시 필수 |
 | `KPUBDATA_BUILDER_CANCELLED_RUN_TTL_HOURS` | `prune-cancelled --apply`가 cancelled partial run을 정리하기까지의 보존 시간(시간). 미설정이면 정리 대상 없음(#549) | 미설정 | 선택 |
 | `KPUBDATA_BUILDER_LOCAL_PUBLISH_ROOT` | HTTP `local` publish target의 루트 디렉터리(절대 경로). destination은 이 안의 상대 `owner/name`로 한정된다(#550). 미설정이면 local target blocker | 미설정 | local publish 사용 시 필수 |
+| `KPUBDATA_BUILDER_MAX_UPLOAD_BYTES` | `POST /uploads`가 받는 최대 본문 크기(바이트). 초과분은 413 | 코드 기본값 | 선택 |
+| `KPUBDATA_BUILDER_URL_FETCH_MAX_BYTES` | `kind: url` source가 가져오는 최대 응답 크기(바이트). SSRF 방어의 일부(#498) | 코드 기본값 | 선택 |
+| `OIDC_JWKS_URL` | JWKS 엔드포인트를 직접 지정한다. 미설정 시 issuer의 discovery 문서에서 찾는다 | 미설정 | 선택 |
+| `OIDC_JWKS_TTL` | JWKS 캐시 수명(초). 만료되면 다음 Bearer 인증이 다시 가져온다 | `3600` | 선택 |
 
 > **fail-closed (ADR 0006)**: `KPUBDATA_BUILDER_API_KEY` 미설정 + `DEV_MODE` 미설정 → 모든 요청 401.
 > 로컬 개발에서 인증 없이 띄우려면 `KPUBDATA_BUILDER_DEV_MODE=1`을 명시하세요.

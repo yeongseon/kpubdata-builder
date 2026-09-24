@@ -14,14 +14,12 @@ import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
+# src/ 전체를 훑는다. 예전에는 파일 목록을 손으로 유지했는데, 그 목록 자체가
+# 드리프트했다 — uploads/store.py 와 ingestion/url_fetch.py 의 env var 가
+# 스캔되지 않아 README 와의 대조가 양방향 모두 거짓 통과했다. 이 테스트가 막으려던
+# 것이 정확히 그것이므로, 대상은 손으로 고르지 않는다.
 _CODE_ENV_SOURCES = [
-    _REPO_ROOT / "src" / "kpubdata_builder" / "service" / "app.py",
-    _REPO_ROOT / "src" / "kpubdata_builder" / "service" / "http.py",
-    _REPO_ROOT / "src" / "kpubdata_builder" / "service" / "auth.py",
-    _REPO_ROOT / "src" / "kpubdata_builder" / "service" / "auth_throttle.py",
-    _REPO_ROOT / "src" / "kpubdata_builder" / "cli.py",
-    # 상태 백엔드 env var(STORAGE_BACKEND/CUBRID_URL)의 정의처 (ADR 0016).
-    _REPO_ROOT / "src" / "kpubdata_builder" / "store" / "backend.py",
+    *sorted((_REPO_ROOT / "src" / "kpubdata_builder").rglob("*.py")),
     _REPO_ROOT / "docker-entrypoint.sh",
     _REPO_ROOT / "Dockerfile",
 ]

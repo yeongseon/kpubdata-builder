@@ -64,7 +64,9 @@ nav:
       - Provider Credential 경계: adrs/0012-provider-credential-boundary.md
       - API 계약 릴리스 정책: adrs/0013-api-contract-release-policy.md
       - Public API·File·URL Source 경계: adrs/0014-source-ingestion-file-url-boundary.md
+      - 이메일·비밀번호 / OIDC IdP(제안): adrs/0015-email-password-oidc-idp-keycloak.md
       - CUBRID 상태 백엔드: adrs/0016-cubrid-state-backend.md
+      - 풀스택 OCI 배포 토폴로지(제안): adrs/0017-fullstack-oci-deployment.md
 
 markdown_extensions:
   - admonition
