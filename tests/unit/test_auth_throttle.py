@@ -217,3 +217,111 @@ class TestHttpAuthThrottle:
         assert status == 429
         assert body["code"] == "auth_throttled"
         assert isinstance(body["retry_after_seconds"], int)
+
+
+class TestUnknownSigningKeyIsNotAnOutage:
+    """JWKS 에 없는 kid 는 잘못된 자격증명이지 인프라 장애가 아니다.
+
+    503 으로 돌려주면 두 가지가 동시에 깨진다. 스로틀은 503 을 세지 않으므로
+    (클라이언트 잘못이 아니라고 보기 때문이다) 무제한으로 시도할 수 있고,
+    PyJWKClient 는 캐시 미스마다 JWKS 를 새로 받으므로 임의의 kid 를 단 토큰을
+    반복해 보내면 **요청마다 IdP 로 아웃바운드 한 건**이 나간다.
+    """
+
+    def test_a_missing_signing_key_is_classified_as_a_bad_token(self) -> None:
+        from jwt import PyJWKClientError
+
+        from kpubdata_builder.service.auth import _is_unknown_signing_key
+
+        assert _is_unknown_signing_key(
+            PyJWKClientError('Unable to find a signing key that matches: "abc123"')
+        )
+
+    def test_an_unrecognised_jwks_failure_stays_an_outage(self) -> None:
+        from jwt import PyJWKClientError
+
+        from kpubdata_builder.service.auth import _is_unknown_signing_key
+
+        # 못 알아보면 기존처럼 503 — 안전한 쪽으로 진다.
+        assert not _is_unknown_signing_key(PyJWKClientError("Fail to fetch data from the url"))
+
+
+class TestApiKeyComparisonAcceptsNonAscii:
+    """비ASCII API 키 헤더가 500 이 되면 안 된다.
+
+    ``hmac.compare_digest`` 는 str 두 개일 때 ASCII 만 받는다. ``X-API-Key: clé``
+    하나가 TypeError 로 500 을 만들었고, 그 경로는 인증 실패로 기록되지도 않아
+    스로틀을 그냥 지나쳤다.
+    """
+
+    def test_a_non_ascii_key_is_an_ordinary_mismatch(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from kpubdata_builder.service.auth import AuthError, authenticate
+
+        monkeypatch.delenv("KPUBDATA_BUILDER_DEV_MODE", raising=False)
+        monkeypatch.setenv("KPUBDATA_BUILDER_API_KEY", "correct-key")
+
+        result = authenticate(api_key="clé", bearer_token=None)
+
+        assert isinstance(result, AuthError)
+        assert result.status_code == 401
+
+    def test_a_correct_non_ascii_key_still_authenticates(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from kpubdata_builder.service.auth import Principal, authenticate
+
+        monkeypatch.delenv("KPUBDATA_BUILDER_DEV_MODE", raising=False)
+        monkeypatch.setenv("KPUBDATA_BUILDER_API_KEY", "clé-secrète")
+
+        assert isinstance(authenticate(api_key="clé-secrète", bearer_token=None), Principal)
+
+
+class TestOpenSignupWithoutOwnershipWarns:
+    """두 기본값이 겹치면 사실상 무제한 접근이다 — 기동 로그에 남긴다."""
+
+    def test_the_combination_warns(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from kpubdata_builder.service.auth import validate_oidc_config
+
+        monkeypatch.setenv("OIDC_ISSUER", "https://accounts.google.com")
+        monkeypatch.setenv("OIDC_AUDIENCE", "client-id")
+        for name in ("OIDC_ALLOWED_HD", "OIDC_ALLOWED_SUBJECTS", "OIDC_ALLOWED_EMAILS"):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.delenv("ENFORCE_OWNERSHIP", raising=False)
+
+        with caplog.at_level("WARNING"):
+            validate_oidc_config()
+
+        assert any("signup is open" in r.message for r in caplog.records)
+
+    def test_an_allowlist_silences_the_warning(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from kpubdata_builder.service.auth import validate_oidc_config
+
+        monkeypatch.setenv("OIDC_ISSUER", "https://accounts.google.com")
+        monkeypatch.setenv("OIDC_AUDIENCE", "client-id")
+        monkeypatch.setenv("OIDC_ALLOWED_HD", "example.com")
+        monkeypatch.delenv("ENFORCE_OWNERSHIP", raising=False)
+
+        with caplog.at_level("WARNING"):
+            validate_oidc_config()
+
+        assert not any("signup is open" in r.message for r in caplog.records)
+
+    def test_enforced_ownership_silences_the_warning(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from kpubdata_builder.service.auth import validate_oidc_config
+
+        monkeypatch.setenv("OIDC_ISSUER", "https://accounts.google.com")
+        monkeypatch.setenv("OIDC_AUDIENCE", "client-id")
+        for name in ("OIDC_ALLOWED_HD", "OIDC_ALLOWED_SUBJECTS", "OIDC_ALLOWED_EMAILS"):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setenv("ENFORCE_OWNERSHIP", "true")
+
+        with caplog.at_level("WARNING"):
+            validate_oidc_config()
+
+        assert not any("signup is open" in r.message for r in caplog.records)
