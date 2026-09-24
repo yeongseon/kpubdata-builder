@@ -38,15 +38,22 @@ class TestJsonSafe:
 
         assert json_safe(value) == {"rows": [{"d": "2026-01-01"}], "n": ["2.0"]}
 
+    def test_an_unserializable_value_is_left_for_json_dumps_to_reject(self) -> None:
+        # set을 리스트로 펴 주면 데이터가 조용히 바뀐다. 어떤 표현을 고를지는
+        # 계약이므로 이 계층이 말없이 정하지 않는다 — 그대로 TypeError가 나야 한다.
+        assert json_safe({"bad": {1, 2}}) == {"bad": {1, 2}}
+        with pytest.raises(TypeError):
+            json.dumps(json_safe({"bad": {1, 2}}))
+
     def test_plain_json_values_pass_through_unchanged(self) -> None:
         value = {"a": 1, "b": "x", "c": None, "d": True, "e": 1.5, "f": [1, 2]}
 
         assert json_safe(value) == value
 
-    def test_binary_is_refused_rather_than_guessed(self) -> None:
+    def test_binary_is_left_for_json_dumps_to_reject(self) -> None:
         # 임의 인코딩을 고르는 것도 계약이다 — 여기서 조용히 정하지 않는다.
-        with pytest.raises(TypeError, match="binary values"):
-            json_safe(b"\x00\x01")
+        with pytest.raises(TypeError):
+            json.dumps(json_safe(b"\x00\x01"))
 
 
 class TestExportersHandleDeclaredDateCasts:

@@ -1,13 +1,15 @@
 """Export 공용 JSON 안전 변환 (#629 후속).
 
-Gold 테이블은 Polars에서 오므로 ``date``/``datetime``/``time``/``Decimal`` 같은
-파이썬 객체가 레코드에 그대로 담긴다. ``json.dumps``는 이들을 직렬화하지 못해
+Gold 테이블은 Polars에서 오므로 ``date``/``datetime``/``Decimal`` 같은 파이썬
+객체가 레코드에 그대로 담긴다. ``json.dumps``는 이들을 직렬화하지 못해
 ``TypeError``를 던지는데, 그 예외는 서비스 경계에서 마스킹되기 때문에 사용자는
 ``casts: {deal_date: date}``를 선언했다는 이유만으로 원인을 알 수 없는 빌드
 실패를 본다.
 
-exporter마다 따로 처리하면 같은 선언이 포맷에 따라 다르게 실패한다. 변환 규칙을
-한 곳에 둔다.
+**표준 표현이 하나뿐인 타입만 바꾼다.** 임의의 객체를 ``str()``로 떨어뜨리거나
+``set``을 리스트로 펴는 것은 데이터를 조용히 바꾸는 일이다 — 그런 값은 그대로
+``json.dumps``에 도달해 ``TypeError``로 실패해야 한다. 어떤 표현을 고를지는
+계약이고, 이 계층이 말없이 정할 것이 아니다.
 """
 
 from __future__ import annotations
@@ -20,29 +22,25 @@ __all__ = ["json_safe"]
 
 
 def json_safe(value: Any) -> Any:
-    """JSON으로 직렬화 가능한 값으로 바꾼다 — 구조는 그대로 둔다.
+    """무손실 표준 표현이 있는 값만 JSON 호환 값으로 바꾼다.
 
-    날짜/시각은 ISO-8601로, ``Decimal``은 정보 손실이 없는 문자열로 옮긴다.
-    ``float``로 바꾸면 소수 자릿수가 조용히 달라진다 — 금액 컬럼에서 그것은
-    데이터 변경이다.
+    날짜/시각은 ISO-8601로, ``Decimal``은 문자열로 옮긴다. ``float``로 바꾸면
+    소수 자릿수가 조용히 달라진다 — 금액 컬럼에서 그것은 데이터 변경이다.
+
+    그 밖의 타입은 **손대지 않고 그대로 돌려준다.** 직렬화 가능 여부의 판정은
+    ``json.dumps``가 하고, 불가능하면 ``TypeError``로 드러난다.
     """
-    if value is None or isinstance(value, (str, bool, int, float)):
+    if isinstance(value, bool):
         return value
     if isinstance(value, (_dt.datetime, _dt.date, _dt.time)):
         return value.isoformat()
-    if isinstance(value, _dt.timedelta):
-        return value.total_seconds()
     if isinstance(value, Decimal):
         return str(value)
-    if isinstance(value, (bytes, bytearray)):
-        # 바이너리를 임의 인코딩으로 문자열화하면 원문이 바뀐다. base64 같은
-        # 표현을 고르는 것도 계약이므로, 여기서 조용히 정하지 않는다.
-        raise TypeError(
-            "binary values cannot be exported to a text format; "
-            "declare a cast that turns this column into text first"
-        )
     if isinstance(value, dict):
-        return {str(key): json_safe(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple, set, frozenset)):
+        return {key: json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
         return [json_safe(item) for item in value]
-    return str(value)
+    if isinstance(value, tuple):
+        # tuple은 json.dumps가 배열로 직렬화하는 기존 동작을 유지한다.
+        return [json_safe(item) for item in value]
+    return value
