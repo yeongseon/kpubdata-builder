@@ -13,7 +13,6 @@ Studio 같은 외부 UI가 Builder를 호출할 수 있도록 validate/preview/b
 
 from __future__ import annotations
 
-import heapq
 import inspect
 import json
 import logging
@@ -24,7 +23,7 @@ from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol, cast, runtime_checkable
-from urllib.parse import unquote, urlsplit
+from urllib.parse import urlsplit
 
 import yaml
 from kpubdata.core.models import DatasetRef
@@ -37,7 +36,6 @@ from ..credentials import (
 )
 from ..errors import SpecLoadError, ValidationError
 from ..events import BuildEvent, BuildEventStore
-from ..manifest import status_from_manifest
 from ..pipeline import (
     DEFAULT_PREVIEW_SEED,
     CancellationProbe,
@@ -48,9 +46,8 @@ from ..pipeline import (
 from ..quality import QualityCheckResult
 from ..query.service import QueryService
 from ..spec import BuildSpec, JsonValue, parse_spec
-from ..spec.serializer import BUILDSPEC_SNAPSHOT_FILENAME, compute_spec_digest
 from ..spec.validator import validate_spec
-from ..stages._path_safety import ensure_within, validate_path_segment
+from ..stages._path_safety import validate_path_segment
 from ..stages.bronze.build import SourceClient
 from ..store import make_build_index
 from ..store.artifacts import make_artifact_store
@@ -62,13 +59,13 @@ from ..uploads import (
     resolve_max_upload_bytes,
 )
 from . import datasets as datasets_service
-from . import events as events_service
 from . import monitoring as monitoring_service
 from . import ownership as ownership_module
 from . import publish as publish_service
 from . import stages as stages_service
 from .auth import AuthError, Principal, authenticate
 from .auth_throttle import AuthFailureThrottle
+from .builds_api import BuildArtifactsApiService
 from .datasets_api import DatasetsApiService
 from .jobs import AsyncBuildExecutor, generate_run_id
 from .providers import (
@@ -299,42 +296,6 @@ def _enforce_ownership() -> bool:
 _BuildListEntry = dict[str, str | None]
 
 
-def _apply_ownership(
-    entries: list[_BuildListEntry], principal: Principal | None
-) -> list[_BuildListEntry]:
-    """list_builds 응답에서 본인 소유 run만 남긴다 (#433, #505).
-
-    ENFORCE_OWNERSHIP+oidc principal일 때만 필터링. dev/service principal과
-    principal=None은 통과 (관리자 권한 + 하위 호환). 인덱스 분기와 파일시스템
-    폴백 양쪽에서 공통으로 적용해 폴백 경로가 필터를 우회하지 않게 한다.
-
-    각 entry는 판정용으로 내부 전용 "owner_id" 키를 담고 있어야 한다 — 응답
-    직전에 ``_strip_internal_fields``로 제거되므로 wire 응답 shape는 바뀌지
-    않는다.
-    """
-    if not (_enforce_ownership() and principal and principal.kind == "oidc"):
-        return entries
-    return [
-        e
-        for e in entries
-        if ownership_module.ownership_allows(
-            created_by=e.get("created_by"),
-            owner_id=e.get("owner_id"),
-            principal=principal,
-            enforce=True,
-        )
-    ]
-
-
-def _strip_internal_fields(entries: list[_BuildListEntry]) -> list[_BuildListEntry]:
-    """ownership 판정에만 쓰인 내부 전용 필드를 응답 직전에 제거한다 (#505).
-
-    ``owner_id``는 canonical hash일 뿐 클라이언트에 의미가 없고, 이를 노출하면
-    ``/builds`` 응답 wire shape가 바뀐다 — 계약 변경 없이 내부적으로만 쓴다.
-    """
-    return [{k: v for k, v in e.items() if k != "owner_id"} for e in entries]
-
-
 # Builder API 계약 버전. contract/builder-api.yaml의 info.version과 일치해야 하며
 # (test_service_contract가 강제), 응답에 실어 Studio 같은 소비자가 하위 호환을
 # 협상할 수 있게 한다 (#209).
@@ -554,6 +515,13 @@ class BuilderService:
         self._query_api = QueryApiService(output_root=self._output_root, engine=self._query_service)
         self._datasets_api = DatasetsApiService(
             output_root=self._output_root, build_index=self._build_index, store=self._store
+        )
+        self._builds_api = BuildArtifactsApiService(
+            output_root=self._output_root,
+            store=self._store,
+            build_index=self._build_index,
+            # 지연 생성을 유지하려고 값이 아니라 접근자를 넘긴다 (#496).
+            event_store=lambda: self._event_store,
         )
         self._quality_api = QualityApiService(
             output_root=self._output_root, store=self._store, datasets=self._datasets_api
@@ -1274,210 +1242,37 @@ class BuilderService:
             cancellation=cancellation,
         )
 
+    # --- build 산출물 조회 (#637) -------------------------------------------
+    #
+    # artifacts/manifest/spec/파일 서빙/build 목록/event timeline 은
+    # BuildArtifactsApiService 가 들고 있다. 빌드를 실행하는 쪽은 여기 남는다 —
+    # 그쪽은 의존성이 열한 가지라 지금 떼면 경계가 좁아지지 않는다.
+
     def artifacts(self, run_id: str) -> ServiceResponse:
-        """실행 워크스페이스의 산출물 파일 목록을 반환한다."""
-        try:
-            validate_path_segment(run_id, field_name="run_id")
-        except ValueError as exc:
-            return ServiceResponse(400, {"error": str(exc)})
-
-        run_dir = self._output_root / run_id
-        ensure_within(self._output_root, run_dir, label="run directory")
-        if not run_dir.exists():
-            return ServiceResponse(404, {"error": f"run not found: {run_id}"})
-
-        # wire에는 항상 run 디렉터리 기준 POSIX 상대 경로만 노출한다 — output_root 절대
-        # 경로나 OS별 구분자를 드러내지 않는다. `serve_artifact_file`이 받는 canonical
-        # artifact identifier가 바로 이 값이다(클라이언트는 storage layout을 알 필요 없다).
-        files = sorted(
-            path.relative_to(run_dir).as_posix() for path in run_dir.rglob("*") if path.is_file()
-        )
-        return ServiceResponse(200, {"run_id": run_id, "files": list(files)})
+        """run의 산출물 목록을 조회한다."""
+        return self._builds_api.artifacts(run_id)
 
     def manifest(self, run_id: str) -> ServiceResponse:
-        """persisted manifest를 읽되 내부 ownership 필드는 wire에서 제거한다.
-
-        ``owner_id``는 디스크의 ``manifest.json``과 BuildIndex에만 저장되는 내부
-        식별자다(#505). OpenAPI ``BuildManifest``는 실제 HTTP 응답의 SSOT이므로
-        이 메서드에서 명시적으로 제거해 공개 API 필드가 되지 않게 한다.
-        """
-        try:
-            validate_path_segment(run_id, field_name="run_id")
-        except ValueError as exc:
-            return ServiceResponse(400, {"error": str(exc)})
-
-        # ADR 0016: manifest 정본은 store 를 통해 조회한다(cubrid=CUBRID 행 우선, FS 폴백;
-        # local=FS). get_manifest 는 경로 안전·손상·미존재를 모두 None 으로 합친다.
-        manifest = self._store.get_manifest(run_id)
-        if manifest is None:
-            return ServiceResponse(404, {"error": f"manifest not found: {run_id}"})
-        manifest.pop("owner_id", None)
-        return ServiceResponse(200, cast(dict[str, JsonValue], manifest))
+        """run의 manifest를 조회한다."""
+        return self._builds_api.manifest(run_id)
 
     def spec(self, run_id: str) -> ServiceResponse:
-        """run에서 실제 사용한 canonical BuildSpec snapshot과 digest를 반환한다."""
-        try:
-            validate_path_segment(run_id, field_name="run_id")
-        except ValueError as exc:
-            return ServiceResponse(400, {"error": str(exc)})
-
-        run_dir = self._output_root / run_id
-        ensure_within(self._output_root, run_dir, label="run directory")
-        if not run_dir.is_dir():
-            return ServiceResponse(404, {"error": f"run not found: {run_id}"})
-
-        snapshot_path = run_dir / BUILDSPEC_SNAPSHOT_FILENAME
-        ensure_within(run_dir, snapshot_path, label="BuildSpec snapshot")
-        if not snapshot_path.is_file():
-            return ServiceResponse(
-                404, {"error": f"BuildSpec snapshot unavailable for run: {run_id}"}
-            )
-        try:
-            payload = snapshot_path.read_bytes()
-            spec_text = payload.decode("utf-8")
-        except (OSError, UnicodeDecodeError) as exc:
-            return ServiceResponse(500, {"error": f"failed to read BuildSpec snapshot: {exc}"})
-        return ServiceResponse(
-            200,
-            {
-                "run_id": run_id,
-                "spec": spec_text,
-                "spec_digest": compute_spec_digest(payload),
-            },
-        )
+        """run의 BuildSpec 스냅샷을 조회한다 (#487)."""
+        return self._builds_api.spec(run_id)
 
     def serve_artifact_file(self, run_id: str, file_path: str) -> ServiceResponse | FileResponse:
-        """실행 워크스페이스의 특정 파일을 제공한다 (#323).
-
-        경로 트래버설 공격을 방지하기 위해 run_id와 file_path 모두
-        검증하며, 심볼릭 링크를 따르지 않는다.
-
-        매개변수:
-            run_id: 실행 식별자.
-            file_path: 요청된 파일 경로 (run_id 하위의 상대 경로).
-
-        반환값:
-            FileResponse (파일 발견 시) 또는 ServiceResponse (오류 시).
-        """
-        # run_id 검증
-        try:
-            validate_path_segment(run_id, field_name="run_id")
-        except ValueError as exc:
-            return ServiceResponse(400, {"error": str(exc)})
-
-        # run_dir 확인
-        run_dir = self._output_root / run_id
-        ensure_within(self._output_root, run_dir, label="run directory")
-        if not run_dir.exists():
-            return ServiceResponse(404, {"error": f"run not found: {run_id}"})
-
-        # file_path 검증 (경로 트래버설 방지).
-        #
-        # canonical artifact identifier는 `GET /artifacts/{run_id}`가 돌려주는 run
-        # 디렉터리 기준 POSIX 상대 경로(예: "silver/datago.air_quality/table.parquet")다.
-        # HTTP 라우트는 이 경로를 URL segment 사이의 "/"로만 넘기고 각 segment는 percent
-        # 인코딩될 수 있으므로(브라우저가 non-ASCII/특수문자를 %XX로 바꾼다), 먼저 한 번
-        # percent-decode한다. decode 후에는 반드시 다시 검증한다 — "%2e%2e"/"%2f"/"%5c"
-        # 같은 인코딩된 트래버설이 decode되어 성분 검사에 걸리고, 이중 인코딩("%252e")은
-        # decode 후에도 "%"가 남아 성분 규칙에서 거부된다.
-        decoded_path = unquote(file_path)
-        segments = decoded_path.replace("\\", "/").split("/")
-        if not decoded_path.strip() or any(seg in ("", ".", "..") for seg in segments):
-            return ServiceResponse(
-                400, {"error": f"file_path is not a safe relative path: {file_path!r}"}
-            )
-        try:
-            for segment in segments:
-                validate_path_segment(segment, field_name="file_path")
-        except ValueError as exc:
-            return ServiceResponse(400, {"error": str(exc)})
-
-        # 요청된 파일의 전체 경로 계산 (성분 검증을 통과한 상대 경로만 결합)
-        requested_file = run_dir.joinpath(*segments)
-        # 경로가 run_dir 내에 있는지 확인 (심볼릭 링크도 해석하여 안전 검사)
-        ensure_within(run_dir, requested_file, label="artifact file")
-
-        if not requested_file.exists():
-            return ServiceResponse(404, {"error": f"file not found: {file_path}"})
-        if not requested_file.is_file():
-            return ServiceResponse(400, {"error": f"not a file: {file_path}"})
-
-        # 파일명 추출 (Content-Disposition용)
-        filename = requested_file.name
-
-        return FileResponse(status_code=200, file_path=requested_file, filename=filename)
+        """run 워크스페이스 안의 산출물 파일 하나를 서빙한다."""
+        return self._builds_api.serve_artifact_file(run_id, file_path)
 
     def list_builds(
         self, *, limit: int = 50, principal: Principal | None = None
     ) -> ServiceResponse:
-        """실행 이력 목록을 최신 완료 시각 기준 내림차순 반환한다.
+        """접근 가능한 run 목록을 조회한다 (#433)."""
+        return self._builds_api.list_builds(limit=limit, principal=principal)
 
-        ADR 0003에 따라 SQLite 인덱스를 우선 조회하고, 인덱스가 없거나
-        비어있으면 파일시스템 스캔으로 폴백한다. ENFORCE_OWNERSHIP+oidc일 때는
-        두 경로 모두 _apply_ownership으로 본인 소유 run만 노출한다 (#433).
-        """
-        # 인덱스 우선 조회
-        try:
-            entries = self._build_index.list_builds(limit=limit)
-            if entries:
-                index_builds: list[_BuildListEntry] = [
-                    {
-                        "run_id": entry.run_id,
-                        "status": entry.status,
-                        "started_at": entry.started_at,
-                        "finished_at": entry.finished_at,
-                        "created_by": entry.created_by,
-                        "owner_id": entry.owner_id,
-                    }
-                    for entry in entries
-                ]
-                filtered = _strip_internal_fields(_apply_ownership(index_builds, principal))
-                return ServiceResponse(200, {"builds": cast(list[JsonValue], filtered)})
-        except Exception:
-            # 인덱스 조회 실패. ENFORCE_OWNERSHIP+oidc면 타인 run이 폴백으로
-            # 새어나갈 수 있으므로 fail-closed로 빈 배열을 반환한다 (#433).
-            # 일반 모드는 기존대로 파일시스템 폴백으로 진행한다 (ADR 0003).
-            if _enforce_ownership() and principal and principal.kind == "oidc":
-                logger.warning(
-                    "build index query failed; returning empty list "
-                    "(ownership enforced, fail-closed)",
-                    exc_info=True,
-                )
-                return ServiceResponse(200, {"builds": []})
-
-        # 폴백: 파일시스템 스캔
-        if not self._output_root.exists():
-            return ServiceResponse(200, {"builds": []})
-
-        candidates = heapq.nlargest(
-            limit,
-            (d for d in self._output_root.iterdir() if d.is_dir()),
-            key=lambda p: p.stat().st_mtime,
-        )
-        fs_builds: list[_BuildListEntry] = []
-        for run_dir in candidates:
-            manifest_path = run_dir / "manifest.json"
-            if not manifest_path.exists():
-                continue
-            try:
-                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
-                continue
-            fs_builds.append(
-                {
-                    "run_id": run_dir.name,
-                    # manifest.json이 정본이므로 파생 규칙은 한 곳에만 둔다
-                    # (#481) — cancelled run은 errors가 비어 있을 수 있어
-                    # 기존 "errors 유무" 파생만으로는 ok로 잘못 보고된다.
-                    "status": status_from_manifest(manifest),
-                    "started_at": manifest.get("started_at"),
-                    "finished_at": manifest.get("finished_at"),
-                    "created_by": manifest.get("created_by"),
-                    "owner_id": manifest.get("owner_id"),
-                }
-            )
-        filtered = _strip_internal_fields(_apply_ownership(fs_builds, principal))
-        return ServiceResponse(200, {"builds": cast(list[JsonValue], filtered)})
+    def get_build_events(self, run_id: str, *, limit: int, tail: bool) -> ServiceResponse:
+        """run의 append-only structured event timeline을 조회한다 (#496)."""
+        return self._builds_api.get_build_events(run_id, limit=limit, tail=tail)
 
     def _dataset_records(self, principal: Principal | None) -> list[datasets_service.RunRecord]:
         return self._datasets_api.dataset_records(principal)
@@ -1780,21 +1575,6 @@ class BuilderService:
         return self._publish_api.reset_publish_receipt(
             run_id, target, destination, principal=principal
         )
-
-    def get_build_events(self, run_id: str, *, limit: int, tail: bool) -> ServiceResponse:
-        """run의 append-only structured event timeline을 조회한다 (#496).
-
-        호출 전에 run_id 검증·존재 확인·ownership 게이팅이 끝나 있어야 한다
-        (``/builds/{run_id}/stages``와 동일하게 dispatch route adapter가 먼저
-        처리한다). 반환은 항상 chronological ascending이다 — ``tail=True``도
-        최신 ``limit``개를 고르되 정렬 자체는 뒤집지 않는다(#496 ordering 정책).
-        """
-        events = self._event_store.list_for_run(run_id, limit=limit, tail=tail)
-        body: dict[str, JsonValue] = {
-            "run_id": run_id,
-            "events": cast(JsonValue, [events_service.event_to_json(e) for e in events]),
-        }
-        return ServiceResponse(200, body)
 
     def _load_validated(self, spec_yaml: str) -> BuildSpec | ServiceResponse:
         """spec_yaml을 파싱·검증하고, 실패 시 오류 ServiceResponse를 반환한다."""
