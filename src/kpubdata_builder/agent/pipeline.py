@@ -40,6 +40,19 @@ def _run(
     )
 
 
+def _agent_output_paths(*, provider: str, key: str) -> tuple[str, ...]:
+    """이 파이프라인이 만드는 파일들. 이것만 커밋한다."""
+    return (
+        f"src/kpubdata/providers/{provider}/specs/{key}.yaml",
+        f"tests/fixtures/{provider}/{key}",
+    )
+
+
+def _is_agent_output(path: str, *, provider: str, key: str) -> bool:
+    prefixes = _agent_output_paths(provider=provider, key=key)
+    return any(path.startswith(prefix) for prefix in prefixes)
+
+
 def run_pipeline(
     dataset_id: str,
     *,
@@ -61,12 +74,16 @@ def run_pipeline(
         skip_pr: If True, stop before creating a PR
     """
     # Step 1: Check spec exists
+    # dataset_id 를 소스 문자열에 끼워 넣지 않는다. 따옴표 하나만 들어와도
+    # 임의 코드가 되고, 이 함수는 CLI 인자와 HTTP 경로에서 값을 받는다.
+    # argv 로 넘기면 문자열은 어디까지나 데이터다.
     result = _run(
         [
             sys.executable,
             "-c",
-            f"from kpubdata.core.spec import find_spec; "
-            f"s = find_spec('{dataset_id}'); assert s is not None",
+            "import sys; from kpubdata.core.spec import find_spec; "
+            "sys.exit(0 if find_spec(sys.argv[1]) is not None else 1)",
+            dataset_id,
         ],
     )
     if result.returncode != 0:
@@ -125,8 +142,29 @@ def run_pipeline(
     provider, key = dataset_id.split(".", 1)
     branch = f"agent/{dataset_id}"
 
+    # 더럽혀진 작업 트리 위에서 커밋하지 않는다. `git add -A` 로 남의 변경과
+    # 도구가 남긴 파일까지 함께 올린 적이 있다(kpubdata 저장소의 .omx/ 가 그렇게
+    # 들어갔다). 이 파이프라인이 만든 것만 올린다.
+    dirty = _run(["git", "status", "--porcelain"], cwd=kpubdata_root)
+    unrelated = [
+        line
+        for line in dirty.stdout.splitlines()
+        if line[3:] and not _is_agent_output(line[3:], provider=provider, key=key)
+    ]
+    if unrelated:
+        return PipelineResult(
+            dataset_id=dataset_id,
+            step_reached="commit",
+            success=False,
+            detail=(
+                "kpubdata working tree has unrelated changes; "
+                f"commit or stash them first ({len(unrelated)} path(s))"
+            ),
+        )
+
     _run(["git", "checkout", "-b", branch], cwd=kpubdata_root)
-    _run(["git", "add", "-A"], cwd=kpubdata_root)
+    for path in _agent_output_paths(provider=provider, key=key):
+        _run(["git", "add", "--", path], cwd=kpubdata_root)
     _run(
         ["git", "commit", "-m", f"feat({provider}): add {key} spec + fixtures (agent pipeline)"],
         cwd=kpubdata_root,
