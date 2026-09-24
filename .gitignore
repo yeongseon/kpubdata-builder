@@ -24,6 +24,10 @@ env/
 # Testing / Coverage
 .pytest_cache/
 .coverage
+# 병렬 모드(coverage -p / 다중 프로세스 --cov)는 .coverage.<host>.<pid>.<rand>
+# 로 쓴다. `.coverage` 만으로는 잡히지 않아 #600 에서 80 KiB SQLite 파일이
+# 루트에 커밋됐다 (#627).
+.coverage.*
 htmlcov/
 .mypy_cache/
 .ruff_cache/
@@ -42,3 +46,6 @@ site/
 
 # Agent tooling scratch (opencode/omo sessions, not source)
 .omc/
+# 개인 에이전트 설정. 기여자의 절대경로가 들어간다. 공유 설정(.claude/settings.json)
+# 과 스킬은 계속 추적할 수 있도록 이 파일만 무시한다 (#627).
+.claude/settings.local.json

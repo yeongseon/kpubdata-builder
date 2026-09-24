@@ -1,0 +1,83 @@
+name: Cross-repo contract
+
+# kpubdata `main`(릴리스 전 소스)에 대해 Builder 통합 테스트를 돌린다 —
+# yeongseon/kpubdata#282 1단계.
+#
+# 일반 CI(ci.yml)는 `--no-sources`로 **PyPI에 게시된** kpubdata를 설치한다. 그래서
+# kpubdata main에 들어간 변경(필드명/응답 파싱/Client API)은 다음 릴리스가 나오고
+# Builder가 핀을 올린 뒤에야 드러난다. 이 워크플로는 그 간격을 없앤다.
+#
+# 여기서만 kpubdata 레포의 `tests/fixtures`를 체크아웃해 `KPUBDATA_REPLAY_DIR`로
+# 넘긴다 — 그 디렉터리가 있을 때만 tests/integration/test_cross_repo_pipeline.py가
+# 실제 `kpubdata.Client`로 Bronze→Silver→Gold 전 구간을 태운다(네트워크·API 키 없음).
+#
+# PR마다 돌리지 않는 이유: upstream main이 깨졌을 때 Builder의 무관한 PR까지
+# 빨갛게 만들지 않기 위해서다. 대신 매일·수동·main push에서 돌리고, kpubdata 경계에
+# 직접 닿는 파일이 바뀐 PR에서만 함께 돌린다.
+
+on:
+  schedule:
+    # 매일 18:00 UTC (KST 03:00).
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "src/kpubdata_builder/stages/bronze/**"
+      - "src/kpubdata_builder/pipeline/**"
+      - "tests/integration/**"
+      - "pyproject.toml"
+      - ".github/workflows/cross-repo-contract.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cross-repo-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: kpubdata main ↔ Builder
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout builder
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Checkout kpubdata (main)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: yeongseon/kpubdata
+          ref: main
+          path: .kpubdata-src
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
+        with:
+          enable-cache: true
+
+      - name: Install dependencies (released kpubdata first)
+        run: uv sync --extra dev --no-sources
+
+      - name: Replace kpubdata with the checked-out main
+        run: |
+          uv pip install ./.kpubdata-src
+          uv run --no-sync python -c "import kpubdata, pathlib; print('kpubdata from', pathlib.Path(kpubdata.__file__).parent)"
+
+      - name: Record which kpubdata commit is under test
+        run: |
+          echo "kpubdata main = $(git -C .kpubdata-src rev-parse --short HEAD)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Integration tests against kpubdata main
+        env:
+          # replay fixture는 wheel에 포함되지 않아 레포 체크아웃에서만 온다.
+          KPUBDATA_MODE: replay
+          KPUBDATA_REPLAY_DIR: ${{ github.workspace }}/.kpubdata-src/tests/fixtures
+        run: uv run --no-sync pytest tests/integration -v
+
+      - name: Full suite against kpubdata main
+        env:
+          KPUBDATA_MODE: replay
+          KPUBDATA_REPLAY_DIR: ${{ github.workspace }}/.kpubdata-src/tests/fixtures
+        run: uv run --no-sync pytest -q

@@ -4,7 +4,7 @@ name: CI
 # 데이터셋 발행 워크플로(publish-dataset.yml)와 분리된, 코드 품질 전용 CI다 (#214).
 #
 # --no-sources: [tool.uv.sources]의 editable ../kpubdata 오버라이드를 무시하고
-# pyproject의 버전 핀(>=0.5.0,<0.6, #213)대로 PyPI에서 kpubdata를 해석한다.
+# pyproject의 버전 핀(>=0.6.0,<0.7, #575)대로 PyPI에서 kpubdata를 해석한다.
 
 on:
   pull_request:
@@ -27,9 +27,17 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Install uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
         with:
           enable-cache: true
+
+      # uv.lock 은 --no-sources 해상도(= CI 와 배포가 설치하는 것)를 기록한다.
+      # 그런데 문서가 안내하는 로컬 명령 `uv sync --extra dev` 는 sources 를 켜고
+      # 돌기 때문에 lock 의 kpubdata 를 registry -> editable "../kpubdata" 로
+      # 뒤집고 해시를 지운다. 그 상태가 커밋되면 CI 가 설치하는 것과 lock 이
+      # 서술하는 것이 갈리는데, 지금까지 그것을 잡는 검사가 없었다 (#625).
+      - name: Lockfile matches the published resolution
+        run: uv lock --check --no-sources
 
       - name: Install dependencies
         run: uv sync --extra dev --no-sources
@@ -55,7 +63,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Install uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
         with:
           enable-cache: true
 
@@ -65,8 +73,30 @@ jobs:
       - name: Run tests
         run: uv run --no-sources pytest
 
+  coverage:
+    # 커버리지 게이트 (#594). 지금 도달한 수준이 조용히 내려가지 않게 잠근다.
+    # 하한은 pyproject 의 [tool.coverage.report] fail_under 한 곳에서만 관리한다.
+    # 테스트 매트릭스에 --cov 를 얹지 않고 이 잡 하나만 계측하는 이유: 5개 잡 전부에
+    # 계측을 걸어도 얻는 정보는 같은데 비용만 5배다.
+    name: Coverage gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --extra dev --no-sources
+
+      - name: Run tests with coverage
+        run: uv run --no-sources pytest --cov --cov-report=term-missing
+
   min-deps:
-    # kpubdata 호환성 정책(#213): 선언된 하한(>=0.5.0)에서 테스트 스위트가
+    # kpubdata 호환성 정책(#213): 선언된 하한(>=0.6.0)에서 테스트 스위트가
     # 통과하는지 강제한다. 정상 해석 후 kpubdata를 하한으로 고정한다(전체
     # --resolution lowest-direct는 pyyaml 6.0이 빌드되지 않아 불가).
     # 하한은 pyproject에서 자동 추출하므로 핀 변경 시 이 잡을 수동 갱신할 필요가 없다.
@@ -77,7 +107,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Install uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
         with:
           enable-cache: true
 

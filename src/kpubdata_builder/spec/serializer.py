@@ -78,6 +78,18 @@ def canonical_spec_mapping(spec: BuildSpec) -> dict[str, JsonValue]:
                 "required": list(source.schema.required),
                 "dtypes": _canonical_json(cast(JsonValue, source.schema.dtypes)),
                 "casts": _canonical_json(cast(JsonValue, source.schema.casts)),
+                # rename/derived도 recipe의 일부다 (#611). 빠지면 변환 규칙을
+                # 바꿔도 spec digest가 그대로라, R1의 "같은 recipe는 같은 output"
+                # 주장에서 정작 Silver를 만든 규칙이 recipe 밖에 남는다.
+                "rename": _canonical_json(cast(JsonValue, source.schema.rename)),
+                "derived": [
+                    {
+                        "name": rule.name,
+                        "kind": rule.kind,
+                        "columns": list(rule.columns),
+                    }
+                    for rule in source.schema.derived
+                ],
             }
         # kind별로 유효한 field만 싣는다 (#498). loader의 _reject_foreign_fields가
         # kind-foreign field의 "존재"만으로 거부하므로, 여기서 모든 kind의 field를

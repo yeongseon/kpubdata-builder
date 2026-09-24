@@ -13,8 +13,8 @@ from typing import Any, cast
 import pytest
 import yaml
 
-import kpubdata_builder.service.app as app_module
 import kpubdata_builder.service.datasets as datasets_module
+import kpubdata_builder.service.query_service_api as query_module
 from kpubdata_builder.query.models import QueryResult
 from kpubdata_builder.query.resolver import ResolvedQueryContext
 from kpubdata_builder.query.service import QueryService
@@ -183,7 +183,7 @@ def test_extraction_script_emits_documented_json_shape() -> None:
     )
     payload = json.loads(completed.stdout)
     assert "—" in completed.stdout
-    assert payload["contract_version"] == "1.22.0"
+    assert payload["contract_version"] == "1.23.0"
     assert len(payload["examples"]) >= 50
     assert set(payload["examples"][0]) == {
         "path",
@@ -216,7 +216,7 @@ def test_query_success_example_matches_service_serializer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        app_module,
+        query_module,
         "resolve_query_context",
         lambda root, request, principal: ResolvedQueryContext(
             request.dataset_id,
@@ -287,8 +287,12 @@ def test_dataset_detail_example_matches_service_serializer(
         ],
     )
     service = BuilderService(output_root=tmp_path, client_factory=lambda: cast(object, None))
+    # dataset record 수집은 datasets 도메인 서비스로 옮겨갔다 (#596) — BuilderService 의
+    # 동명 메서드는 위임일 뿐이라, 그쪽을 patch 하면 호출 경로에서 빠진다.
     monkeypatch.setattr(
-        service, "_dataset_records_for", lambda dataset_id, principal: [record, older_record]
+        service._datasets_api,
+        "dataset_records_for",
+        lambda dataset_id, principal: [record, older_record],
     )
 
     response = service.get_dataset("seoul-air-quality")

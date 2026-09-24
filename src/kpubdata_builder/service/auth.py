@@ -8,6 +8,9 @@
 
 ``OIDC_ISSUER`` 미설정 시 Bearer 경로가 비활성화되어 기존 배포에 영향이 없다.
 설정 시 ``OIDC_AUDIENCE`` 가 필수이고 ``pyjwt`` extra가 설치되어야 한다 (fail-closed).
+IdP에 계정을 만든 사람은 누구나 로그인할 수 있는 것이 기본 정책이다 — 특정 조직/개인으로
+제한하려면 ``OIDC_ALLOWED_HD``/``OIDC_ALLOWED_SUBJECTS``/``OIDC_ALLOWED_EMAILS`` 를
+설정한다 (선택, deploy.md 참조).
 
 ``Principal`` 의 display 역할과 persistent ownership 역할을 분리한다 (#505):
 
@@ -23,6 +26,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import os
 import threading
 import time
@@ -44,6 +48,10 @@ _TOKEN_LEEWAY_SECONDS = 60
 _OIDC_ALLOWED_HD_ENV = "OIDC_ALLOWED_HD"
 _OIDC_ALLOWED_SUBJECTS_ENV = "OIDC_ALLOWED_SUBJECTS"
 _OIDC_ALLOWED_EMAILS_ENV = "OIDC_ALLOWED_EMAILS"
+# 허용 목록을 "필수"로 되돌리는 스위치. 미설정이면 공개 가입(제한 없음)이 기본이다.
+_OIDC_REQUIRE_ALLOWLIST_ENV = "OIDC_LEGACY_REQUIRE_ALLOWLIST"
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -219,7 +227,11 @@ def _oidc_jwks_url() -> str:
 
 
 def _oidc_allowlists() -> tuple[set[str], set[str], set[str]]:
-    """(hd, subjects, emails) 허용 목록. Google은 공개 IdP라 필수 방어 (#386)."""
+    """(hd, subjects, emails) 허용 목록 — 설정된 경우에만 적용되는 선택적 제한 (#386).
+
+    기본 정책은 공개 가입이다(IdP에 계정이 있으면 누구나 로그인). 특정 도메인/계정만
+    허용하는 제한 배포에서만 이 목록을 설정하고, 그때는 하나라도 매칭돼야 통과한다.
+    """
 
     def _parse(env_name: str) -> set[str]:
         raw = os.environ.get(env_name, "")
@@ -238,6 +250,9 @@ def validate_oidc_config() -> None:
     - OIDC_ISSUER 미설정 → no-op (Bearer 비활성, 기존 배포 무영향).
     - OIDC_ISSUER 설정 + OIDC_AUDIENCE 미설정 → 거부.
     - pyjwt 미설치 → 거부 (``auth`` extra 필요).
+    - 허용 목록(OIDC_ALLOWED_*)은 **선택**이다 — 공개 가입이 기본 정책이기 때문이다.
+      제한 배포에서 목록 누락을 기동 실패로 잡고 싶으면
+      ``OIDC_LEGACY_REQUIRE_ALLOWLIST=true`` 를 설정한다.
     """
     if not _oidc_issuers():
         return
@@ -252,14 +267,45 @@ def validate_oidc_config() -> None:
         raise RuntimeError(
             "OIDC is enabled but pyjwt is not installed; install with: uv sync --extra auth"
         ) from e
-    # 허용 목록 필수 — Google은 공개 IdP (계정만 있으면 유효 토큰 획득, #386).
+    # 허용 목록은 선택이다(공개 가입이 기본). 제한 배포만 이 스위치로 필수화한다.
     hd, subs, emails = _oidc_allowlists()
-    if not (hd or subs or emails) and os.environ.get("OIDC_LEGACY_REQUIRE_ALLOWLIST") == "true":
+    if not (hd or subs or emails) and os.environ.get(_OIDC_REQUIRE_ALLOWLIST_ENV) == "true":
         raise RuntimeError(
             "OIDC_ISSUER is set but no allowlist is configured "
-            "(OIDC_ALLOWED_HD/SUBJECTS/EMAILS); refusing to start — "
-            "Google is a public IdP (fail-closed, ADR 0009, #386)."
+            "(OIDC_ALLOWED_HD/SUBJECTS/EMAILS) while "
+            f"{_OIDC_REQUIRE_ALLOWLIST_ENV}=true; refusing to start "
+            "(fail-closed, ADR 0009, #386)."
         )
+
+
+def validate_dev_mode() -> None:
+    """서버 기동 시 호출 (serve). dev-mode의 운영 배포 사고를 막는다.
+
+    dev-mode는 ``authenticate()`` 의 첫 분기로, API 키도 Bearer 토큰도 검사하지 않고
+    모든 요청을 통과시킨다 (#321, ADR 0006). 로컬 개발 전용이므로:
+
+    - dev-mode가 켜져 있으면 기동 로그에 경고를 남긴다 — 서비스가 무인증으로 열려
+      있다는 사실이 로그만 봐도 드러나야 한다.
+    - dev-mode와 OIDC 설정이 동시에 있으면 기동을 거부한다. 사용자 인증을 구성해두고
+      인증을 통째로 우회하는 것은 어떤 환경에서도 의도일 수 없으며, 운영 배포에
+      dev 플래그가 남아 있는 전형적인 사고 형태다 (fail-closed).
+    """
+    if not _is_dev_mode():
+        return
+    if _oidc_issuers():
+        raise RuntimeError(
+            f"{_DEV_MODE_ENV} is enabled while {_OIDC_ISSUER_ENV} is configured; "
+            "refusing to start — dev-mode bypasses authentication entirely, so a "
+            "deployment that configures user authentication must not set it "
+            "(fail-closed, ADR 0006)."
+        )
+    _logger.warning(
+        "%s is enabled: every request is accepted without authentication. "
+        "This is for local development only — never set it in a deployment.",
+        _DEV_MODE_ENV,
+    )
+    if os.environ.get(_API_KEY_ENV):
+        _logger.warning("%s is set but ignored while dev-mode is enabled.", _API_KEY_ENV)
 
 
 def _get_jwks_client() -> object:
@@ -372,5 +418,6 @@ __all__ = [
     "authenticate",
     "compute_owner_id",
     "principal_owns",
+    "validate_dev_mode",
     "validate_oidc_config",
 ]

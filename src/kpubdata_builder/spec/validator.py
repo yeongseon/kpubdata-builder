@@ -20,14 +20,16 @@ from urllib.parse import urlsplit
 
 from ..errors import ValidationError
 from ..exporters import EXPORTER_REGISTRY
-from ..tabular.polars_helpers import _NAMED_DTYPES
+from ..tabular.polars_helpers import _FORMATTED_CASTS, _NAMED_DTYPES
 from .models import (
+    DERIVED_KINDS,
     SOURCE_FILE_FORMATS,
     SOURCE_KINDS,
     SOURCE_URL_FORMATS,
     SOURCE_URL_METHODS,
     UPLOAD_ID_PATTERN,
     BuildSpec,
+    DerivedColumn,
     SourceRef,
 )
 
@@ -235,6 +237,7 @@ def _schema_problems(spec: BuildSpec) -> list[ValidationProblem]:
     """
     problems: list[ValidationProblem] = []
     supported = sorted(_NAMED_DTYPES)
+    supported_casts = sorted(set(_NAMED_DTYPES) | set(_FORMATTED_CASTS))
     for i, source in enumerate(spec.sources):
         if source.schema is None:
             continue
@@ -249,15 +252,61 @@ def _schema_problems(spec: BuildSpec) -> list[ValidationProblem]:
                     )
                 )
         for col, cast in source.schema.casts.items():
-            if cast.lower() not in _NAMED_DTYPES:
+            if cast.lower() not in _NAMED_DTYPES and cast.lower() not in _FORMATTED_CASTS:
                 problems.append(
                     _p(
                         "unknown_cast_dtype",
                         f"sources[{i}].schema.casts.{col}",
                         f"unknown cast dtype {cast!r} for column {col!r}",
-                        hint=f"Use one of: {', '.join(supported)}",
+                        hint=f"Use one of: {', '.join(supported_casts)}",
                     )
                 )
+        problems.extend(_derived_problems(source.schema.derived, prefix=f"sources[{i}]"))
+    return problems
+
+
+#: kind별로 요구하는 입력 컬럼 개수 (#611). None이면 1개 이상이면 된다.
+_DERIVED_ARITY: dict[str, int | None] = {"date_parts": 3, "join_key": None}
+
+
+def _derived_problems(
+    derived: tuple[DerivedColumn, ...], *, prefix: str
+) -> list[ValidationProblem]:
+    """schema.derived 규칙의 kind 어휘와 컬럼 개수를 검증한다 (#611).
+
+    normalize_table 은 date_parts 를 (year, month, day) 로 unpack 하므로, 개수가
+    맞지 않으면 런타임에 ValueError 로 터진다. 선언 시점에 막는다.
+    """
+    problems: list[ValidationProblem] = []
+    for index, rule in enumerate(derived):
+        field = f"{prefix}.schema.derived[{index}]"
+        if rule.kind not in DERIVED_KINDS:
+            problems.append(
+                _p(
+                    "unknown_derived_kind",
+                    f"{field}.kind",
+                    f"unknown derived kind {rule.kind!r} for column {rule.name!r}",
+                    hint=f"Use one of: {', '.join(DERIVED_KINDS)}",
+                )
+            )
+            continue
+        arity = _DERIVED_ARITY[rule.kind]
+        if arity is not None and len(rule.columns) != arity:
+            problems.append(
+                _p(
+                    "derived_column_arity",
+                    f"{field}.columns",
+                    f"{rule.kind} requires exactly {arity} columns, got {len(rule.columns)}",
+                )
+            )
+        elif arity is None and not rule.columns:
+            problems.append(
+                _p(
+                    "derived_column_arity",
+                    f"{field}.columns",
+                    f"{rule.kind} requires at least one column",
+                )
+            )
     return problems
 
 

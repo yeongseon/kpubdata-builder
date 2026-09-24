@@ -2,6 +2,9 @@
 
 Azure Container Apps + Azure Files + Log Analytics 최소 배포 템플릿.
 
+> **OCI + CUBRID 배포**를 찾는다면 [`infra/oci/`](./oci/)를 참조하세요 — Compute VM 단일
+> 인스턴스에 builder + CUBRID 를 Docker Compose 로 띄우는 구성입니다(ADR 0016).
+
 ## 전제
 
 - **단일 replica** (`minReplicas: 1, maxReplicas: 1`) — ADR 0010(#375) 상태 백엔드가 로컬 FS/SQLite라 replica 확장 불가.

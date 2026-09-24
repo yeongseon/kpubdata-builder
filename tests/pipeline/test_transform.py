@@ -252,3 +252,98 @@ def test_build_variant_dataframes_multiple_variants_independent() -> None:
     assert "name" in result["ko"].columns
     # en variant renamed
     assert "city" in result["en"].columns
+
+
+class TestBuildSpecPathMatchesTheLegacyScript:
+    """두 변환 경로가 같은 Bronze에서 같은 값을 낸다 (#611).
+
+    배포용 스크립트 경로(이 모듈)와 BuildSpec 경로(stages/silver/normalize.py)가
+    갈라진 채로 두면, 논문이 서술하는 파이프라인과 HF에 배포된 데이터셋을 만든
+    파이프라인이 달라진다. 승격한 세 규칙(rename / int_comma / date_parts)이
+    실제로 같은 결과를 내는지 고정한다.
+
+    ``deal_date``의 표현은 일부러 다르다 — 스크립트는 문자열, BuildSpec 경로는
+    Date다. 비교는 같은 날짜를 가리키는지로 한다.
+    """
+
+    def _records(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "sggCd": "11110",
+                "dealAmount": "120,000",
+                "dealYear": "2026",
+                "dealMonth": "9",
+                "dealDay": "8",
+            },
+            {
+                "sggCd": "11140",
+                "dealAmount": "82,500",
+                "dealYear": "2026",
+                "dealMonth": "10",
+                "dealDay": "15",
+            },
+        ]
+
+    def _legacy(self) -> pl.DataFrame:
+        config = {
+            "transform": {
+                "column_mapping": {
+                    "sggCd": "district_code",
+                    "dealAmount": "deal_amount",
+                    "dealYear": "deal_year",
+                    "dealMonth": "deal_month",
+                    "dealDay": "deal_day",
+                },
+                "dtypes": {"deal_amount": "int_comma"},
+                "derived": [
+                    {
+                        "name": "deal_date",
+                        "expr": "concat_date(deal_year, deal_month, deal_day)",
+                        "dtype": "str",
+                    }
+                ],
+            }
+        }
+        return transform_records(self._records(), config)
+
+    def _buildspec(self) -> pl.DataFrame:
+        from kpubdata_builder.spec.models import DerivedColumn
+        from kpubdata_builder.stages.bronze.models import BronzeArtifact, utc_now
+        from kpubdata_builder.stages.silver.normalize import normalize_table
+
+        bronze = BronzeArtifact(
+            source_key="datago.apt_trade",
+            raw_records=tuple(self._records()),
+            fetched_at=utc_now(),
+        )
+        return normalize_table(
+            bronze,
+            rename={
+                "sggCd": "district_code",
+                "dealAmount": "deal_amount",
+                "dealYear": "deal_year",
+                "dealMonth": "deal_month",
+                "dealDay": "deal_day",
+            },
+            casts={"deal_amount": "int_comma"},
+            derived=(
+                DerivedColumn(
+                    name="deal_date",
+                    kind="date_parts",
+                    columns=("deal_year", "deal_month", "deal_day"),
+                ),
+            ),
+        )
+
+    def test_rename_and_formatted_cast_agree(self) -> None:
+        legacy, buildspec = self._legacy(), self._buildspec()
+
+        assert legacy["district_code"].to_list() == buildspec["district_code"].to_list()
+        assert legacy["deal_amount"].to_list() == buildspec["deal_amount"].to_list()
+
+    def test_derived_date_agrees(self) -> None:
+        legacy, buildspec = self._legacy(), self._buildspec()
+
+        assert legacy["deal_date"].to_list() == [
+            value.isoformat() for value in buildspec["deal_date"].to_list()
+        ]

@@ -56,7 +56,7 @@ v0.4 Builder service는 동기식 실행 모델을 유지합니다.
 | composition(join) | `BuildSpec.composition`이 있으면 `POST /build` 응답에 source별 `outcomes`와 별도로 `composition` 키(결합 결과)가 노출됨 |
 | 비동기 job 취소 | `POST /builds/{run_id}/cancel`이 `queued` job은 실행 전에 곧바로 `cancelled`로, `running` job은 `cancelling`을 거쳐 안전한 stage 경계에서 `cancelled`로 종결. 종단 job이거나 정상 종료로 확정된 job은 `409` |
 | 취소된 run의 부분 산출물 | 삭제하지 않고 partial manifest(`status: cancelled`, `partial: true`)와 함께 보존. 실행되지 않은 stage는 성공으로 기록하지 않으며, 취소를 실패로도 실패를 취소로도 표기하지 않음 |
-| 인증 실패 | `401`은 재인증 대상, `403`은 권한 요청 대상, `503`은 JWKS 일시 장애 대상 |
+| 인증 실패 | `401`은 재인증 대상, `403`은 권한 요청 대상, `503`은 JWKS 일시 장애 대상. 같은 클라이언트의 `401`이 반복되면 `429`(`code: "auth_throttled"`, `retry_after_seconds`)로 전환되고, 이때는 인증을 시도하지 않고 즉시 거부한다 |
 
 정책과 구현이 다르면 구현 각주를 늘리지 말고 다음 순서로 정리합니다.
 
