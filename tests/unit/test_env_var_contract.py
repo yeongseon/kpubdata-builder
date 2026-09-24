@@ -65,3 +65,28 @@ class TestEnvVarContract:
         stale = readme_vars - code_vars
         if stale:
             pytest.fail(f"README에 있지만 코드에 없는 환경변수 (잘못된 안내): {sorted(stale)}")
+
+
+def test_readme_documents_every_env_var_the_code_reads() -> None:
+    """README 환경변수 표가 코드와 갈라지지 않게 잠근다.
+
+    MAX_UPLOAD_BYTES / URL_FETCH_MAX_BYTES / OIDC_JWKS_URL / OIDC_JWKS_TTL 이
+    표에서 빠져 있었다 — 이 파일이 이미 있는데도 README 는 그 대상이 아니었다.
+    """
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).parents[2]
+    readme = (root / "README.md").read_text(encoding="utf-8")
+
+    referenced: set[str] = set()
+    for path in (root / "src").rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        referenced.update(re.findall(r'"(KPUBDATA_BUILDER_[A-Z0-9_]+)"', text))
+        referenced.update(re.findall(r'"(OIDC_[A-Z0-9_]+)"', text))
+
+    # 값이 아니라 이름이 쓰이는 상수들은 제외한다(예: *_ENV 상수 자체).
+    documented = set(re.findall(r"`(KPUBDATA_BUILDER_[A-Z0-9_]+|OIDC_[A-Z0-9_]+)`", readme))
+    missing = sorted(referenced - documented)
+
+    assert not missing, f"README 환경변수 표에 없는 변수: {missing}"
