@@ -2237,13 +2237,27 @@ class TestCatalog:
         providers = cast(list[dict[str, object]], response.body["providers"])
         assert [provider["name"] for provider in providers] == ["datago"]
 
-    def test_catalog_does_not_hide_other_provider_missing_module(self, tmp_path: Path) -> None:
-        response = self._service_with_lazy_provider_catalog(
-            tmp_path, missing_provider="datago", missing_module="internal_datago"
-        ).catalog()
+    def test_catalog_does_not_hide_other_provider_missing_module(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """krx 의 pandas 누락만 격리하고 다른 import 실패는 드러나야 한다.
+
+        무엇이 없는지는 이제 로그에 남는다 — 응답 본문에는 싣지 않는다. 이
+        except 절은 upstream 클라이언트의 어떤 예외든 잡는데, 그 메시지에는
+        요청 URL 이 섞여 나올 수 있고 data.go.kr 계열은 API 키를 쿼리
+        파라미터로 보낸다.
+        """
+        import logging
+
+        with caplog.at_level(logging.ERROR):
+            response = self._service_with_lazy_provider_catalog(
+                tmp_path, missing_provider="datago", missing_module="internal_datago"
+            ).catalog()
 
         assert response.status_code == 502
-        assert "internal_datago" in cast(str, response.body["error"])
+        assert response.body == {"error": "catalog unavailable"}
+        # 삼켜지지는 않는다 — 진단 정보는 로그로 간다.
+        assert "internal_datago" in caplog.text
 
     def test_catalog_keeps_krx_when_optional_dependency_is_available(self, tmp_path: Path) -> None:
         response = self._service_with_lazy_provider_catalog(tmp_path).catalog()

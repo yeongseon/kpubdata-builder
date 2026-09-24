@@ -67,9 +67,12 @@ class ProvidersService:
         client = self._create_client()
         try:
             return provider_descriptors(client)
-        except Exception as exc:
+        except Exception:
+            # upstream 클라이언트의 예외 문자열에는 요청 URL 이 섞여 나올 수 있고,
+            # data.go.kr 계열은 API 키를 쿼리 파라미터로 실어 보낸다 — 그대로
+            # 응답에 넣으면 남의 키가 에러 메시지로 새어 나간다.
             _logger_exception("provider catalog unavailable")
-            return ServiceResponse(502, {"error": f"catalog unavailable: {exc}"})
+            return ServiceResponse(502, {"error": "catalog unavailable"})
         finally:
             self._close_client(client)
 

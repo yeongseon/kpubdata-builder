@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -25,6 +26,8 @@ from typing import TYPE_CHECKING, Literal, Protocol
 from uuid import uuid4
 
 from ..spec import JsonValue
+
+_logger = logging.getLogger(__name__)
 
 BuildJobStatus = Literal["queued", "running", "cancelling", "succeeded", "failed", "cancelled"]
 
@@ -599,7 +602,13 @@ class AsyncBuildExecutor:
             # 빠져나가, job이 영원히 running으로 남았다. polling하는 클라이언트는
             # 끝나지 않는 build를 기다리고, queue 슬롯도 돌아오지 않는다. 무엇이
             # 터졌든 terminal 상태를 확정하는 것이 이 지점의 책임이다.
-            self._finish(run_id, failed=True, error=f"{type(exc).__name__}: {exc}")
+            # 예외 문자열은 로그에만 남긴다. 이 error 는 ``GET /builds/{run_id}``
+            # 응답에 그대로 실리는데, 여기 걸리는 건 "예상하지 못한" 예외라
+            # 내용이 무엇일지 보장할 수 없다 — 경로든 SQL 이든 자격증명이든.
+            # 타입 이름까지는 남긴다. 어느 계층에서 터졌는지는 알려주면서
+            # 임의의 내부 문자열을 내보내지는 않는 선이다.
+            _logger.exception("build job %s failed with an unhandled exception", run_id)
+            self._finish(run_id, failed=True, error=f"internal error: {type(exc).__name__}")
             return
         if response.status_code < 400:
             self._finish(run_id, failed=False, response=response.body)
