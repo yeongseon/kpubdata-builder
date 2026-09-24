@@ -15,8 +15,12 @@ from pathlib import Path
 import pytest
 import yaml
 
-from kpubdata_builder.spec import compute_spec_digest, expand_param_grid, parse_spec
-from kpubdata_builder.spec import serialize_spec_bytes
+from kpubdata_builder.spec import (
+    compute_spec_digest,
+    expand_param_grid,
+    parse_spec,
+    serialize_spec_bytes,
+)
 from kpubdata_builder.spec.validator import validate_spec
 
 _SPECS = Path(__file__).parents[2] / "specs"
