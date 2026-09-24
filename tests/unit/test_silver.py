@@ -1007,3 +1007,54 @@ class TestYearMonthCast:
         table = normalize_table(bronze, casts={"ym": "year_month"})
 
         assert table["ym"].to_list() == [None, "2023-01"]
+
+
+class TestErrorMessagesCarryNoSourceValues:
+    """정규화 실패 메시지에 원천 값을 싣지 않는다 (#441).
+
+    이 메시지들은 manifest 와 ``/builds`` 응답으로 나가는데 PII 스캔은 그보다
+    뒤에 돈다. 값을 넣으면 스캔이 보기도 전에 새어나간다. 어느 컬럼에서 몇
+    행인지면 고칠 곳을 찾기에 충분하다.
+    """
+
+    SECRET = "010-1234-5678"
+
+    def test_zfill_overflow_reports_a_length_not_a_value(self) -> None:
+        bronze = _bronze(({"station": self.SECRET},))
+
+        with pytest.raises(TabularError) as exc:
+            normalize_table(bronze, zfill={"station": 5})
+
+        assert self.SECRET not in str(exc.value)
+        assert "longer than the declared width" in str(exc.value)
+
+    def test_year_month_rejection_reports_a_count_not_a_value(self) -> None:
+        bronze = _bronze(({"ym": self.SECRET},))
+
+        with pytest.raises(TabularError) as exc:
+            normalize_table(bronze, casts={"ym": "year_month"})
+
+        assert self.SECRET not in str(exc.value)
+
+    def test_coalesce_disagreement_reports_columns_not_rows(self) -> None:
+        bronze = _bronze(({"a": self.SECRET, "b": "other"},))
+
+        with pytest.raises(TabularError) as exc:
+            normalize_table(bronze, coalesce={"merged": ("a", "b")})
+
+        assert self.SECRET not in str(exc.value)
+        assert "disagree" in str(exc.value)
+
+    def test_date_parts_loss_reports_columns_not_rows(self) -> None:
+        from kpubdata_builder.spec import DerivedColumn
+
+        bronze = _bronze(({"y": self.SECRET, "m": "13", "d": "40"},))
+
+        with pytest.raises(TabularError) as exc:
+            normalize_table(
+                bronze,
+                derived=(DerivedColumn(name="d8", kind="date_parts", columns=("y", "m", "d")),),
+            )
+
+        assert self.SECRET not in str(exc.value)
+        assert "data loss" in str(exc.value)

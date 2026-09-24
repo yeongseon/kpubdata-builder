@@ -287,9 +287,13 @@ def _apply_coalesce(table: pl.DataFrame, target: str, candidates: tuple[str, ...
         )
         conflicts = table.select(present).filter(distinct > 1)
         if conflicts.height:
+            # 값 자체는 싣지 않는다. 이 메시지는 manifest 와 /builds 응답에 실려
+            # 나가는데, PII 스캔(#441)은 그보다 뒤에 돈다 — 원천 값을 넣으면
+            # 주민·전화번호가 스캔 전에 새어나간다. 어느 컬럼에서 몇 행인지면
+            # 고칠 곳을 찾기에 충분하다.
             raise TabularError(
                 f"coalesce target {target!r} has {conflicts.height} row(s) where candidates "
-                f"disagree; first example: {conflicts.head(1).to_dicts()[0]}"
+                f"{present} disagree"
             )
     # 먼저 값을 뽑고 나서 후보를 버린다. target이 후보 중 하나와 같은 이름일 수 있어
     # drop과 with_columns의 순서를 바꾸면 방금 만든 컬럼이 도로 사라진다.
@@ -323,10 +327,10 @@ def _apply_zfill(table: pl.DataFrame, column: str, width: int) -> pl.DataFrame:
     # 계약이 width를 선언했는데 더 긴 값이 오는 것은 drift 신호다.
     too_long = table.filter(pl.col(column).str.len_chars() > width)
     if too_long.height:
-        examples = too_long.select(column).unique().head(3).to_series().to_list()
+        longest = int(too_long.select(pl.col(column).str.len_chars().max()).item())
         raise TabularError(
             f"zfill target {column!r} has {too_long.height} value(s) longer than the declared "
-            f"width {width}: {examples}"
+            f"width {width} (longest is {longest} characters)"
         )
     return table.with_columns(pl.col(column).str.zfill(width).alias(column))
 
@@ -349,10 +353,9 @@ def _check_year_month(table: pl.DataFrame, casts: Mapping[str, DtypeSpec]) -> No
             & ~text.str.contains(YEAR_MONTH_COMPACT)
         )
         if bad.height:
-            examples = bad.select(column).unique().head(3).to_series().to_list()
             raise TabularError(
                 f"year_month cast on {column!r} rejected {bad.height} value(s); "
-                f"expected YYYY-MM or YYYYMM, got: {examples}"
+                "expected YYYY-MM or YYYYMM"
             )
 
 
@@ -395,10 +398,9 @@ def _apply_derived(table: pl.DataFrame, rule: DerivedColumn) -> pl.DataFrame:
         ).to_series()
         lost = table.filter(parts_present & result.get_column(rule.name).is_null())
         if lost.height:
-            examples = lost.select(rule.columns).unique().head(3).to_dicts()
             raise TabularError(
                 f"derived column {rule.name!r} dropped {lost.height} value(s) to null "
-                f"(data loss): parts that form no date, e.g. {examples}"
+                f"(data loss): rows whose {list(rule.columns)} form no valid date"
             )
         return result
     if rule.kind == "join_key":
