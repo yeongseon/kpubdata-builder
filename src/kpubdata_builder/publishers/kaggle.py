@@ -5,8 +5,10 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import tempfile
 from collections.abc import Iterator, Mapping
 from pathlib import Path
+from threading import Lock
 
 from ..errors import PublishError
 from .base import BasePublisher, PublishResult
@@ -15,42 +17,59 @@ from .base import BasePublisher, PublishResult
 #: 이 키들을 비워서 SDK 가 서버 계정으로 인증하지 않게 한다.
 _KAGGLE_ENVIRONMENT_KEYS = frozenset({"KAGGLE_USERNAME", "KAGGLE_KEY"})
 
+#: SDK 가 kaggle.json 을 찾는 디렉터리. 자격을 정해 준 호출에서는 빈 디렉터리로
+#: 돌려서, 환경을 비워도 서버의 파일 계정으로 인증되는 경로를 닫는다.
+_KAGGLE_CONFIG_DIR_ENV = "KAGGLE_CONFIG_DIR"
+
+
+#: 프로세스 전역 환경을 건드리는 구간을 직렬화한다.
+#:
+#: receipt 직렬화는 ``(owner, run, target)`` 단위라 **서로 다른 principal 의
+#: 동시 publish 를 막지 않는다.** 그 둘이 이 구간에 함께 들어오면 한쪽이 다른
+#: 쪽의 자격으로 인증할 수 있다 — 환경변수는 스레드가 아니라 프로세스에 속하기
+#: 때문이다. 자격을 인자로 받지 않는 SDK 를 쓰는 한 이 lock 이 유일한 경계다.
+_KAGGLE_ENVIRONMENT_LOCK = Lock()
+
 
 @contextlib.contextmanager
 def _kaggle_environment(credentials: Mapping[str, str] | None) -> Iterator[None]:
-    """전달받은 Kaggle 자격을 이 블록 동안만 환경에 둔다.
+    """전달받은 Kaggle 자격을 이 블록 동안만, 배타적으로 환경에 둔다.
 
     Kaggle SDK 에 자격을 인자로 넘길 방법이 없어서 환경을 거친다. 블록을 벗어나면
     원래 값으로 되돌리므로, 한 요청의 자격이 다음 요청에 남지 않는다.
-
-    같은 프로세스에서 두 게시가 동시에 돌면 이 방식은 안전하지 않다. publish 는
-    run 단위로 직렬화되어 있어 현재는 문제가 되지 않지만, 병렬 게시를 도입한다면
-    SDK 를 감싸는 다른 방법이 필요하다.
 
     ``None`` 은 "호출자가 정하지 않았다"(CLI 경로)라서 환경을 그대로 둔다.
     **빈 mapping 은 "줄 것이 없다"** 이므로 SDK 가 서버 계정을 집어 들지 않게
     관련 환경변수를 이 블록 동안 비운다 — 예전에는 둘을 구분하지 않아서, 요청자
     credential 을 강제하는 설정을 켜도 서버 계정으로 게시가 나갔다 (#635).
+
+    환경변수를 비우는 것만으로는 부족하다. ``KaggleApi.authenticate()`` 는
+    환경에서 자격을 찾지 못하면 ``~/.kaggle/kaggle.json`` 을 읽으므로, 서버에
+    그 파일이 있으면 결국 서버 계정으로 인증된다. 그래서 호출자가 자격을 정한
+    경우에는 ``KAGGLE_CONFIG_DIR`` 을 빈 임시 디렉터리로 돌려 파일 경로까지 닫는다.
     """
     if credentials is None:
         yield
         return
     managed = dict(credentials) if credentials else {}
-    keys = set(managed) | _KAGGLE_ENVIRONMENT_KEYS
-    previous = {key: os.environ.get(key) for key in keys}
-    for key in keys:
-        if key in managed:
-            os.environ[key] = managed[key]
-        else:
-            os.environ.pop(key, None)
-    try:
-        yield
-    finally:
-        for key, value in previous.items():
-            if value is None:
-                os.environ.pop(key, None)
+    with _KAGGLE_ENVIRONMENT_LOCK, tempfile.TemporaryDirectory() as empty_config_dir:
+        keys = set(managed) | _KAGGLE_ENVIRONMENT_KEYS | {_KAGGLE_CONFIG_DIR_ENV}
+        previous = {key: os.environ.get(key) for key in keys}
+        for key in keys:
+            if key in managed:
+                os.environ[key] = managed[key]
+            elif key == _KAGGLE_CONFIG_DIR_ENV:
+                os.environ[key] = empty_config_dir
             else:
-                os.environ[key] = value
+                os.environ.pop(key, None)
+        try:
+            yield
+        finally:
+            for key, value in previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
 
 class KagglePublisher(BasePublisher):
