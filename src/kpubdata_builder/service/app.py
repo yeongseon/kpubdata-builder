@@ -1037,8 +1037,16 @@ class BuilderService:
             # best-effort — FS 에 이미 정본/미러가 있으므로 승격 실패가 빌드를 실패시키지 않는다.
             self._store.put_manifest(result.context.run_id, manifest_data)
         except Exception:
-            # 인덱스 갱신/manifest 승격 실패는 무시 (ADR 0003)
-            pass
+            # 인덱스 갱신/manifest 승격 실패는 빌드를 실패시키지 않는다 (ADR 0003) —
+            # FS 에 이미 정본/미러가 있기 때문이다. 다만 **조용히** 넘기지는 않는다.
+            # 아무 기록도 남기지 않던 시절에는 BuildIndex 가 얼마나 오래, 왜
+            # 뒤처졌는지 알 방법이 없었다. 목록 조회가 완료된 run 을 빠뜨려도
+            # 원인을 찾을 단서가 없었다는 뜻이다.
+            logger.exception(
+                "build index update or manifest promotion failed; "
+                "the run itself succeeded and the filesystem copy is authoritative",
+                extra={"run_id": result.context.run_id},
+            )
 
         return ServiceResponse(status_code, body)
 
