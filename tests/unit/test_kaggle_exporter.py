@@ -156,7 +156,11 @@ def test_reexport_refreshes_stale_top_level_metadata(tmp_path: Path) -> None:
 
 def test_wraps_io_failure_in_export_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # 파일 쓰기 실패가 ExportError로 래핑되는지 확인한다.
-    artifact = ArtifactDataset(records=({"id": "1"},), schema={"id": "str"})
+    # license 를 선언해 둔다 — 없으면 IO 를 건드리기도 전에 license 검사에서
+    # ExportError 가 나서, 이 테스트가 이름과 다른 이유로 통과한다.
+    artifact = ArtifactDataset(
+        records=({"id": "1"},), schema={"id": "str"}, metadata={"license": "CC-BY-4.0"}
+    )
     target = ExportTarget(kind="kaggle", output_path="out/data.csv")
 
     def raise_on_replace(src: str, dst: str) -> None:
