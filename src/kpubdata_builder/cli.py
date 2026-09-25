@@ -15,6 +15,7 @@ import argparse
 import os
 import sys
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
@@ -419,6 +420,21 @@ def _run_preview(spec_path: str, *, limit: int) -> int:
     return 0
 
 
+#: 게시 대상이 아닌 run workspace 산출물. artifacts_dir 로 run 루트를 그대로
+#: 넘기는 경우가 흔한데, ``rglob("*")`` 은 그때 bronze 원본과 BuildSpec snapshot
+#: 까지 전부 쓸어 담았다 — 게시하려던 것은 gold 뿐이다.
+_NON_PUBLISHABLE_DIRS = frozenset({"bronze", "silver"})
+_NON_PUBLISHABLE_FILES = frozenset({"manifest.json", "buildspec.yaml"})
+
+
+def _is_non_publishable(path: Path, root: Path) -> bool:
+    """이 파일이 run workspace 부산물이라 게시 대상이 아닌지."""
+    relative = path.relative_to(root)
+    if relative.parts and relative.parts[0] in _NON_PUBLISHABLE_DIRS:
+        return True
+    return relative.name in _NON_PUBLISHABLE_FILES
+
+
 def _run_publish(
     spec_path: str,
     *,
@@ -441,7 +457,10 @@ def _run_publish(
     """
     try:
         spec = load_spec(Path(spec_path))
-        validate_spec(spec)
+        # publish=True 로 검증한다. 그냥 validate_spec(spec) 만 부르면 게시 전용
+        # 규칙(license 선언 등)이 적용되지 않아서, HTTP publish 가 막는 spec 을
+        # CLI 로는 그대로 올릴 수 있었다 — 같은 정책이 경로에 따라 달랐다.
+        validate_spec(replace(spec, publish=True))
     except SpecLoadError as exc:
         print(f"error: failed to load spec: {exc}", file=sys.stderr)
         return 1
@@ -464,7 +483,16 @@ def _run_publish(
     if publisher.expects_directory:
         paths = (artifacts_path,)
     else:
-        paths = tuple(sorted(p for p in artifacts_path.rglob("*") if p.is_file()))
+        candidates = sorted(p for p in artifacts_path.rglob("*") if p.is_file())
+        paths = tuple(p for p in candidates if not _is_non_publishable(p, artifacts_path))
+        skipped = [p for p in candidates if p not in paths]
+        if skipped:
+            # 조용히 빼지 않는다 — 무엇이 올라가는지는 게시자가 알아야 한다.
+            print(f"note: skipping {len(skipped)} non-dataset file(s):", file=sys.stderr)
+            for path in skipped[:10]:
+                print(f"  - {path.relative_to(artifacts_path)}", file=sys.stderr)
+            if len(skipped) > 10:
+                print(f"  ... and {len(skipped) - 10} more", file=sys.stderr)
         if not paths:
             print(f"error: no artifacts found in {artifacts_dir}", file=sys.stderr)
             return 1
