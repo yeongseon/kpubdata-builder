@@ -939,3 +939,32 @@ class TestEvictedJobsAreStillObservable:
         service = _service(tmp_path, threading.Event())
 
         assert service.build_status("never-ran").status_code == 404
+
+
+class TestIndexFailuresAreLoggedNotSwallowed:
+    """BuildIndex 갱신 실패가 빌드를 실패시키진 않지만, 조용하지도 않아야 한다.
+
+    ``except Exception: pass`` 였다. FS 에 정본이 있으니 빌드를 세우지 않는 판단은
+    맞지만, 아무 기록도 남지 않아서 index 가 얼마나 오래·왜 뒤처졌는지 알 수 없었다.
+    목록 조회가 끝난 run 을 빠뜨려도 단서가 없다는 뜻이다.
+    """
+
+    def test_the_failure_reaches_the_log(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging
+
+        service = _service(tmp_path, threading.Event())
+
+        def _boom(*_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("cubrid unreachable")
+
+        service._build_index.insert_or_replace = _boom  # type: ignore[method-assign]
+
+        with caplog.at_level(logging.ERROR):
+            response = service.build(VALID_SPEC_YAML, run_id="run-index")
+
+        # 빌드 자체는 영향을 받지 않는다.
+        assert response.status_code < 500
+        assert "cubrid unreachable" in caplog.text
+        assert "build index update" in caplog.text
