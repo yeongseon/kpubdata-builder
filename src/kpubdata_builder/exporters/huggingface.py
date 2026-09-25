@@ -89,6 +89,11 @@ def _render_card(artifact: ArtifactDataset) -> str:
         body += [f"- {entry}" for entry in artifact.provenance]
     else:
         body.append("공공데이터포털 (data.go.kr)")
+    attribution = metadata.get("attribution")
+    if isinstance(attribution, str) and attribution.strip():
+        # 공공누리 출처표시는 카드 본문에 그대로 실려야 의무가 충족된다 —
+        # front matter 의 license 식별자만으로는 부족하다 (ADR 0018).
+        body += ["", attribution.strip()]
     return "\n".join(body) + "\n"
 
 

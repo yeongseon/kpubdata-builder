@@ -81,6 +81,9 @@ def parse_spec(data: dict[str, object]) -> BuildSpec:
         license_obj = data.get("license")
         if license_obj is not None and not isinstance(license_obj, str):
             raise TypeError("license must be a string")
+        attribution_obj = data.get("attribution")
+        if attribution_obj is not None and not isinstance(attribution_obj, str):
+            raise TypeError("attribution must be a string")
         quality = _parse_quality(data.get("quality"))
         composition = _parse_composition(data.get("composition"))
     except (KeyError, TypeError, ValueError) as exc:
@@ -97,6 +100,7 @@ def parse_spec(data: dict[str, object]) -> BuildSpec:
         splits=splits,
         pii=pii,
         license=license_obj,
+        attribution=attribution_obj,
         quality=quality,
         composition=composition,
     )

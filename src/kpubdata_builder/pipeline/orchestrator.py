@@ -99,6 +99,11 @@ def _gold_package_metadata(spec: BuildSpec) -> dict[str, str]:
         # (#550 정합화 — spec.dataset_id가 곧 게시 destination 식별자).
         "dataset_id": spec.dataset_id,
     }
+    if spec.attribution:
+        # 공공누리는 제1~4유형 모두 출처표시를 의무로 둔다. license 식별자만으로는
+        # 그 의무를 채울 수 없어서(기관명·유형·원문 URL 이 함께 있어야 한다)
+        # 별도 필드로 받아 카드까지 그대로 내려보낸다 (ADR 0018).
+        metadata["attribution"] = spec.attribution
     declared_license = _dataset_card_license(spec)
     if declared_license:
         # 이것이 없으면 spec.license를 무엇으로 선언하든 Kaggle
