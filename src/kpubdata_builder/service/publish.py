@@ -795,7 +795,12 @@ def resolve_gold_artifacts(
             matched = True
             break
         if matched:
-            if not path.is_file():
+            # 디렉터리도 정당한 Gold artifact 다. ``kind: huggingface`` export 는
+            # 파일 하나가 아니라 레이아웃 디렉터리를 만들고 manifest 의 output
+            # path 도 그 디렉터리를 가리킨다 — ``is_file()`` 로만 보던 시절에는
+            # 정상적으로 끝난 빌드가 artifact_missing 으로 막혔다.
+            # HuggingFacePublisher 는 이미 디렉터리를 upload_folder 로 처리한다.
+            if not path.is_file() and not path.is_dir():
                 return PublishIssue(
                     "artifact_missing",
                     f"expected Gold artifact is missing on disk: {path.name}",
