@@ -480,3 +480,92 @@ class TestReadinessAgreesWithPublish:
         monkeypatch.setenv("HF_TOKEN", "server-token")
 
         assert credential_blocker("huggingface") is None
+
+
+class TestKaggleCredentialsDoNotCross:
+    """환경변수는 스레드가 아니라 프로세스에 속한다.
+
+    receipt 직렬화는 ``(owner, run, target)`` 단위라 서로 다른 principal 의 동시
+    publish 를 막지 않는다. lock 이 없을 때 실제로 한쪽이 다른 쪽의 자격을 보고
+    (``('bob', 'alice')``), 다른 쪽 정리 과정에서 변수가 사라져 KeyError 까지 났다.
+    """
+
+    def test_concurrent_publishes_each_see_their_own_credentials(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import os
+        import threading
+        import time
+
+        from kpubdata_builder.publishers.kaggle import _kaggle_environment
+
+        monkeypatch.setenv("KAGGLE_USERNAME", "server-user")
+        monkeypatch.setenv("KAGGLE_KEY", "server-key")
+
+        observed: list[tuple[str, str]] = []
+        start = threading.Barrier(2)
+
+        def _publish_as(user: str) -> None:
+            start.wait(timeout=5)
+            with _kaggle_environment({"KAGGLE_USERNAME": user, "KAGGLE_KEY": f"{user}-key"}):
+                time.sleep(0.05)
+                observed.append((user, os.environ["KAGGLE_USERNAME"]))
+
+        threads = [threading.Thread(target=_publish_as, args=(u,)) for u in ("alice", "bob")]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
+
+        assert len(observed) == 2
+        assert all(wanted == seen for wanted, seen in observed), observed
+
+    def test_the_server_environment_is_restored_afterwards(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import os
+
+        from kpubdata_builder.publishers.kaggle import _kaggle_environment
+
+        monkeypatch.setenv("KAGGLE_USERNAME", "server-user")
+
+        with _kaggle_environment({"KAGGLE_USERNAME": "hers", "KAGGLE_KEY": "her-key"}):
+            assert os.environ["KAGGLE_USERNAME"] == "hers"
+
+        assert os.environ["KAGGLE_USERNAME"] == "server-user"
+
+    def test_an_empty_mapping_also_hides_the_kaggle_json_file(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """env 를 비워도 SDK 는 ``~/.kaggle/kaggle.json`` 을 읽는다.
+
+        그 파일이 서버에 있으면 결국 서버 계정으로 인증되므로, 두 번째 방어선이
+        없으면 REQUIRE_OWN_PUBLISH_CREDENTIAL 이 다시 우회된다.
+        """
+        import os
+        from pathlib import Path
+
+        from kpubdata_builder.publishers.kaggle import _kaggle_environment
+
+        monkeypatch.setenv("KAGGLE_USERNAME", "server-user")
+        monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
+
+        with _kaggle_environment({}):
+            config_dir = os.environ.get("KAGGLE_CONFIG_DIR")
+            assert config_dir is not None, "SDK 가 서버의 kaggle.json 을 찾을 수 있다"
+            assert list(Path(config_dir).iterdir()) == []
+
+        assert "KAGGLE_CONFIG_DIR" not in os.environ
+
+    def test_the_cli_path_is_left_alone(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``None`` 은 호출자가 정하지 않았다는 뜻이다 — 환경도 config 도 그대로."""
+        import os
+
+        from kpubdata_builder.publishers.kaggle import _kaggle_environment
+
+        monkeypatch.setenv("KAGGLE_USERNAME", "server-user")
+        monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
+
+        with _kaggle_environment(None):
+            assert os.environ["KAGGLE_USERNAME"] == "server-user"
+            assert "KAGGLE_CONFIG_DIR" not in os.environ
