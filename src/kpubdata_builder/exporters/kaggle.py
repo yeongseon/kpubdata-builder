@@ -86,7 +86,17 @@ class KaggleExporter(BaseExporter):
         # 잘못된 Kaggle 데이터셋 업로드로 이어질 수 있다 (#202). 그 외 키는 보존한다.
         metadata["title"] = artifact.metadata.get("title", "Dataset")
         metadata["id"] = artifact.metadata.get("dataset_id", "unknown/dataset")
-        metadata["licenses"] = [{"name": artifact.metadata.get("license", "CC-BY-4.0")}]
+        # 라이선스를 추측하지 않는다. 예전에는 선언이 없으면 조용히 CC-BY-4.0 을
+        # 적었는데, 이 파일은 Kaggle 이 그대로 읽는 정본이므로 그건 남의 데이터에
+        # 대해 사실이 아닌 주장을 대신 해 주는 것이다. 공공누리 제2~4유형처럼
+        # 상업적 이용이나 변형이 제한된 데이터라면 명백한 오표기다.
+        declared_license = artifact.metadata.get("license")
+        if not isinstance(declared_license, str) or not declared_license.strip():
+            raise ExportError(
+                "Kaggle export requires an explicit license: set 'license' on the BuildSpec. "
+                "It is written to dataset-metadata.json, which Kaggle treats as authoritative."
+            )
+        metadata["licenses"] = [{"name": declared_license.strip()}]
 
         try:
             fd, tmp_meta = tempfile.mkstemp(dir=metadata_path.parent, suffix=".tmp")

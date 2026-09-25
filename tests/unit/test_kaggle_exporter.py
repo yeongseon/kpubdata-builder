@@ -34,7 +34,7 @@ def test_writes_csv_following_schema_and_valid_metadata(tmp_path: Path) -> None:
     artifact = ArtifactDataset(
         records=({"b": "2", "a": "1"}, {"a": "3", "b": "4"}),
         schema={"a": "str", "b": "str"},
-        metadata={"title": "Air Quality", "dataset_id": "kpub/air"},
+        metadata={"title": "Air Quality", "dataset_id": "kpub/air", "license": "CC-BY-4.0"},
     )
     target = ExportTarget(kind="kaggle", output_path="out/data.csv")
 
@@ -51,7 +51,9 @@ def test_writes_csv_following_schema_and_valid_metadata(tmp_path: Path) -> None:
 
 def test_empty_records_with_schema_writes_header_only(tmp_path: Path) -> None:
     # schema는 있고 records가 없으면 헤더 한 줄만 기록한다.
-    artifact = ArtifactDataset(records=(), schema={"id": "str", "name": "str"})
+    artifact = ArtifactDataset(
+        records=(), schema={"id": "str", "name": "str"}, metadata={"license": "CC-BY-4.0"}
+    )
     target = ExportTarget(kind="kaggle", output_path="out/data.csv")
 
     result = KaggleExporter().export(artifact, target, tmp_path)
@@ -79,7 +81,7 @@ def test_formula_injection_trigger_chars_prefixed_in_kaggle(tmp_path: Path) -> N
     artifact = ArtifactDataset(
         records=({"cmd": '=HYPERLINK("evil.com")'},),
         schema={"cmd": "str"},
-        metadata={"title": "T", "dataset_id": "kpub/t"},
+        metadata={"title": "T", "dataset_id": "kpub/t", "license": "CC-BY-4.0"},
     )
     target = ExportTarget(kind="kaggle", output_path="out/data.csv")
 
@@ -101,7 +103,7 @@ def test_merges_resource_into_existing_metadata(tmp_path: Path) -> None:
     artifact = ArtifactDataset(
         records=({"id": "1"},),
         schema={"id": "str"},
-        metadata={"title": "First", "dataset_id": "kpub/first"},
+        metadata={"title": "First", "dataset_id": "kpub/first", "license": "CC-BY-4.0"},
     )
 
     first = KaggleExporter().export(artifact, target_one, tmp_path)
@@ -109,7 +111,7 @@ def test_merges_resource_into_existing_metadata(tmp_path: Path) -> None:
         ArtifactDataset(
             records=({"id": "2"},),
             schema={"id": "str"},
-            metadata={"title": "Second", "dataset_id": "kpub/second"},
+            metadata={"title": "Second", "dataset_id": "kpub/second", "license": "CC-BY-4.0"},
         ),
         target_two,
         tmp_path,
@@ -154,7 +156,11 @@ def test_reexport_refreshes_stale_top_level_metadata(tmp_path: Path) -> None:
 
 def test_wraps_io_failure_in_export_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # 파일 쓰기 실패가 ExportError로 래핑되는지 확인한다.
-    artifact = ArtifactDataset(records=({"id": "1"},), schema={"id": "str"})
+    # license 를 선언해 둔다 — 없으면 IO 를 건드리기도 전에 license 검사에서
+    # ExportError 가 나서, 이 테스트가 이름과 다른 이유로 통과한다.
+    artifact = ArtifactDataset(
+        records=({"id": "1"},), schema={"id": "str"}, metadata={"license": "CC-BY-4.0"}
+    )
     target = ExportTarget(kind="kaggle", output_path="out/data.csv")
 
     def raise_on_replace(src: str, dst: str) -> None:
@@ -164,3 +170,39 @@ def test_wraps_io_failure_in_export_error(tmp_path: Path, monkeypatch: pytest.Mo
 
     with pytest.raises(ExportError):
         KaggleExporter().export(artifact, target, tmp_path)
+
+
+class TestTheLicenseIsNeverGuessed:
+    """``dataset-metadata.json`` 은 Kaggle 이 정본으로 읽는 파일이다.
+
+    선언이 없을 때 조용히 ``CC-BY-4.0`` 을 적던 시절에는, 남의 데이터에 대해
+    사실이 아닌 주장을 대신 해 주고 있었다. 공공누리 제2~4유형처럼 상업적
+    이용이나 변형이 제한된 데이터라면 명백한 오표기다.
+    """
+
+    def _artifact(self, **metadata: object) -> ArtifactDataset:
+        return ArtifactDataset(
+            records=({"a": "1"},),
+            schema={"a": "str"},
+            metadata={"title": "T", "dataset_id": "kpub/t", **metadata},
+        )
+
+    def test_an_undeclared_license_refuses_the_export(self, tmp_path: Path) -> None:
+        target = ExportTarget(kind="kaggle", output_path="out/data.csv")
+
+        with pytest.raises(ExportError, match="requires an explicit license"):
+            KaggleExporter().export(self._artifact(), target, tmp_path)
+
+    def test_a_blank_license_is_not_a_declaration(self, tmp_path: Path) -> None:
+        target = ExportTarget(kind="kaggle", output_path="out/data.csv")
+
+        with pytest.raises(ExportError, match="requires an explicit license"):
+            KaggleExporter().export(self._artifact(license="   "), target, tmp_path)
+
+    def test_a_declared_license_is_written_verbatim(self, tmp_path: Path) -> None:
+        target = ExportTarget(kind="kaggle", output_path="out/data.csv")
+
+        result = KaggleExporter().export(self._artifact(license="KOGL-Type-1"), target, tmp_path)
+
+        metadata = _read_metadata(result.output_path.parent)
+        assert metadata["licenses"] == [{"name": "KOGL-Type-1"}]

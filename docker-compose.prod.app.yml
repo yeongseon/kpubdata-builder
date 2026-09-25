@@ -37,9 +37,14 @@ services:
       # 반드시 동일 값을 재주입한다 — 교체 시 기존 credential 복호화 불가.
       KPUBDATA_BUILDER_CREDENTIAL_MASTER_KEY: ${KPUBDATA_BUILDER_CREDENTIAL_MASTER_KEY:-}
     ports:
-      # Caddy 프로파일 사용 시에는 127.0.0.1로 제한하는 것을 권장하나, IP-only
-      # 배포(Caddy 미사용)에서는 모든 인터페이스에 노출해 헬스체크를 가능케 한다.
-      - "${BUILDER_BIND:-8000}:8000"
+      # 기본은 루프백이다. 예전 기본값("8000")은 모든 인터페이스에 공개돼서,
+      # Caddy 없이 올리면 TLS 없는 8000 으로 API 키가 평문으로 오갔다. 헬스체크는
+      # #642 에서 VM 안으로 옮겼으므로(rollout.sh 의 compose exec) 외부 노출이
+      # 더는 배포 조건이 아니다.
+      #
+      # 정말로 공개해야 하면 BUILDER_BIND=0.0.0.0:8000 처럼 명시한다 — 노출은
+      # 기본값이 아니라 선택이어야 한다.
+      - "${BUILDER_BIND:-127.0.0.1:8000}:8000"
     networks:
       - app-net
     volumes:
