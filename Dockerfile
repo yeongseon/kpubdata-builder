@@ -59,6 +59,16 @@ RUN if [ -z "${EXTRAS}" ]; then \
 
 # 빌드 산출물(아티팩트·매니페스트) 영속 볼륨의 기본 위치.
 RUN mkdir -p /data
+
+# 비루트로 실행한다. 예전에는 root 로 돌았다 — 컨테이너 탈출이나 임의 파일 쓰기가
+# 가능한 결함이 생기면 그 권한이 그대로 공격자의 권한이 된다. 이 서비스는 /data
+# 쓰기 말고는 특권이 필요 없다.
+#
+# uid/gid 를 고정한다. 볼륨은 컨테이너보다 오래 사는데, 재빌드마다 uid 가 바뀌면
+# 기존 /data 를 읽지 못한다.
+RUN groupadd --system --gid 10001 builder \
+    && useradd --system --uid 10001 --gid 10001 --home-dir /app --no-create-home builder \
+    && chown -R builder:builder /app /data
 VOLUME /data
 
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
@@ -71,5 +81,7 @@ EXPOSE 8000
 # 표준 라이브러리 urllib를 사용한다. 포트는 KPUBDATA_BUILDER_PORT를 따른다.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD python -c "import os,urllib.request; urllib.request.urlopen('http://localhost:'+os.environ.get('KPUBDATA_BUILDER_PORT','8000')+'/healthz',timeout=3)"
+
+USER builder
 
 ENTRYPOINT ["docker-entrypoint.sh"]

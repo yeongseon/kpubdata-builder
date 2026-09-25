@@ -31,6 +31,19 @@ docker compose -f docker-compose.prod.app.yml pull builder </dev/null
 # 러너가 http://HOST:8000 을 직접 찔렀는데, 그 조합은 배포가 성공하려면 8000 을
 # 공개해야 한다는 뜻이고 — TLS 없이 API 키가 평문으로 오간다.
 compose_args=(-f docker-compose.prod.app.yml)
+
+# 이미지가 비루트(uid 10001)로 돌기 시작했다. named volume 은 컨테이너보다 오래
+# 살고 예전 배포에서 root 소유로 만들어졌으므로, 그대로 두면 새 이미지가 /data 에
+# 쓰지 못한다. 소유자가 이미 맞으면 아무 일도 하지 않는다(멱등).
+#
+# compose 를 통해 실행한다 — 볼륨 이름에는 compose 프로젝트 접두사가 붙고 그
+# 접두사는 디렉터리 이름에서 오므로, 이름을 직접 적으면 배포 경로가 바뀔 때 조용히
+# 빗나간다.
+echo "[app-01] ensuring the data volume is writable by uid 10001"
+docker compose "${compose_args[@]}" run --rm --no-deps --user root \
+  --entrypoint sh builder -c \
+  'if [ "$(stat -c %u /data)" != "10001" ]; then chown -R 10001:10001 /data; echo "  chowned"; else echo "  already correct"; fi' \
+  </dev/null || echo "[app-01] warning: could not adjust volume ownership; the first run may fail"
 if [ -n "${APP_DOMAIN:-}" ]; then
   compose_args+=(--profile caddy)
   echo "[app-01] starting builder + caddy (APP_DOMAIN=${APP_DOMAIN})"
