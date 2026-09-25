@@ -870,3 +870,72 @@ class TestTerminalJobsDoNotAccumulateForever:
 
         assert registry.cancellation("old") is None
         assert registry.cancellation("new") is not None
+
+
+class TestEvictedJobsAreStillObservable:
+    """registry 가 terminal job 을 버린 뒤에도 끝난 run 은 조회돼야 한다 (#666 후속).
+
+    #666 은 메모리 상한을 두면서 ``GET /builds/{run_id}`` 가 오래된 run 에 404 를
+    주는 것을 의도된 회귀로 받아들였다. 그런데 manifest 와 산출물은 디스크에 그대로
+    있으므로, 끝난 적이 있는 run 이 시간이 지났다는 이유로 "없는 run" 이 되는 것은
+    과하다. manifest 가 종단 상태의 정본이므로 그쪽으로 내려간다.
+    """
+
+    def _service_with_manifest(
+        self, tmp_path: Path, run_id: str, *, status: str, created_by: str | None = None
+    ) -> BuilderService:
+        import json
+
+        service = _service(tmp_path, threading.Event())
+        run_dir = tmp_path / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        manifest: dict[str, object] = {
+            "run_id": run_id,
+            "status": status,
+            "started_at": "2026-09-25T00:00:00+00:00",
+            "finished_at": "2026-09-25T00:05:00+00:00",
+            "errors": [],
+        }
+        if created_by is not None:
+            manifest["created_by"] = created_by
+        (run_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        return service
+
+    def test_a_completed_run_is_reported_after_eviction(self, tmp_path: Path) -> None:
+        service = self._service_with_manifest(tmp_path, "run-old", status="ok")
+
+        response = service.build_status("run-old")
+
+        assert response.status_code == 200
+        assert response.body["status"] == "succeeded"
+        assert response.body["run_id"] == "run-old"
+        assert response.body["created_at"] == "2026-09-25T00:00:00+00:00"
+        assert response.body["updated_at"] == "2026-09-25T00:05:00+00:00"
+
+    def test_a_cancelled_run_keeps_its_status(self, tmp_path: Path) -> None:
+        service = self._service_with_manifest(tmp_path, "run-cancelled", status="cancelled")
+
+        assert service.build_status("run-cancelled").body["status"] == "cancelled"
+
+    def test_a_failed_run_does_not_carry_its_error_text(self, tmp_path: Path) -> None:
+        """manifest 의 error 에는 경로가 섞일 수 있다 — 상세는 /manifest 가 준다."""
+        service = self._service_with_manifest(tmp_path, "run-failed", status="failed")
+
+        body = service.build_status("run-failed").body
+
+        assert body["status"] == "failed"
+        assert "error" not in body
+
+    def test_the_live_registry_still_wins(self, tmp_path: Path) -> None:
+        """아직 registry 에 있는 job 은 manifest 가 아니라 registry 가 답한다."""
+        service = self._service_with_manifest(tmp_path, "run-live", status="ok")
+        service._async_builds.registry.create(run_id="run-live", created_by="tester")
+
+        body = service.build_status("run-live").body
+
+        assert body["status"] == "queued"
+
+    def test_a_run_that_never_existed_is_still_404(self, tmp_path: Path) -> None:
+        service = _service(tmp_path, threading.Event())
+
+        assert service.build_status("never-ran").status_code == 404
