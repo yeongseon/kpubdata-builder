@@ -86,7 +86,6 @@ class TestTheLicenseGateApplies:
         exit_code = main(
             [
                 "publish",
-                "--spec",
                 str(spec_path),
                 "--target",
                 "local",
