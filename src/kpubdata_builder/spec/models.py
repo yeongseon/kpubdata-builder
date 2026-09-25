@@ -391,6 +391,11 @@ class BuildSpec:
         license: 데이터셋 라이선스/이용허락범위 (SPDX 식별자 또는 자유 텍스트).
             ``publish=True`` 시 반드시 선언해야 한다 (#443). kpubdata 가 라이선스
             메타데이터를 제공하지 않으므로 사용자 명시 선언만이 출처이다.
+        attribution: 출처표시 문구. 공공누리(KOGL)는 제1~4유형 모두 출처표시를
+            의무로 두는데, ``license`` 만으로는 그 문구를 담을 수 없다 — 유형과
+            기관명과 원문 URL 이 함께 있어야 성립하기 때문이다. 선언하면 데이터셋
+            카드의 "출처" 절에 그대로 실린다. 레거시 publish config 의
+            ``card.attribution`` 에 대응한다 (ADR 0018).
         quality: 데이터 품질 임계 정책. None이면 검사를 생략한다 (하위 호환, #446).
         composition: 두 source를 join해 하나의 Gold dataset으로 조립하는 계약.
             None이면 기존과 동일하게 source별 독립 Gold만 생성한다 (하위 호환, #506).
@@ -409,6 +414,7 @@ class BuildSpec:
     splits: SplitSpec | None = None
     pii: PiiPolicy | None = None
     license: str | None = None
+    attribution: str | None = None
     quality: QualityPolicy | None = None
     composition: CompositionSpec | None = None
 

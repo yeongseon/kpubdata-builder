@@ -238,7 +238,7 @@ def canonical_spec_mapping(spec: BuildSpec) -> dict[str, JsonValue]:
             },
         }
 
-    return {
+    mapping: dict[str, JsonValue] = {
         "dataset_id": spec.dataset_id,
         "title": spec.title,
         "description": spec.description,
@@ -252,6 +252,12 @@ def canonical_spec_mapping(spec: BuildSpec) -> dict[str, JsonValue]:
         "quality": quality,
         "composition": composition,
     }
+    # 선언됐을 때만 싣는다. 항상 실으면 attribution 을 쓰지 않는 기존 spec 의
+    # spec_digest 까지 전부 바뀐다 — recipe 신원이 이유 없이 갈라진다 (#640 과
+    # 같은 이유).
+    if spec.attribution is not None:
+        mapping["attribution"] = spec.attribution
+    return mapping
 
 
 def serialize_spec(spec: BuildSpec) -> str:
