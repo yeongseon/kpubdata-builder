@@ -1190,7 +1190,7 @@ class BuilderService:
         manifest = self._store.get_manifest(run_id)
         if manifest is None:
             return None
-        manifest_status = status_from_manifest(cast("dict[str, object]", manifest))
+        manifest_status = status_from_manifest(manifest)
         status = "succeeded" if manifest_status == "ok" else manifest_status
         started = manifest.get("started_at")
         finished = manifest.get("finished_at")
