@@ -36,6 +36,7 @@ from ..credentials import (
 )
 from ..errors import SpecLoadError, ValidationError
 from ..events import BuildEvent, BuildEventStore
+from ..manifest import status_from_manifest
 from ..pipeline import (
     DEFAULT_PREVIEW_SEED,
     CancellationProbe,
@@ -1154,15 +1155,58 @@ class BuilderService:
                 assert_never(unreachable)
 
     def build_status(self, run_id: str) -> ServiceResponse:
-        """active/terminal 비동기 build job 상태를 반환한다 (#482)."""
+        """active/terminal 비동기 build job 상태를 반환한다 (#482).
+
+        registry 는 terminal job 을 256개까지만 들고 있다(#666). 그보다 오래된
+        run 을 registry 만 보고 404 로 답하면, 끝난 적이 있는 run 이 시간이
+        지났다는 이유로 "없는 run" 이 된다 — 산출물과 manifest 는 디스크에
+        그대로 있는데도. 그래서 registry 에 없으면 persisted manifest 로
+        내려간다. manifest 가 종단 상태의 정본이므로(``status_from_manifest``)
+        이 경로가 registry 캐시보다 오히려 권위 있다.
+
+        manifest 도 없을 때만 404 다 — 그건 이 서버가 한 번도 만들지 않았거나,
+        pipeline 진입 전에 끝나 아무 것도 남기지 않은 run 이다.
+        """
         try:
             validate_path_segment(run_id, field_name="run_id")
         except ValueError as exc:
             return ServiceResponse(400, {"error": str(exc)})
         snapshot = self._async_builds.get(run_id)
-        if snapshot is None:
-            return ServiceResponse(404, {"error": f"build job not found: {run_id}"})
-        return ServiceResponse(200, snapshot.to_body())
+        if snapshot is not None:
+            return ServiceResponse(200, snapshot.to_body())
+        evicted = self._build_status_from_manifest(run_id)
+        if evicted is not None:
+            return ServiceResponse(200, evicted)
+        return ServiceResponse(404, {"error": f"build job not found: {run_id}"})
+
+    def _build_status_from_manifest(self, run_id: str) -> dict[str, JsonValue] | None:
+        """evict 된 terminal job 의 상태를 persisted manifest 에서 복원한다.
+
+        registry snapshot 과 같은 모양으로 맞춘다 — 호출자가 두 경로를 구분할
+        필요가 없어야 한다. ``response`` 는 싣지 않는다: 그건 build 응답 본문의
+        메모리 캐시였고 manifest 에서 복원할 수 있는 값이 아니다. 없는 것을
+        지어내는 대신 빼는 쪽이 맞다.
+        """
+        manifest = self._store.get_manifest(run_id)
+        if manifest is None:
+            return None
+        manifest_status = status_from_manifest(cast("dict[str, object]", manifest))
+        status = "succeeded" if manifest_status == "ok" else manifest_status
+        started = manifest.get("started_at")
+        finished = manifest.get("finished_at")
+        body: dict[str, JsonValue] = {
+            "run_id": run_id,
+            "status": status,
+            "created_at": started if isinstance(started, str) else "",
+            "updated_at": finished if isinstance(finished, str) else "",
+        }
+        created_by = manifest.get("created_by")
+        if isinstance(created_by, str):
+            body["created_by"] = created_by
+        # error 는 싣지 않는다. manifest 의 error 문자열에는 경로가 섞일 수 있고
+        # (#664 와 같은 이유), 상세는 ``GET /builds/{run_id}/manifest`` 가 이미
+        # 제공한다 — 여기서 중복해 내보낼 이유가 없다.
+        return body
 
     def cancel_build(self, run_id: str) -> ServiceResponse:
         """active(queued/running) async build job의 취소를 요청한다 (#481).
