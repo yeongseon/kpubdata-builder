@@ -158,3 +158,35 @@ def test_failing_export_leaves_no_temp_dir_behind(
     if hf_parent.exists():
         leaked = [p for p in hf_parent.iterdir() if p.name.startswith(".hf_tmp_")]
         assert leaked == [], f"Temp dirs leaked: {leaked}"
+
+
+class TestJsonlRecordsGoThroughJsonSafe:
+    """#629 의 수정이 jsonl exporter 에만 적용되고 여기엔 빠져 있었다.
+
+    Gold 테이블은 Polars 에서 오므로 ``casts: {deal_date: date}`` 를 선언하면
+    레코드에 ``date``/``Decimal`` 객체가 그대로 담긴다. 그래서 같은 spec 이
+    ``kind: jsonl`` 로는 나가고 ``kind: huggingface`` 로는 TypeError 로 죽었다.
+    """
+
+    def _artifact(self) -> ArtifactDataset:
+        import datetime
+        from decimal import Decimal
+
+        return ArtifactDataset(
+            records=({"deal_date": datetime.date(2024, 3, 1), "price": Decimal("12345.67")},),
+            schema={"deal_date": "date", "price": "decimal"},
+            metadata={"title": "T", "dataset_id": "kpub/t", "license": "CC-BY-4.0"},
+        )
+
+    def test_dates_and_decimals_are_written(self, tmp_path: Path) -> None:
+        target = ExportTarget(kind="huggingface", output_path="out/hf", options={"format": "jsonl"})
+
+        result = HuggingFaceExporter().export(self._artifact(), target, tmp_path)
+
+        data_files = list(result.output_path.rglob("*.jsonl"))
+        assert len(data_files) == 1
+        record = json.loads(data_files[0].read_text(encoding="utf-8").strip())
+        assert record["deal_date"] == "2024-03-01"
+        # Decimal 은 문자열로 남는다 — float 로 바꾸면 금액의 소수 자릿수가
+        # 조용히 달라진다.
+        assert record["price"] == "12345.67"
