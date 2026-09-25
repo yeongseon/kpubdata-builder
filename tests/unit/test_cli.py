@@ -13,11 +13,14 @@ from kpubdata_builder import __version__
 from kpubdata_builder.cli import build_parser, main
 from kpubdata_builder.publishers.base import PublishResult
 
+# license 를 선언해 둔다. publish 는 게시 전용 규칙으로 검증하므로(#443) 없으면
+# 게시 테스트가 전부 validation 단계에서 멈춘다 — 그게 이 게이트의 요점이다.
 VALID_SPEC_YAML = (
     """
 dataset_id: dataset.sample
 title: Sample Dataset
 description: Sample description
+license: CC-BY-4.0
 sources:
   - provider: datago
     dataset: air_quality

@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from kpubdata_builder.cli import _is_non_publishable
 
 
@@ -53,3 +55,48 @@ class TestOnlyDatasetArtifactsArePublished:
     def test_a_directory_named_like_a_layer_deeper_down_is_kept(self, tmp_path: Path) -> None:
         """최상위 계층 디렉터리만 본다 — gold 안의 'bronze' 라는 이름까지 막지 않는다."""
         assert not _is_non_publishable(tmp_path / "gold" / "bronze" / "x.parquet", tmp_path)
+
+
+class TestTheLicenseGateApplies:
+    """HTTP publish 가 막는 spec 을 CLI 로는 올릴 수 있었다."""
+
+    _NO_LICENSE = (
+        "dataset_id: dataset.sample\n"
+        "title: Sample\n"
+        "description: D\n"
+        "sources:\n"
+        "  - provider: datago\n"
+        "    dataset: air_quality\n"
+        "exports:\n"
+        "  - kind: jsonl\n"
+        "    output_path: out/data.jsonl\n"
+    )
+
+    def test_publishing_without_a_license_is_refused(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from kpubdata_builder.cli import main
+
+        spec_path = tmp_path / "spec.yaml"
+        spec_path.write_text(self._NO_LICENSE, encoding="utf-8")
+        artifacts = tmp_path / "artifacts"
+        artifacts.mkdir()
+        (artifacts / "data.jsonl").write_text("{}\n", encoding="utf-8")
+
+        exit_code = main(
+            [
+                "publish",
+                "--spec",
+                str(spec_path),
+                "--target",
+                "local",
+                "--destination",
+                str(tmp_path / "dest"),
+                "--artifacts-dir",
+                str(artifacts),
+            ]
+        )
+
+        assert exit_code == 1
+        captured = capsys.readouterr()
+        assert "license is required when publish=true" in captured.err
