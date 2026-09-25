@@ -51,7 +51,9 @@ def test_writes_csv_following_schema_and_valid_metadata(tmp_path: Path) -> None:
 
 def test_empty_records_with_schema_writes_header_only(tmp_path: Path) -> None:
     # schema는 있고 records가 없으면 헤더 한 줄만 기록한다.
-    artifact = ArtifactDataset(records=(), schema={"id": "str", "name": "str"})
+    artifact = ArtifactDataset(
+        records=(), schema={"id": "str", "name": "str"}, metadata={"license": "CC-BY-4.0"}
+    )
     target = ExportTarget(kind="kaggle", output_path="out/data.csv")
 
     result = KaggleExporter().export(artifact, target, tmp_path)
