@@ -109,5 +109,26 @@ jobs:
           sbom: true
           provenance: mode=max
 
+      # CUBRID 프로파일(ADR 0016)용 이미지. infra/oci/docker-compose.yml 의
+      # BUILDER_IMAGE 기본값이 `:cubrid` 를 가리키는데 그 태그를 만드는 워크플로가
+      # 없었다 — CUBRID 배포는 존재하지 않는 이미지를 pull 하려 했다.
+      #
+      # 기본 이미지와 다른 점은 cubrid extra 하나뿐이다. sqlalchemy-cubrid 는 순수
+      # 파이썬이라 C 툴체인 없이 설치된다(Dockerfile 주석 참고).
+      - name: Build and publish the CUBRID-profile image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            EXTRAS=publish cubrid
+          tags: ghcr.io/yeongseon/kpubdata-builder:cubrid
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          sbom: true
+          provenance: mode=max
+
       - name: Print image digest
         run: echo "Published ghcr.io/yeongseon/kpubdata-builder@${{ steps.build-publish.outputs.digest }}"
