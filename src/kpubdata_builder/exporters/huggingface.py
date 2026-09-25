@@ -28,6 +28,7 @@ from ..spec import ExportTarget
 from ..stages._atomic import atomic_replace_dir
 from ..stages._path_safety import safe_output_path
 from ..tabular.convert import records_to_dataframe
+from ._json_safe import json_safe
 from .base import BaseExporter, ExportResult
 
 _SUPPORTED_FORMATS = ("parquet", "jsonl")
@@ -53,8 +54,14 @@ def _write_data_file(artifact: ArtifactDataset, data_dir: Path, fmt: str) -> Pat
     else:
         # allow_nan=False: NaN/Infinity는 비표준 JSON 토큰이 되므로 조용히 기록하지 않고
         # ValueError로 실패시킨다 (#217).
+        #
+        # json_safe 는 jsonl exporter 와 같은 이유로 필요하다 (#629). Gold 테이블은
+        # Polars 에서 오므로 ``casts: {deal_date: date}`` 를 선언하면 레코드에
+        # ``date``/``Decimal`` 객체가 그대로 담기고, ``json.dumps`` 는 그걸
+        # 직렬화하지 못한다. 그 수정이 jsonl 쪽에만 적용돼서, 같은 spec 이 jsonl
+        # 로는 나가고 huggingface 로는 TypeError 로 죽었다.
         content = "\n".join(
-            json.dumps(record, ensure_ascii=False, sort_keys=True, allow_nan=False)
+            json.dumps(json_safe(record), ensure_ascii=False, sort_keys=True, allow_nan=False)
             for record in artifact.records
         )
         _ = data_path.write_text(f"{content}\n" if content else "", encoding="utf-8")
