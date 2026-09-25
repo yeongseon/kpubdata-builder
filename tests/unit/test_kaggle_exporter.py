@@ -79,7 +79,7 @@ def test_formula_injection_trigger_chars_prefixed_in_kaggle(tmp_path: Path) -> N
     artifact = ArtifactDataset(
         records=({"cmd": '=HYPERLINK("evil.com")'},),
         schema={"cmd": "str"},
-        metadata={"title": "T", "dataset_id": "kpub/t"},
+        metadata={"title": "T", "dataset_id": "kpub/t", "license": "CC-BY-4.0"},
     )
     target = ExportTarget(kind="kaggle", output_path="out/data.csv")
 
@@ -101,7 +101,7 @@ def test_merges_resource_into_existing_metadata(tmp_path: Path) -> None:
     artifact = ArtifactDataset(
         records=({"id": "1"},),
         schema={"id": "str"},
-        metadata={"title": "First", "dataset_id": "kpub/first"},
+        metadata={"title": "First", "dataset_id": "kpub/first", "license": "CC-BY-4.0"},
     )
 
     first = KaggleExporter().export(artifact, target_one, tmp_path)
@@ -109,7 +109,7 @@ def test_merges_resource_into_existing_metadata(tmp_path: Path) -> None:
         ArtifactDataset(
             records=({"id": "2"},),
             schema={"id": "str"},
-            metadata={"title": "Second", "dataset_id": "kpub/second"},
+            metadata={"title": "Second", "dataset_id": "kpub/second", "license": "CC-BY-4.0"},
         ),
         target_two,
         tmp_path,
