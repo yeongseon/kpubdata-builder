@@ -36,6 +36,8 @@ _CONTRACT_PATH = Path(__file__).parents[2] / "contract" / "builder-api.yaml"
 # service/app.py:dispatch의 라우팅 규칙을 기계적으로 추출하기 어렵기 때문에
 # 명시적으로 선언하여 유지보수성을 높인다.
 _DISPATCH_ROUTES: dict[tuple[str, str], str] = {
+    ("/admin/runs", "GET"): "adminListRuns",
+    ("/admin/config", "GET"): "adminGetConfig",
     ("/healthz", "GET"): "healthz",
     ("/version", "GET"): "getVersion",
     ("/catalog", "GET"): "getCatalog",
