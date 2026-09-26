@@ -476,9 +476,7 @@ def authenticate(
     if _is_dev_mode():
         # dev principal owner_id는 실행마다 바뀌지 않는 고정 local 식별자다(#505) —
         # OIDC principal의 owner_id는 항상 "oidc:" 로 시작해 namespace가 겹치지 않는다.
-        return Principal(
-            kind="dev", owner_id=compute_owner_id("dev", "local"), is_admin=True
-        )
+        return Principal(kind="dev", owner_id=compute_owner_id("dev", "local"), is_admin=True)
 
     if bearer_token and _oidc_issuers():
         if bearer_token.lower().startswith("bearer "):

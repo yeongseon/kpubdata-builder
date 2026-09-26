@@ -49,12 +49,28 @@ class _FakeService:
 
 
 def _service(entries: list[_Entry] | None = None, *, fail: bool = False) -> Any:
-    rows = entries if entries is not None else [
-        _Entry("run-a", "succeeded", "2026-09-27T00:00:00Z", "2026-09-27T00:01:00Z",
-               "oidc:aaa", compute_owner_id("oidc", "https://idp", "alice")),
-        _Entry("run-b", "failed", "2026-09-27T00:02:00Z", "2026-09-27T00:03:00Z",
-               "oidc:bbb", compute_owner_id("oidc", "https://idp", "bob")),
-    ]
+    rows = (
+        entries
+        if entries is not None
+        else [
+            _Entry(
+                "run-a",
+                "succeeded",
+                "2026-09-27T00:00:00Z",
+                "2026-09-27T00:01:00Z",
+                "oidc:aaa",
+                compute_owner_id("oidc", "https://idp", "alice"),
+            ),
+            _Entry(
+                "run-b",
+                "failed",
+                "2026-09-27T00:02:00Z",
+                "2026-09-27T00:03:00Z",
+                "oidc:bbb",
+                compute_owner_id("oidc", "https://idp", "bob"),
+            ),
+        ]
+    )
     return cast(Any, _FakeService(_FakeIndex(rows, fail=fail)))
 
 
@@ -237,9 +253,7 @@ class TestAudit:
             "action=admin.runs.list target=limit=50 outcome=allowed"
         )
 
-    def test_missing_target_renders_as_placeholder(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_missing_target_renders_as_placeholder(self, caplog: pytest.LogCaptureFixture) -> None:
         principal = Principal(kind="dev", owner_id="dev:x", is_admin=True)
         with caplog.at_level(logging.INFO, logger="kpubdata_builder.admin_audit"):
             record_admin_action(principal, "admin.config.read")

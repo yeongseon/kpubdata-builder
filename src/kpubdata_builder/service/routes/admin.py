@@ -100,9 +100,7 @@ def _admin_config(principal: Principal) -> ServiceResponse:
         200,
         {
             "enforce_ownership": ownership_module.enforce_ownership(),
-            "publish_server_credential_fallback": (
-                publish_credentials.server_fallback_allowed()
-            ),
+            "publish_server_credential_fallback": (publish_credentials.server_fallback_allowed()),
         },
     )
 
